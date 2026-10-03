@@ -183,5 +183,17 @@ export function parseDeltas(input: unknown): HistoryDelta[] {
   if (!Array.isArray(input) || input.length === 0 || input.length > MAX_DELTAS) {
     throw new RejectError('invalid deltas');
   }
-  return input.map(parseDelta);
+  // サニタイズは text の量に比例して時間がかかる。記録できない大きさの入力は、
+  // サニタイズに回す前にここで断る（記録時の MAX_OP_BYTES の検査より手前で止める）
+  let textLength = 0;
+  return input.map((v) => {
+    const d = parseDelta(v);
+    if (d.type === 'note:create') {
+      textLength += d.note.text.length;
+    } else if (d.type === 'note:update') {
+      textLength += (d.before.text?.length ?? 0) + (d.after.text?.length ?? 0);
+    }
+    if (textLength > MAX_OP_BYTES) throw new RejectError('operation too large');
+    return d;
+  });
 }

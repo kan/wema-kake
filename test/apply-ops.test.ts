@@ -296,6 +296,14 @@ describe('applyOps', () => {
     expect((await stub.getSnapshot()).seq).toBe(1);
   });
 
+  it('text の合計が記録できる大きさを超える操作は、サニタイズの前に拒否する', async () => {
+    const { stub, apply } = newPage();
+    const text = '<b>a</b>'.repeat(60_000); // 480KB
+    const deltas = ['n1', 'n2', 'n3', 'n4'].map((id) => createNote(id, { text }));
+    expect(await apply(deltas)).toEqual({ ok: false, reason: 'operation too large' });
+    expect((await stub.getSnapshot()).seq).toBe(0);
+  });
+
   it('作成者と操作を記録する', async () => {
     const { stub, apply } = newPage();
     await apply([createNote('n1')], 'op-a', 'agent:claude');
