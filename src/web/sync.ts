@@ -4,6 +4,7 @@
 import { type BoardData, type HistoryDelta, invertDeltas } from '../shared/delta';
 import {
   CLOSE_AUTH_EXPIRED,
+  CLOSE_PAGE_DELETED,
   type ClientMsg,
   type OpsMsg,
   PING,
@@ -63,6 +64,8 @@ export interface SyncHooks {
    * 分からないので、切断中に認証が切れた場合をこれで見分ける。false なら `onAuthExpired` を呼ぶ
    */
   isAuthenticated?(): Promise<boolean>;
+  /** ページが削除された。再接続はしない */
+  onDeleted?(): void;
   /** 自分の操作がサーバーに拒否され、手元の変更を巻き戻した */
   onReject?(reason: string): void;
 }
@@ -104,6 +107,11 @@ export class BoardSync {
   private lastSeq: number | undefined;
   /** 最後に受け取ったスナップショットの seq。これ以前の操作は、スナップショットに含まれている */
   private snapshotSeq = 0;
+  /**
+   * 最後に受け取ったスナップショットのページの epoch。再接続のときに送り、ページが削除されたか
+   * 作り直されていたら、サーバーに接続を閉じてもらう（未確定の操作を送り直さないため）
+   */
+  private epoch: string | undefined;
   private pending: Pending[] = [];
   private socket: SyncSocket | undefined;
   private status: SyncStatus = 'connecting';
@@ -170,7 +178,7 @@ export class BoardSync {
     socket.onMessage((data) => this.onMessage(data));
     socket.onClose((code) => this.onClose(socket, code));
 
-    this.send({ type: 'hello', clientId: this.clientId, lastSeq: this.lastSeq });
+    this.send({ type: 'hello', clientId: this.clientId, lastSeq: this.lastSeq, epoch: this.epoch });
     // 確定を受け取っていない操作を送り直す。適用済みなら、サーバーは記録済みの結果を返す
     for (const { opId, deltas } of this.pending) this.send({ type: 'ops', opId, deltas });
 
@@ -183,8 +191,15 @@ export class BoardSync {
     this.socket = undefined;
     this.stopPing?.();
     if (this.stopped) return;
-    if (code === CLOSE_AUTH_EXPIRED) this.authExpired();
-    else this.scheduleReconnect();
+    if (code === CLOSE_AUTH_EXPIRED) {
+      this.authExpired();
+    } else if (code === CLOSE_PAGE_DELETED) {
+      // 再接続すると、手元の未確定の操作でページが作り直されてしまう
+      this.stopped = true;
+      this.hooks.onDeleted?.();
+    } else {
+      this.scheduleReconnect();
+    }
   }
 
   private scheduleReconnect(): void {
@@ -211,12 +226,14 @@ export class BoardSync {
         this.board.importData(msg.data);
         this.lastSeq = msg.seq;
         this.snapshotSeq = msg.seq;
+        this.epoch = msg.epoch ?? undefined;
         // 全体を入れ替えたので、未確定の操作は手元から消えている
         for (const op of this.pending) op.applied = false;
         this.hooks.onTitle?.(msg.title);
         this.synced();
         break;
       case 'meta':
+        this.epoch = msg.epoch ?? undefined;
         this.hooks.onTitle?.(msg.title);
         // 差分で追いつく場合は、最初に meta が届く
         this.synced();

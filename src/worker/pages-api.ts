@@ -8,7 +8,10 @@ import { clampLimit } from './validate';
 
 const DEFAULT_LIST_LIMIT = 100;
 const MAX_LIST_LIMIT = 500;
-const SEARCH_LIMIT = 50;
+/** 一覧の絞り込みに使うので、一覧の上限とそろえる */
+const SEARCH_LIMIT = MAX_LIST_LIMIT;
+/** 一覧の付箋に出す、本文の冒頭の長さ */
+const EXCERPT_LENGTH = 120;
 const MAX_QUERY_LENGTH = 200;
 /** trigram の FTS が一致を返せる最短の検索語（文字数） */
 const MIN_FTS_QUERY_LENGTH = 3;
@@ -30,6 +33,30 @@ export const pagesApi = new Hono<AuthEnv>();
 
 /** 認証が有効かを確かめるための、軽い問い合わせ先（切断中に認証が切れたかをブラウザが調べる） */
 pagesApi.get('/session', (c) => c.json({ actor: c.get('actor') }));
+
+/**
+ * 一覧のボード用。新しい順のページと、そのページからのリンクをまとめて返す。
+ * リンク先が存在しないページ（未作成）なら `missing` が 1 になる。
+ */
+pagesApi.get('/index', async (c) => {
+  const db = c.env.DB;
+  const [pages, links] = await db.batch([
+    db
+      .prepare(
+        `SELECT name, title, note_count, updated_at, substr(plain_text, 1, ?) AS excerpt
+         FROM pages ORDER BY updated_at DESC LIMIT ?`,
+      )
+      .bind(EXCERPT_LENGTH, MAX_LIST_LIMIT),
+    db
+      .prepare(
+        `SELECT l.from_page, l.to_page, p.name IS NULL AS missing
+         FROM links l LEFT JOIN pages p ON p.name = l.to_page
+         WHERE l.from_page IN (SELECT name FROM pages ORDER BY updated_at DESC LIMIT ?)`,
+      )
+      .bind(MAX_LIST_LIMIT),
+  ]);
+  return c.json({ pages: pages.results, links: links.results });
+});
 
 /** ページ一覧。`updated_after`（ミリ秒）より後に更新されたものに絞れる */
 pagesApi.get('/pages', async (c) => {
@@ -76,6 +103,20 @@ pagesApi.get('/search', async (c) => {
 pagesApi.get('/pages/:slug', validSlug, async (c) => {
   const slug = c.req.param('slug');
   return c.json({ slug, ...(await c.env.PAGE.getByName(slug).getSnapshot()) });
+});
+
+/** ページの新規作成（本文は `{ "title": "..." }`。表示名は省略できる）。すでにあれば 409 */
+pagesApi.post('/pages/:slug', validSlug, async (c) => {
+  const body = await c.req.json<{ title?: unknown }>().catch(() => null);
+  const result = await c.env.PAGE.getByName(c.req.param('slug')).createPage(body?.title);
+  if (result.ok) return c.json(result, 201);
+  return c.json({ error: result.reason }, result.reason === 'exists' ? 409 : 400);
+});
+
+/** ページの削除。取り消しはできない */
+pagesApi.delete('/pages/:slug', validSlug, async (c) => {
+  await c.env.PAGE.getByName(c.req.param('slug')).deletePage();
+  return c.json({ ok: true });
 });
 
 /** このページへリンクしているページ */

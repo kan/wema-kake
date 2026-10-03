@@ -207,11 +207,13 @@ describe('ページの API', () => {
     await runDurableObjectAlarm(env.PAGE.getByName(slug));
     expect(await env.DB.prepare(`SELECT title, note_count FROM pages WHERE name = ?`).bind(slug).first())
       .toEqual({ title: '新しい表示名', note_count: 0 });
-    expect(await browser.next()).toEqual({ type: 'meta', title: '新しい表示名' });
+    // ページができた通知（表示名はまだない）に続いて、表示名の変更が届く
+    expect(await browser.nextMeta()).toEqual({ type: 'meta', title: null, epoch: expect.any(String) });
+    expect(await browser.nextMeta()).toMatchObject({ type: 'meta', title: '新しい表示名' });
 
     // 空文字で未設定に戻す
     expect(await (await put('')).json()).toEqual({ ok: true, title: null });
-    expect(await browser.next()).toEqual({ type: 'meta', title: null });
+    expect(await browser.nextMeta()).toMatchObject({ type: 'meta', title: null });
     browser.close();
   });
 
@@ -231,6 +233,107 @@ describe('ページの API', () => {
       body: JSON.stringify({ title: 'x' }),
     });
     expect(res.status).toBe(403);
+  });
+});
+
+describe('一覧のボード用の API', () => {
+  it('ページと、ページ間のリンクをまとめて返す。未作成のリンク先には印が付く', async () => {
+    await seed('board-a', ['A の本文です <a href="/p/board-b">b</a> <a href="/p/board-missing">m</a>'], 'ページ A');
+    await seed('board-b', ['B の本文'.repeat(40)]);
+
+    const res = await api('/api/index');
+    const body = (await res.json()) as {
+      pages: Record<string, unknown>[];
+      links: Record<string, unknown>[];
+    };
+    const a = body.pages.find((p) => p.name === 'board-a');
+    expect(a).toMatchObject({ name: 'board-a', title: 'ページ A', note_count: 1, excerpt: 'A の本文です b m' });
+    const b = body.pages.find((p) => p.name === 'board-b');
+    expect((b!.excerpt as string).length).toBe(120);
+
+    expect(body.links.filter((l) => l.from_page === 'board-a')).toEqual(
+      expect.arrayContaining([
+        { from_page: 'board-a', to_page: 'board-b', missing: 0 },
+        { from_page: 'board-a', to_page: 'board-missing', missing: 1 },
+      ]),
+    );
+  });
+});
+
+describe('ページの新規作成', () => {
+  const create = (slug: string, body: unknown) =>
+    api(`/api/pages/${slug}`, { method: 'POST', body: JSON.stringify(body) });
+
+  it('表示名を付けて作ると、索引に出る', async () => {
+    expect((await create('new-titled', { title: '新しいページ' })).status).toBe(201);
+    await runDurableObjectAlarm(env.PAGE.getByName('new-titled'));
+    expect(await env.DB.prepare(`SELECT title, note_count FROM pages WHERE name = 'new-titled'`).first())
+      .toEqual({ title: '新しいページ', note_count: 0 });
+  });
+
+  it('表示名なしでも作れる', async () => {
+    expect((await create('new-untitled', {})).status).toBe(201);
+    expect(await (await api('/api/pages/new-untitled')).json()).toMatchObject({
+      title: null, epoch: expect.any(String),
+    });
+  });
+
+  it('すでにあるページには 409 を返し、表示名を書き換えない', async () => {
+    await seed('new-existing', ['x'], '元の表示名');
+    expect((await create('new-existing', { title: '上書き' })).status).toBe(409);
+    expect(await (await api('/api/pages/new-existing')).json()).toMatchObject({ title: '元の表示名' });
+  });
+
+  it('不正な表示名は 400', async () => {
+    expect((await create('new-bad', { title: 'a\nb' })).status).toBe(400);
+    expect(await (await api('/api/pages/new-bad')).json()).toMatchObject({ epoch: null });
+  });
+});
+
+describe('ページの削除', () => {
+  it('ページの内容と索引を消し、接続中のブラウザを専用のコードで閉じる', async () => {
+    const stub = await seed('del-page', ['消すページ <a href="/p/del-other">o</a>'], '消すページ');
+    await seed('del-other', ['<a href="/p/del-page">back</a>']);
+    const browser = await join('del-page', 'c1');
+
+    const res = await api('/api/pages/del-page', { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect(await browser.closed).toMatchObject({ code: 4410 });
+
+    expect(await stub.getSnapshot()).toEqual({
+      seq: 0, title: null, epoch: null, data: { version: 1, notes: [], edges: [] },
+    });
+    const tables = await runInDurableObject(stub, (_do, state) =>
+      state.storage.sql.exec(`SELECT count(*) AS c FROM sqlite_master`).one().c,
+    );
+    expect(tables).toBe(0);
+    expect(await runDurableObjectAlarm(stub)).toBe(false);
+
+    expect(await env.DB.prepare(`SELECT 1 FROM pages WHERE name = 'del-page'`).first()).toBeNull();
+    expect((await env.DB.prepare(`SELECT 1 FROM links WHERE from_page = 'del-page'`).all()).results).toEqual([]);
+    expect(await names(await api(`/api/search?q=${encodeURIComponent('消すページ')}`))).not.toContain('del-page');
+    // 他のページからのリンクは残り、一覧では未作成のページとして出る
+    const index = (await (await api('/api/index')).json()) as { links: Record<string, unknown>[] };
+    expect(index.links).toContainEqual({ from_page: 'del-other', to_page: 'del-page', missing: 1 });
+  });
+
+  it('削除した後に書き込むと、新しいページとして作られる', async () => {
+    const stub = await seed('del-again', ['1 回目']);
+    await api('/api/pages/del-again', { method: 'DELETE' });
+    const res = await stub.applyOps({
+      actor: 'user:a', clientId: 'c1', opId: 'after-delete', deltas: [createNote('n9', { text: '2 回目' })],
+    });
+    expect(res).toMatchObject({ ok: true, seq: 1 });
+    await runDurableObjectAlarm(stub);
+    expect(await env.DB.prepare(`SELECT plain_text FROM pages WHERE name = 'del-again'`).first())
+      .toEqual({ plain_text: '2 回目' });
+  });
+
+  it('他のオリジンからの削除は断る', async () => {
+    await seed('del-cross', ['x']);
+    const res = await api('/api/pages/del-cross', { method: 'DELETE', headers: { Origin: 'https://evil.example.com' } });
+    expect(res.status).toBe(403);
+    expect(await env.DB.prepare(`SELECT 1 FROM pages WHERE name = 'del-cross'`).first()).not.toBeNull();
   });
 });
 

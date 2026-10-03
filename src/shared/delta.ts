@@ -35,5 +35,10 @@ export interface Snapshot {
   seq: number;
   /** 表示名。未設定なら null（表示にはスラッグを使う） */
   title: string | null;
+  /**
+   * ページを作るたびに変わる値。まだ作られていなければ null。
+   * 削除して作り直したページを、前のページと見分けるのに使う
+   */
+  epoch: string | null;
   data: BoardData;
 }

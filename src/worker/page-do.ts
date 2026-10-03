@@ -1,9 +1,17 @@
 import { DurableObject } from 'cloudflare:workers';
+import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome } from '../shared/api';
 import { type BoardContent, type HistoryDelta, invertDeltas, type Snapshot } from '../shared/delta';
-import { CLOSE_AUTH_EXPIRED, type OpsMsg, PING, PONG, type ServerMsg } from '../shared/protocol';
+import {
+  CLOSE_AUTH_EXPIRED,
+  CLOSE_PAGE_DELETED,
+  type OpsMsg,
+  PING,
+  PONG,
+  type ServerMsg,
+} from '../shared/protocol';
 import { applyDeltas, readBoard, type Sanitized, sanitizeDeltas } from './apply-ops';
-import { buildPageContent, contentHash, touchPage, writePage } from './indexer';
-import { applyRevert, type Skipped } from './revert';
+import { buildPageContent, contentHash, removePage, touchPage, writePage } from './indexer';
+import { applyRevert } from './revert';
 import { SanitizeError } from './sanitize';
 import {
   clampLimit,
@@ -15,7 +23,6 @@ import {
 } from './validate';
 
 const MAX_SUMMARY_LENGTH = 500;
-const MAX_TITLE_LENGTH = 200;
 const DEFAULT_LIST_OPS = 50;
 const MAX_LIST_OPS = 200;
 /** 変更してから D1 へ反映するまでの時間 */
@@ -79,17 +86,6 @@ export type ApplyResult =
     }
   | { ok: false; reason: string; current?: BoardContent };
 
-export interface OpSummary {
-  seq: number;
-  actor: string;
-  summary: string | null;
-  /** この操作が取り消しなら、取り消した対象の seq。取り消しでなければ null */
-  reverts: number | null;
-  /** この操作を取り消した操作の seq。取り消されていなければ null */
-  revertedBy: number | null;
-  createdAt: number;
-}
-
 export interface RevertInput {
   /** 取り消す操作の seq */
   seq: number;
@@ -113,15 +109,7 @@ export interface RevertInput {
 export type RevertFailure = 'not-found' | 'conflict' | 'forbidden' | 'invalid';
 
 export type RevertResult =
-  | {
-      ok: true;
-      /** 取り消しとして記録した操作の seq。取り消せるものが 1 つもなかった場合は null */
-      seq: number | null;
-      /** 取り消したデルタの数 */
-      applied: number;
-      /** その後に変更されていたなどの理由で、取り消さなかったもの */
-      skipped: Skipped[];
-    }
+  | ({ ok: true } & RevertOutcome)
   | { ok: false; code: RevertFailure; reason: string };
 
 const META_TABLE = `
@@ -186,6 +174,11 @@ export class PageDO extends DurableObject<Env> {
   /** 適用済みのスキーマのバージョン。0 は一度も書き込まれていないページ */
   private version: number;
 
+  /** ページを削除するたびに増える。削除の前に受け付けた書き込みを、削除の後に実行しないために使う */
+  private generation = 0;
+  /** 実行中、または順番を待っている削除の数 */
+  private deleting = 0;
+
   /** 処理中の applyOps。次の呼び出しはこれが終わってから始める */
   private applyQueue: Promise<unknown> = Promise.resolve();
 
@@ -228,13 +221,29 @@ export class PageDO extends DurableObject<Env> {
       this.sql.exec(META_TABLE);
       // 自分のスラッグは、スキーマを作るとき（最初の書き込み）に保存する。D1 への反映（alarm）は
       // リクエストを伴わずに起動され、そこでは名前を取得できない可能性があるため
-      if (this.version === 0 && this.ctx.id.name) this.setMeta('slug', this.ctx.id.name);
+      if (this.version === 0) {
+        if (this.ctx.id.name) this.setMeta('slug', this.ctx.id.name);
+        // ページを作るたびに変わる値。削除して作り直したページを、前のページと見分けるのに使う
+        this.setMeta('epoch', crypto.randomUUID());
+      }
       for (const migration of MIGRATIONS.slice(this.version)) {
         this.sql.exec(migration);
       }
       this.setMeta('version', String(MIGRATIONS.length));
     });
+    const created = this.version === 0;
     this.version = MIGRATIONS.length;
+    // ページができたことを、開いているブラウザに知らせる（epoch を渡す）
+    if (created) this.broadcast(this.metaJson());
+  }
+
+  /** 表示名と epoch を伝えるメッセージ。スキーマがある（version > 0）ときだけ呼ぶ */
+  private metaJson(): string {
+    return JSON.stringify({
+      type: 'meta',
+      title: this.getMeta('title'),
+      epoch: this.getMeta('epoch'),
+    } satisfies ServerMsg);
   }
 
   /** スキーマがある（version > 0）ときだけ呼ぶ */
@@ -244,9 +253,14 @@ export class PageDO extends DurableObject<Env> {
 
   getSnapshot(): Snapshot {
     if (this.version === 0) {
-      return { seq: 0, title: null, data: { version: 1, notes: [], edges: [] } };
+      return { seq: 0, title: null, epoch: null, data: { version: 1, notes: [], edges: [] } };
     }
-    return { seq: this.getSeq(), title: this.getMeta('title'), data: readBoard(this.sql) };
+    return {
+      seq: this.getSeq(),
+      title: this.getMeta('title'),
+      epoch: this.getMeta('epoch'),
+      data: readBoard(this.sql),
+    };
   }
 
   /**
@@ -254,18 +268,65 @@ export class PageDO extends DurableObject<Env> {
    * 付箋のデルタではないので ops には記録しない。
    */
   setTitle(input: unknown): { ok: true; title: string | null } | { ok: false; reason: string } {
-    if (typeof input !== 'string') return { ok: false, reason: 'invalid title' };
-    const title = input.trim();
-    // 制御文字（改行を含む）は表示と一覧を崩すので受け付けない
-    if (title.length > MAX_TITLE_LENGTH || /[\u0000-\u001f\u007f]/.test(title)) {
-      return { ok: false, reason: 'invalid title' };
-    }
-    const value = title || null;
+    const title = parseTitle(input);
+    if (title === undefined) return { ok: false, reason: 'invalid title' };
     this.migrate();
-    this.setMeta('title', value);
-    this.broadcast(JSON.stringify({ type: 'meta', title: value } satisfies ServerMsg));
+    this.setMeta('title', title);
+    this.broadcast(this.metaJson());
     this.scheduleIndexing();
-    return { ok: true, title: value };
+    return { ok: true, title };
+  }
+
+  /**
+   * ページを新しく作る。すでにあれば何もしない（既存のページの表示名を書き換えない）。
+   * 付箋を書き込めばページはできるので、これは表示名だけのページを先に作るためのもの。
+   */
+  createPage(input: unknown): { ok: true } | { ok: false; reason: 'exists' | 'invalid title' } {
+    const title = parseTitle(input ?? '');
+    if (title === undefined) return { ok: false, reason: 'invalid title' };
+    if (this.version > 0) return { ok: false, reason: 'exists' };
+    this.migrate();
+    this.setMeta('title', title);
+    this.scheduleIndexing();
+    return { ok: true };
+  }
+
+  /**
+   * ページを削除する。付箋、接続線、履歴、表示名と、D1 の索引を消す。取り消しはできない。
+   * 貼った画像は R2 に残る（どのページの画像かを記録していない）。
+   */
+  deletePage(): Promise<void> {
+    // 順番を待っている書き込みと、削除の途中で届く書き込みは、削除の後に実行させない
+    // （実行すると、消したページが作り直されてしまう）
+    this.deleting++;
+    return this.inOrder(async () => {
+      try {
+        const slug = (this.version > 0 ? this.getMeta('slug') : null) ?? this.ctx.id.name;
+        if (!slug) throw new Error('page slug is not available in the Durable Object');
+        // 索引を先に消す。ここで失敗したら、ページの内容は残っているので、やり直せる
+        await removePage(this.env.DB, slug);
+        await this.ctx.storage.deleteAlarm();
+        await this.ctx.storage.deleteAll();
+        this.version = 0;
+        // 接続中のブラウザには再接続させない（再接続しても、hello の epoch が合わずに閉じられる）
+        for (const ws of this.ctx.getWebSockets()) ws.close(CLOSE_PAGE_DELETED, 'page deleted');
+      } finally {
+        this.deleting--;
+        this.generation++;
+      }
+    });
+  }
+
+  /**
+   * 書き込みを順番待ちに入れる。待っている間にページの削除が始まるか済んでいたら、
+   * 実行せずに `deleted` を返す。
+   */
+  private write<T>(run: () => Promise<T>, deleted: T): Promise<T> {
+    if (this.deleting > 0) return Promise.resolve(deleted);
+    const generation = this.generation;
+    return this.inOrder(async () =>
+      this.deleting === 0 && generation === this.generation ? run() : deleted,
+    );
   }
 
   // --- D1 の索引への反映 ---
@@ -288,7 +349,10 @@ export class PageDO extends DurableObject<Env> {
     if (this.version === 0) return;
     const now = Date.now();
     this.pruneOps(now);
-    await this.reindex(now);
+    // 書き込みや削除と同じ順番待ちに入れる。索引の書き込みが、ページの削除と前後しないようにする
+    await this.inOrder(async () => {
+      if (this.version > 0) await this.reindex(now);
+    });
   }
 
   /** 保持期間を過ぎた ops を消す。直近の分は期間を過ぎていても残す */
@@ -327,7 +391,7 @@ export class PageDO extends DurableObject<Env> {
    * その付箋の更新が処理されるなど）ので、呼び出しを 1 つずつ順に処理する。
    */
   applyOps(input: ApplyInput): Promise<ApplyResult> {
-    return this.inOrder(() => this.applyOpsInOrder(input));
+    return this.write(() => this.applyOpsInOrder(input), { ok: false, reason: REASON_PAGE_DELETED });
   }
 
   /** 前の書き込みが終わってから `run` を始める */
@@ -475,7 +539,9 @@ export class PageDO extends DurableObject<Env> {
    * その後に変更された付箋や接続線は取り消さず、`skipped` で返す（部分適用）。
    */
   revert(input: RevertInput): Promise<RevertResult> {
-    return this.inOrder(() => this.revertInOrder(input));
+    return this.write(() => this.revertInOrder(input), {
+      ok: false, code: 'not-found', reason: REASON_PAGE_DELETED,
+    });
   }
 
   private async revertInOrder(input: RevertInput): Promise<RevertResult> {
@@ -585,6 +651,13 @@ export class PageDO extends DurableObject<Env> {
       ws.close(1008, 'invalid clientId');
       return;
     }
+    // クライアントが前に見たページと、今のページが別物（削除された、または削除して作り直された）
+    // なら、接続を閉じる。そのまま続けると、手元の未確定の操作で、消したページの内容が書き戻される
+    const epoch = this.version > 0 ? this.getMeta('epoch') : null;
+    if (typeof msg.epoch === 'string' && msg.epoch !== epoch) {
+      ws.close(CLOSE_PAGE_DELETED, 'page deleted');
+      return;
+    }
     // これ以降、この接続は配信の対象になる
     ws.serializeAttachment({ ...attachment, clientId } satisfies Attachment);
 
@@ -594,7 +667,7 @@ export class PageDO extends DurableObject<Env> {
       return;
     }
     // 表示名の変更は seq を進めないので、切断中に変わっていても差分には出ない。現在値を送る
-    send(ws, JSON.stringify({ type: 'meta', title: this.getMeta('title') } satisfies ServerMsg));
+    send(ws, this.metaJson());
     const rows = this.sql.exec(
       `SELECT seq, actor, client_id, op_id, summary, reverts, body, fixups FROM ops
        WHERE seq > ? ORDER BY seq`,
@@ -687,6 +760,18 @@ export class PageDO extends DurableObject<Env> {
       if (out !== null) send(ws, out);
     }
   }
+}
+
+/** 順番を待っている間にページが削除された書き込みに返す理由 */
+const REASON_PAGE_DELETED = 'page deleted';
+
+/** 表示名を検証する。空文字は未設定（null）。不正なら undefined */
+function parseTitle(input: unknown): string | null | undefined {
+  if (typeof input !== 'string') return undefined;
+  const title = input.trim();
+  // 制御文字（改行を含む）は表示と一覧を崩すので受け付けない
+  if (title.length > MAX_TITLE_LENGTH || /[\u0000-\u001f\u007f]/.test(title)) return undefined;
+  return title || null;
 }
 
 /**

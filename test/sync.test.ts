@@ -357,13 +357,43 @@ describe('BoardSync', () => {
     await until(() => !a.board.notes.has('advice'));
   });
 
+  it('切断中にページが削除されたら、再接続しても未確定の操作を送り直さない', async () => {
+    const slug = `sync-${++pageCount}`;
+    let deleted = false;
+    const board = new FakeBoard();
+    const sync = new BoardSync(board, () => connectSocket(slug), { onDeleted: () => void (deleted = true) });
+    sync.start();
+    await until(() => sync.pendingCount === 0);
+    // ページを作る（このとき epoch を受け取る）
+    board.act([createNote('n1')]);
+    await until(() => sync.pendingCount === 0);
+
+    // 切断し、切断中に付箋を足す。その間にページが削除され、別の人が作り直す
+    const stub = env.PAGE.getByName(slug);
+    await runInDurableObject(stub, (_do, state) => {
+      for (const ws of state.getWebSockets()) ws.close(1012, 'test');
+    });
+    await until(() => sync.pendingCount === 0);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    board.act([createNote('written-offline')]);
+    expect(sync.pendingCount).toBe(1);
+    await api(`/api/pages/${slug}`, { method: 'DELETE' });
+    await stub.applyOps({ actor: 'user:x', clientId: 'cx', opId: 'o1', deltas: [createNote('recreated')] });
+
+    // 再接続（1 秒後）しても、前のページへの操作は書き込まれない
+    await until(() => deleted);
+    expect((await serverState(slug)).notes.map((n) => n.id)).toEqual(['recreated']);
+    sync.stop();
+  });
+
   it('表示名の変更を受け取る', async () => {
     const slug = `sync-${++pageCount}`;
     const a = newClient(slug);
     await synced(a);
     await env.PAGE.getByName(slug).setTitle('新しい表示名');
     await until(() => a.titles.at(-1) === '新しい表示名');
-    expect(a.titles).toEqual([null, '新しい表示名']);
+    // 最初のスナップショットと、ページができた通知では、表示名はまだない
+    expect(a.titles.slice(0, -1).every((title) => title === null)).toBe(true);
   });
 
   it('認証の期限切れで閉じられたら、再接続せずに通知する', async () => {

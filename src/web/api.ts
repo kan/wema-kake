@@ -1,0 +1,90 @@
+// サーバーの HTTP API の呼び出し。形は AGENTS.md の「HTTP API」を参照。
+import type { OpSummary, RevertOutcome } from '../shared/api';
+
+export interface PageSummary {
+  name: string;
+  title: string | null;
+  note_count: number;
+  updated_at: number;
+}
+
+export interface PageLink {
+  from_page: string;
+  to_page: string;
+  /** リンク先のページがまだ作られていなければ 1 */
+  missing: number;
+}
+
+/** API がエラーを返した。`status` は HTTP のステータス */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  const json = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+  if (!res.ok || json === null) {
+    throw new ApiError(json?.error ?? `${method} ${path}: ${res.status}`, res.status);
+  }
+  return json;
+}
+
+export const getPages = () => request<{ pages: PageSummary[] }>('GET', '/api/pages');
+
+/** 一覧のボード用。ページ（本文の冒頭つき）と、ページ間のリンク */
+export const getIndex = () =>
+  request<{ pages: (PageSummary & { excerpt: string })[]; links: PageLink[] }>('GET', '/api/index');
+
+/** ページを新しく作る。すでにあれば ApiError（status 409） */
+export const createPage = (slug: string, title: string) =>
+  request<{ ok: true }>('POST', `/api/pages/${slug}`, { title });
+
+export const getBacklinks = (slug: string) =>
+  request<{ pages: { name: string; title: string | null }[] }>('GET', `/api/pages/${slug}/backlinks`);
+
+export const setTitle = (slug: string, title: string) =>
+  request<{ title: string | null }>('PUT', `/api/pages/${slug}/title`, { title });
+
+export const deletePage = (slug: string) => request<{ ok: true }>('DELETE', `/api/pages/${slug}`);
+
+export const getOps = (slug: string, agentOnly: boolean) =>
+  request<{ ops: OpSummary[] }>('GET', `/api/pages/${slug}/ops${agentOnly ? '?agent=1' : ''}`);
+
+export const revertOp = (slug: string, seq: number, clientId: string) =>
+  request<RevertOutcome>('POST', `/api/pages/${slug}/ops/${seq}/revert`, {
+    clientId,
+    opId: crypto.randomUUID(),
+  });
+
+/** 画像を R2 に上げ、付箋に入れる URL を返す */
+export async function uploadImage(file: File): Promise<string> {
+  const res = await fetch('/api/images', {
+    method: 'POST',
+    headers: { 'Content-Type': file.type },
+    body: file,
+  });
+  if (!res.ok) throw new Error(`image upload failed: ${res.status}`);
+  return ((await res.json()) as { url: string }).url;
+}
+
+/**
+ * 認証がまだ有効かを確かめる。期限が切れていると、API は 401 を返すか、Access が
+ * ログイン画面へリダイレクトする。通信できないだけの場合は、有効として扱う（再接続を続ける）
+ */
+export async function isAuthenticated(): Promise<boolean> {
+  try {
+    const res = await fetch('/api/session', { redirect: 'manual' });
+    return res.status !== 401 && res.type !== 'opaqueredirect';
+  } catch {
+    return true;
+  }
+}

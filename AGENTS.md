@@ -54,7 +54,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 ```sql
 CREATE TABLE meta (
-  key   TEXT PRIMARY KEY,   -- 'slug', 'title', 'seq', 'version' など
+  key   TEXT PRIMARY KEY,   -- 'slug', 'title', 'seq', 'version', 'epoch', 'index_hash'
   value TEXT NOT NULL
 );
 
@@ -153,7 +153,10 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | メソッドとパス | 内容 |
 | --- | --- |
 | `GET /api/session` | 認証が有効かの確認用。`{ "actor": "user:<email>" }` を返す |
+| `GET /api/index` | 一覧のボード用。ページ（表示名、本文の冒頭、更新日時）と、ページ間のリンクをまとめて返す。新しい順に 500 ページまで |
 | `GET /api/pages?limit=&updated_after=` | ページ一覧（D1）。更新の新しい順 |
+| `POST /api/pages/<slug>` | ページの新規作成（本文は `{ "title": "..." }`。表示名は省略できる）。すでにあれば 409 を返し、何も変えない |
+| `DELETE /api/pages/<slug>` | ページの削除。取り消しはできない |
 | `GET /api/search?q=` | 全文検索（D1）。3 文字以上は FTS、3 文字未満は LIKE |
 | `GET /api/pages/<slug>` | スナップショット（`seq`、`title`、付箋と接続線） |
 | `GET /api/pages/<slug>/backlinks` | このページへリンクしているページ（D1） |
@@ -193,15 +196,15 @@ DO は `applyOps(actor, opId, deltas, summary?)` を唯一の書き込み口と�
 ```ts
 // Client → Server
 type ClientMsg =
-  | { type: 'hello'; clientId: string; lastSeq?: number }
+  | { type: 'hello'; clientId: string; lastSeq?: number; epoch?: string }   // epoch は前に受け取った値（あれば）
   | { type: 'ops'; opId: string; deltas: HistoryDelta[] }       // 原子的に適用
   | { type: 'preview'; noteId: string; x?: number; y?: number; width?: number; height?: number } // 保存しない
   | { type: 'presence'; selection: string[]; editing?: string };
 
 // Server → Client
 type ServerMsg =
-  | { type: 'snapshot'; seq: number; title: string | null; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] } }
-  | { type: 'meta'; title: string | null }   // 表示名が変わった。seq は進まない
+  | { type: 'snapshot'; seq: number; title: string | null; epoch: string | null; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] } }
+  | { type: 'meta'; title: string | null; epoch: string | null }   // 表示名が変わった、またはページができた。seq は進まない
   | { type: 'ops'; seq: number; actor: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
       reverts?: number;           // 取り消しなら、取り消した対象の seq（「取り消し」の節を参照）
       fixups?: HistoryDelta[] }   // fixups は送信元にだけ付ける（後述）
@@ -308,6 +311,22 @@ MCP 経由の変更はブラウザにはリモートの変更として届くた�
 
 ページを開いている状態での LLM 操作用に、同じツール定義を WebMCP（`document.modelContext.registerTool`、旧 `navigator.modelContext` にも対応）でも公開する。2026 年 10 月時点では WebMCP は実験段階で、ネイティブに呼べるエージェントは限られるため優先度は低い。
 WebMCP 版はブラウザ内で wema の API を直接呼ぶので、LLM の変更がブラウザの Undo 履歴に積まれ Ctrl+Z で戻せる。そのために wema の `board.batch()` と `origin: 'agent'` が必要（末尾参照）。
+
+## 画面
+
+設計の詳細と、wema の制約への対処は `docs/plan.md` の 3.7 節にある。
+
+- **ページの一覧（`/`）も wema のボードで表す。** ページ 1 つを付箋 1 枚、ページ間のリンクを接続線にする。リンク先が未作成のページは「未作成」の付箋として出す。検索は、一致するページの付箋だけを残す絞り込みで、残った付箋の位置は変えない
+- 一覧のボードは保存しない。配置は開くたびに `computeAutoLayout` で決め、参照モード（viewOnly）で出す。**一覧のボードを Page DO に保存したり、WebSocket で同期したりしない**
+- 一覧のボードは、wema に次の 3 つが入ってから作る（2026-10-03 に wema の開発セッションへ依頼済み）。**wema-kake 側の回避策では作らない**
+  - 表示領域の外にある付箋へ届く手段（スクロールかパン）
+  - 指定した付箋だけを表示する機能（絞り込みに使う）
+  - 付箋内のリンクのクリックを利用側で処理できる口（サイト内のリンクを同じタブで開くのに使う。wema は常に新しいタブで開く）
+- ページの削除は画面からだけ行える（`DELETE /api/pages/<slug>`）。DO の内容と D1 の索引を消し、取り消しはできない。接続中のブラウザはコード 4410 で閉じ、ブラウザは再接続せずに一覧へ戻る。貼った画像は R2 に残る
+- **削除したページが、古い書き込みで作り直されないようにする仕組みが 2 つある。どちらも外さないこと**
+  - epoch: ページを作るたびに変わる値（DO の `meta`）。`snapshot` と `meta` でブラウザに渡し、ブラウザは再接続の `hello` で送り返す。サーバーの今の値と違えば、ページが削除されたか作り直されているので、4410 で閉じる。切断中だったタブが、未確定の操作を送り直すのを防ぐ
+  - DO の `write()`: `applyOps` と `revert` はこれを通す。順番を待っている間に削除が始まった書き込みは、実行せずに拒否する
+- D1 への反映（alarm）は、書き込みや削除と同じ順番待ち（`inOrder`）に入れてある。索引の書き込みが、ページの削除と前後しないようにするため
 
 ## セキュリティ
 

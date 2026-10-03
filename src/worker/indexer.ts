@@ -62,6 +62,18 @@ export async function touchPage(
   return result.meta.changes > 0;
 }
 
+/**
+ * 1 ページ分の索引を消す。他のページからこのページへのリンクは残す
+ * （リンク元の付箋にはリンクが残っていて、一覧では未作成のページとして出る）
+ */
+export async function removePage(db: D1Database, slug: string): Promise<void> {
+  await db.batch([
+    db.prepare(`DELETE FROM pages_fts WHERE rowid = (SELECT id FROM pages WHERE name = ?)`).bind(slug),
+    db.prepare(`DELETE FROM links WHERE from_page = ?`).bind(slug),
+    db.prepare(`DELETE FROM pages WHERE name = ?`).bind(slug),
+  ]);
+}
+
 /** 1 ページ分の索引を入れ替える。1 つのトランザクションで実行する */
 export async function writePage(
   db: D1Database,

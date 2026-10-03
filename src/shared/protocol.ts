@@ -3,6 +3,12 @@ import type { BoardData, HistoryDelta } from './delta';
 /** 認証の期限が切れた接続を、サーバーが閉じるときのコード。クライアントは再読み込みして認証し直す */
 export const CLOSE_AUTH_EXPIRED = 4401;
 
+/**
+ * ページが削除されたときに、サーバーが接続を閉じるコード。クライアントは再接続しない
+ * （再接続すると、手元の未確定の操作でページが作り直されてしまう）
+ */
+export const CLOSE_PAGE_DELETED = 4410;
+
 /** 接続維持のためにクライアントが送る文字列と、サーバーの応答（JSON ではない） */
 export const PING = 'ping';
 export const PONG = 'pong';
@@ -12,7 +18,11 @@ export const REASON_TEXT_CONFLICT = 'text conflict';
 
 /** ブラウザ → サーバー */
 export type ClientMsg =
-  | { type: 'hello'; clientId: string; lastSeq?: number }
+  /**
+   * `epoch` は、前に受け取ったスナップショットの値（あれば）。サーバーの今の値と違えば、
+   * ページが削除されたか作り直されているので、サーバーは CLOSE_PAGE_DELETED で閉じる
+   */
+  | { type: 'hello'; clientId: string; lastSeq?: number; epoch?: string }
   | { type: 'ops'; opId: string; deltas: HistoryDelta[] };
 
 /** 確定した変更。送信元も含めた全員に配信する */
@@ -36,10 +46,10 @@ export interface OpsMsg {
 
 /** サーバー → ブラウザ */
 export type ServerMsg =
-  | { type: 'snapshot'; seq: number; title: string | null; data: BoardData }
+  | { type: 'snapshot'; seq: number; title: string | null; epoch: string | null; data: BoardData }
   | OpsMsg
   /** 表示名が変わった。付箋の変更ではないので seq は進まない */
-  | { type: 'meta'; title: string | null }
+  | { type: 'meta'; title: string | null; epoch: string | null }
   /**
    * 操作を受け付けなかった。送信元は手元の変更を巻き戻し、`fixups`（サーバーの現在値に
    * 合わせるためのデルタ。text が競合した付箋など）を適用する

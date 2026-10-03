@@ -7,9 +7,14 @@ export const api = (path: string, init?: RequestInit) => SELF.fetch(`http://loca
 
 export interface Client {
   send(msg: unknown): void;
-  /** 次に届くメッセージ。届かなければ失敗する */
+  /**
+   * 次に届くメッセージ。届かなければ失敗する。meta（表示名と epoch の通知。ページができたときにも
+   * 届く）は読み飛ばす
+   */
   next(): Promise<ServerMsg>;
-  /** しばらく待って、何も届いていないことを確かめる */
+  /** 次に届く meta。それより前のメッセージは読み飛ばす */
+  nextMeta(): Promise<ServerMsg>;
+  /** しばらく待って、meta 以外が何も届いていないことを確かめる */
   expectSilent(): Promise<void>;
   close(): void;
   closed: Promise<{ code: number; reason: string }>;
@@ -40,19 +45,25 @@ export async function open(slug: string, headers: Record<string, string> = {}): 
       };
     });
 
+  /** `want` に合う次のメッセージ。合わないものは読み飛ばす */
+  const take = async (want: (msg: ServerMsg) => boolean): Promise<ServerMsg> => {
+    for (;;) {
+      if (queue.length === 0) await wait(2000);
+      const msg = queue.shift();
+      if (!msg) throw new Error('no message');
+      if (want(msg)) return msg;
+    }
+  };
+
   return {
     closed,
     send: (msg) => ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg)),
     close: () => ws.close(),
-    async next() {
-      if (queue.length === 0) await wait(2000);
-      const msg = queue.shift();
-      if (!msg) throw new Error('no message');
-      return msg;
-    },
+    next: () => take((msg) => msg.type !== 'meta'),
+    nextMeta: () => take((msg) => msg.type === 'meta'),
     async expectSilent() {
       if (queue.length === 0) await wait(100);
-      expect(queue).toEqual([]);
+      expect(queue.filter((msg) => msg.type !== 'meta')).toEqual([]);
     },
   };
 }

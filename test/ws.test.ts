@@ -13,6 +13,7 @@ describe('WebSocket', () => {
       type: 'snapshot',
       seq: 0,
       title: null,
+      epoch: null,
       data: { version: 1, notes: [], edges: [] },
     });
   });
@@ -104,7 +105,7 @@ describe('WebSocket', () => {
     const again = await open(slug);
     again.send({ type: 'hello', clientId: 'ca', lastSeq: 1 });
     // 表示名は差分に出ないので、現在値が先に届く
-    expect(await again.next()).toEqual({ type: 'meta', title: null });
+    expect(await again.nextMeta()).toEqual({ type: 'meta', title: null, epoch: expect.any(String) });
     const second = await again.next();
     expect(second).toMatchObject({ type: 'ops', seq: 2, clientId: 'ca', opId: 'o2' });
     expect(second).toHaveProperty('fixups');
@@ -122,7 +123,7 @@ describe('WebSocket', () => {
     await stub.setTitle('変更後の表示名');
     const upToDate = await open(slug);
     upToDate.send({ type: 'hello', clientId: 'cc', lastSeq: 3 });
-    expect(await upToDate.next()).toEqual({ type: 'meta', title: '変更後の表示名' });
+    expect(await upToDate.nextMeta()).toMatchObject({ type: 'meta', title: '変更後の表示名' });
     await upToDate.expectSilent();
   });
 

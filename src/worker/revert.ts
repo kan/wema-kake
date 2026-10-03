@@ -1,21 +1,8 @@
 // 記録済みの操作の取り消し。逆向きのデルタを作り、取り消してよいものだけを適用する。
+import type { Skipped } from '../shared/api';
 import type { HistoryDelta } from '../shared/delta';
 import { applyDeltas, exists, readEdge, readNote, readNoteFields } from './apply-ops';
 import type { Obj } from './validate';
-
-/** 取り消さなかったものと、その理由 */
-export interface Skipped {
-  target: 'note' | 'edge';
-  id: string;
-  /**
-   * - modified: その後に変更されていた（一部のフィールドだけ変更されていた場合は、残りは取り消している）
-   * - connected: 付箋の作成を取り消そうとしたが、取り消さない接続線がつながっている
-   * - deleted: 更新を取り消そうとしたが、対象がもうない
-   * - exists: 削除を取り消そうとしたが、同じ id のものがある
-   * - endpoint-missing: 接続線の削除を取り消そうとしたが、両端の付箋がない
-   */
-  reason: 'modified' | 'connected' | 'deleted' | 'exists' | 'endpoint-missing';
-}
 
 /**
  * 更新の取り消しのうち、現在値が「取り消す操作が書いた値」のままのキーだけを残す。
