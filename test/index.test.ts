@@ -249,7 +249,11 @@ describe('一覧のボード用の API', () => {
     const a = body.pages.find((p) => p.name === 'board-a');
     expect(a).toMatchObject({ name: 'board-a', title: 'ページ A', note_count: 1, excerpt: 'A の本文です b m' });
     const b = body.pages.find((p) => p.name === 'board-b');
-    expect((b!.excerpt as string).length).toBe(120);
+    expect((b!.excerpt as string).length).toBe(60);
+
+    // names=1 なら、スラッグだけを返す（一覧の絞り込み用）
+    const names = await api(`/api/search?names=1&q=${encodeURIComponent('A の本文')}`);
+    expect(await names.json()).toEqual({ pages: [{ name: 'board-a' }] });
 
     expect(body.links.filter((l) => l.from_page === 'board-a')).toEqual(
       expect.arrayContaining([

@@ -3,7 +3,7 @@ import { WemaBoard } from '@kanf/wema';
 import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type SkipReason } from '../shared/api';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import * as api from './api';
-import { el, errorMessage, formatDate } from './dom';
+import { el, errorMessage, formatDate, openInternalLink } from './dom';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
 
 const NOTICE_MS = 8000;
@@ -89,7 +89,13 @@ export function openPage(app: HTMLElement, slug: string): void {
 
   // --- ボードと同期 ---
   // 最初の同期が済むまでは編集させない（同期でボード全体が入れ替わるため）
-  const board = new WemaBoard({ container, readOnly: true, onImageUpload: api.uploadImage });
+  const board = new WemaBoard({
+    container,
+    readOnly: true,
+    onImageUpload: api.uploadImage,
+    // 他のページへのリンク（Wiki リンク）は、同じタブで開く
+    onLinkClick: openInternalLink,
+  });
 
   const sync = new BoardSync(board, () => connect(slug), {
     onReady: () => board.setReadOnly(false),

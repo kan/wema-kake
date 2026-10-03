@@ -1,6 +1,7 @@
 // ページの一覧、検索、バックリンクは D1 の索引から返す。ページの中身と表示名は DO から返す。
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
+import { INDEX_EXCERPT_LENGTH, MAX_QUERY_LENGTH } from '../shared/api';
 import { isValidSlug } from '../shared/slug';
 import type { AuthEnv } from './access';
 import type { RevertFailure } from './page-do';
@@ -10,9 +11,6 @@ const DEFAULT_LIST_LIMIT = 100;
 const MAX_LIST_LIMIT = 500;
 /** 一覧の絞り込みに使うので、一覧の上限とそろえる */
 const SEARCH_LIMIT = MAX_LIST_LIMIT;
-/** 一覧の付箋に出す、本文の冒頭の長さ */
-const EXCERPT_LENGTH = 120;
-const MAX_QUERY_LENGTH = 200;
 /** trigram の FTS が一致を返せる最短の検索語（文字数） */
 const MIN_FTS_QUERY_LENGTH = 3;
 
@@ -46,7 +44,7 @@ pagesApi.get('/index', async (c) => {
         `SELECT name, title, note_count, updated_at, substr(plain_text, 1, ?) AS excerpt
          FROM pages ORDER BY updated_at DESC LIMIT ?`,
       )
-      .bind(EXCERPT_LENGTH, MAX_LIST_LIMIT),
+      .bind(INDEX_EXCERPT_LENGTH, MAX_LIST_LIMIT),
     db
       .prepare(
         `SELECT l.from_page, l.to_page, p.name IS NULL AS missing
@@ -75,14 +73,20 @@ pagesApi.get('/pages', async (c) => {
 pagesApi.get('/search', async (c) => {
   const q = (c.req.query('q') ?? '').trim();
   if (q === '' || q.length > MAX_QUERY_LENGTH) return c.json({ error: 'invalid query' }, 400);
+  // `names=1` なら、一致したページのスラッグだけを返す（一覧の絞り込み用。入力のたびに呼ばれる
+  // ので、抜粋の生成と関連度での並び替えを省く）
+  const namesOnly = c.req.query('names') === '1';
 
   if ([...q].length >= MIN_FTS_QUERY_LENGTH) {
     // 検索語全体を 1 つの語句として扱う（FTS5 の演算子として解釈させない）
     const phrase = `"${q.replaceAll('"', '""')}"`;
     const { results } = await c.env.DB.prepare(
-      `SELECT p.name, p.title, p.updated_at, snippet(pages_fts, 1, '', '', '…', 24) AS snippet
-       FROM pages_fts JOIN pages p ON p.id = pages_fts.rowid
-       WHERE pages_fts MATCH ? ORDER BY rank LIMIT ?`,
+      namesOnly
+        ? `SELECT p.name FROM pages_fts JOIN pages p ON p.id = pages_fts.rowid
+           WHERE pages_fts MATCH ? LIMIT ?`
+        : `SELECT p.name, p.title, p.updated_at, snippet(pages_fts, 1, '', '', '…', 24) AS snippet
+           FROM pages_fts JOIN pages p ON p.id = pages_fts.rowid
+           WHERE pages_fts MATCH ? ORDER BY rank LIMIT ?`,
     )
       .bind(phrase, SEARCH_LIMIT)
       .all();
@@ -91,7 +95,7 @@ pagesApi.get('/search', async (c) => {
 
   const pattern = `%${q.replace(/[\\%_]/g, '\\$&')}%`;
   const { results } = await c.env.DB.prepare(
-    `SELECT name, title, updated_at FROM pages
+    `SELECT ${namesOnly ? 'name' : 'name, title, updated_at'} FROM pages
      WHERE title LIKE ?1 ESCAPE '\\' OR plain_text LIKE ?1 ESCAPE '\\'
      ORDER BY updated_at DESC LIMIT ?2`,
   )

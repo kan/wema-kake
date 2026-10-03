@@ -3,6 +3,33 @@
 /** 表示名の長さの上限 */
 export const MAX_TITLE_LENGTH = 200;
 
+/** 検索語の長さの上限 */
+export const MAX_QUERY_LENGTH = 200;
+
+/**
+ * 一覧のボードの付箋に出す、本文の冒頭の長さ（文字数）。
+ * 付箋の大きさ（src/web/index-board.ts）に収まる量にしてある
+ */
+export const INDEX_EXCERPT_LENGTH = 60;
+
+/** `GET /api/index` が返すページ */
+export interface IndexPage {
+  name: string;
+  title: string | null;
+  note_count: number;
+  updated_at: number;
+  /** 本文の冒頭（INDEX_EXCERPT_LENGTH 文字まで） */
+  excerpt: string;
+}
+
+/** `GET /api/index` が返すリンク */
+export interface IndexLink {
+  from_page: string;
+  to_page: string;
+  /** リンク先のページがまだ作られていなければ 1 */
+  missing: number;
+}
+
 /** 記録済みの操作 1 件の概要（一覧に出すもの） */
 export interface OpSummary {
   seq: number;

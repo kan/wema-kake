@@ -1,19 +1,5 @@
 // サーバーの HTTP API の呼び出し。形は AGENTS.md の「HTTP API」を参照。
-import type { OpSummary, RevertOutcome } from '../shared/api';
-
-export interface PageSummary {
-  name: string;
-  title: string | null;
-  note_count: number;
-  updated_at: number;
-}
-
-export interface PageLink {
-  from_page: string;
-  to_page: string;
-  /** リンク先のページがまだ作られていなければ 1 */
-  missing: number;
-}
+import type { IndexLink, IndexPage, OpSummary, RevertOutcome } from '../shared/api';
 
 /** API がエラーを返した。`status` は HTTP のステータス */
 export class ApiError extends Error {
@@ -38,11 +24,17 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return json;
 }
 
-export const getPages = () => request<{ pages: PageSummary[] }>('GET', '/api/pages');
-
 /** 一覧のボード用。ページ（本文の冒頭つき）と、ページ間のリンク */
-export const getIndex = () =>
-  request<{ pages: (PageSummary & { excerpt: string })[]; links: PageLink[] }>('GET', '/api/index');
+export const getIndex = () => request<{ pages: IndexPage[]; links: IndexLink[] }>('GET', '/api/index');
+
+/** 表示名か本文が検索語に一致するページのスラッグ */
+export async function searchPages(q: string): Promise<string[]> {
+  const { pages } = await request<{ pages: { name: string }[] }>(
+    'GET',
+    `/api/search?names=1&q=${encodeURIComponent(q)}`,
+  );
+  return pages.map((p) => p.name);
+}
 
 /** ページを新しく作る。すでにあれば ApiError（status 409） */
 export const createPage = (slug: string, title: string) =>
