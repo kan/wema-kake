@@ -74,12 +74,16 @@ CREATE TABLE edges (
   updated_at INTEGER NOT NULL
 );
 
+CREATE INDEX edges_from ON edges (from_id);
+CREATE INDEX edges_to ON edges (to_id);
+
 CREATE TABLE ops (
   seq         INTEGER PRIMARY KEY,   -- ボード全体の通番
   actor       TEXT NOT NULL,         -- 'user:<id>' / 'agent:<client>'
   client_id   TEXT NOT NULL,
   op_id       TEXT NOT NULL,
   body        TEXT NOT NULL,         -- 適用したデルタ配列の JSON（before/after を含む）
+  fixups      TEXT,                  -- 送信元だけが適用するデルタ配列の JSON（同じ op_id の再送で返す）
   summary     TEXT,                  -- MCP の場合、ツール名や LLM が付けた説明
   reverted_by INTEGER,               -- 取り消し操作の seq
   created_at  INTEGER NOT NULL
@@ -151,7 +155,8 @@ type ClientMsg =
 // Server → Client
 type ServerMsg =
   | { type: 'snapshot'; seq: number; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] } }
-  | { type: 'ops'; seq: number; actor: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string }
+  | { type: 'ops'; seq: number; actor: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
+      fixups?: HistoryDelta[] }   // fixups は送信元にだけ付ける（後述）
   | { type: 'reject'; opId: string; reason: string; current?: { notes: WemaNote[]; edges: WemaEdge[] } }
   | { type: 'preview'; clientId: string; noteId: string; x?: number; y?: number; width?: number; height?: number }
   | { type: 'presence'; clientId: string; selection: string[]; editing?: string };
@@ -162,6 +167,9 @@ type ServerMsg =
 - 接続時に `hello` を送る。`lastSeq` が `ops` に残っていれば差分の `ops` を、なければ `snapshot` を返す。クライアントは `snapshot.data` を `importData()` で読み込む
 - 確定した変更は送信元も含めた全員に `ops` として配信する。送信元は自分の `opId` が返ってきたことを確定（ack）とみなす
 - クライアントは wema の `history:commit` を `ops` として送り、受信した `ops` は `applyRemote()` で適用する（自分の `opId` のものは適用済みなのでスキップ）
+- 配信する `deltas` は、サーバーが実際に適用したもの。更新の `before` と削除対象の内容はサーバーの保存値で置き換えてある。サーバーが変えた分（サニタイズで変わった text、付箋の削除に伴ってサーバーが足した接続線の削除）は `fixups` に入れ、**送信元は自分の `opId` の `ops` を受けたとき `fixups` だけを `applyRemote()` する**
+- 更新の `after` にキーがなく `before` にあるものは「未設定に戻す」を表す（wema は `collapsed: undefined` で折り畳みを解くが、値が `undefined` のキーは JSON で消えるため）。**送受信の両側でこの規則を守ること**
+- 対象がすでにない更新と削除は、拒否せずにそのデルタだけ捨てる。全部捨てた場合 `seq` は進まない
 - MCP 経由の変更も `actor: 'agent:...'` 付きの `ops` として配信される。ブラウザでは agent の変更を区別して表示できるようにする（表示方法は未決定）
 
 ### ドラッグ・リサイズ中

@@ -10,7 +10,7 @@ app.get('/api/pages/:slug', async (c) => {
   if (!isValidSlug(slug)) {
     return c.json({ error: 'invalid slug' }, 400);
   }
-  return c.json({ slug, seq: await c.env.PAGE.getByName(slug).getSeq() });
+  return c.json({ slug, ...(await c.env.PAGE.getByName(slug).getSnapshot()) });
 });
 
 export default app;

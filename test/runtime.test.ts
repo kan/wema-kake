@@ -1,6 +1,7 @@
 // 公式ドキュメントに記述がなく、設計が依存しているランタイムの挙動を固定するテスト。
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import type { PageDO } from '../src/worker/page-do';
 
 describe('HTMLRewriter', () => {
   it('DO 内で動き、テキスト中のエンティティは復号も再エスケープもされない', async () => {
@@ -40,7 +41,14 @@ describe('HTMLRewriter', () => {
 describe('DO の SQLite', () => {
   it('外部キー制約が既定で有効で、付箋を消すと接続線も消える', async () => {
     const stub = env.PAGE.getByName('runtime-fk');
-    const edgeCount = await runInDurableObject(stub, (_instance, state) => {
+    const edgeCount = await runInDurableObject(stub, async (instance: PageDO, state) => {
+      // スキーマは最初の書き込みで作られる
+      await instance.applyOps({
+        actor: 'user:test',
+        clientId: 'c1',
+        opId: 'init',
+        deltas: [{ type: 'note:create', note: { id: 'n0', x: 0, y: 0, width: 1, height: 1, text: '', color: '#fff' } }],
+      });
       const sql = state.storage.sql;
       for (const id of ['n1', 'n2']) {
         sql.exec(
