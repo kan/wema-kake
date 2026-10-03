@@ -231,6 +231,59 @@ describe('WebSocket', () => {
     expect(await b.next()).toMatchObject({ type: 'ops', seq: 1, clientId: 'ca' });
   });
 
+  it('同じ clientId を名乗っても、主体が違えば送信元として扱わない', async () => {
+    const slug = newSlug();
+    const a = await join(slug, 'shared');
+    const stub = env.PAGE.getByName(slug);
+    const dirty = [createNote('n1', { text: '<b onclick="x()">a</b>' })];
+
+    // 別の主体が、a と同じ clientId と opId で先に操作を記録する
+    await stub.applyOps({ actor: 'user:other@example.com', clientId: 'shared', opId: 'o1', deltas: dirty });
+    const fromOther = await a.next();
+    expect(fromOther).toMatchObject({ type: 'ops', seq: 1, actor: 'user:other@example.com' });
+    expect(fromOther).not.toHaveProperty('fixups');
+
+    // a の同じ opId の操作は再送として扱われず、新しい操作として適用される
+    a.send({ type: 'ops', opId: 'o1', deltas: [createNote('n2')] });
+    expect(await a.next()).toMatchObject({
+      type: 'ops', seq: 2, actor: 'user:dev@example.com', deltas: [createNote('n2')],
+    });
+  });
+
+  it('認証の期限を過ぎた接続は、受信も配信もせずに閉じる', async () => {
+    const slug = newSlug();
+    const stub = env.PAGE.getByName(slug);
+    const connect = async (expiresAt: number) => {
+      const res = await stub.fetch('http://do/ws', {
+        headers: { Upgrade: 'websocket', 'X-Wema-Actor': 'user:a@example.com', 'X-Wema-Auth-Expires': String(expiresAt) },
+      });
+      const ws = res.webSocket!;
+      ws.accept();
+      const closed = new Promise<number>((resolve) => ws.addEventListener('close', (e) => resolve(e.code)));
+      return { ws, closed };
+    };
+    const now = Math.floor(Date.now() / 1000);
+
+    // 期限内に hello を済ませ、その後に期限が切れた接続（期限を過去に書き換えて再現する）
+    const stale = await connect(now + 3600);
+    stale.ws.send(JSON.stringify({ type: 'hello', clientId: 'c1' }));
+    const live = await join(slug, 'c2');
+    await runInDurableObject(stub, (_do, state) => {
+      for (const ws of state.getWebSockets()) {
+        const attachment = ws.deserializeAttachment();
+        if (attachment.clientId === 'c1') ws.serializeAttachment({ ...attachment, expiresAt: now - 1 });
+      }
+    });
+    live.send({ type: 'ops', opId: 'o1', deltas: [createNote('n1')] });
+    await live.next();
+    expect(await stale.closed).toBe(4401);
+
+    // 期限切れの状態で届いたメッセージ
+    const expired = await connect(now - 1);
+    expired.ws.send(JSON.stringify({ type: 'hello', clientId: 'c3' }));
+    expect(await expired.closed).toBe(4401);
+  });
+
   it('hello を済ませていない接続には配信せず、ops も受け付けない', async () => {
     const slug = newSlug();
     const a = await join(slug, 'ca');

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { isValidSlug } from '../shared/slug';
 import { type AuthEnv, requireAccess } from './access';
-import { ACTOR_HEADER } from './page-do';
+import { ACTOR_HEADER, AUTH_EXPIRES_HEADER } from './page-do';
 
 export { PageDO } from './page-do';
 
@@ -37,6 +37,9 @@ app.get('/ws/:slug', async (c) => {
   // クライアントが同名のヘッダーを付けてきても、認証結果で上書きする
   const headers = new Headers(c.req.raw.headers);
   headers.set(ACTOR_HEADER, c.get('actor'));
+  const expiresAt = c.get('authExpiresAt');
+  if (expiresAt === undefined) headers.delete(AUTH_EXPIRES_HEADER);
+  else headers.set(AUTH_EXPIRES_HEADER, String(expiresAt));
   return c.env.PAGE.getByName(slug).fetch(new Request(c.req.raw, { headers }));
 });
 

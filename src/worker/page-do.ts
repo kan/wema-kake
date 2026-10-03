@@ -15,12 +15,26 @@ const MAX_REPLAY_LENGTH = 4_000_000;
 
 /** Worker が WebSocket の接続要求を DO へ転送するときに、認証済みの主体を入れるヘッダー */
 export const ACTOR_HEADER = 'X-Wema-Actor';
+/** 同じく、認証の期限（UNIX 秒）を入れるヘッダー。期限がなければ付けない */
+export const AUTH_EXPIRES_HEADER = 'X-Wema-Auth-Expires';
+
+/** 認証の期限が切れた接続を閉じるときのコード。クライアントは再読み込みして認証し直す */
+const CLOSE_AUTH_EXPIRED = 4401;
 
 /** 接続ごとに持つ情報。Hibernation から復帰しても残る */
 interface Attachment {
   actor: string;
+  /**
+   * 認証の期限（UNIX 秒）。接続は開いたままになるので、接続時の認証を期限なく使い続けないよう、
+   * これを過ぎたら受信も配信もせずに閉じる
+   */
+  expiresAt?: number;
   /** hello を受けるまで未設定。未設定の接続には配信しない */
   clientId?: string;
+}
+
+function isExpired(attachment: Attachment): boolean {
+  return attachment.expiresAt !== undefined && Date.now() >= attachment.expiresAt * 1000;
 }
 
 type OpsHead = Omit<OpsMsg, 'deltas' | 'fixups'>;
@@ -97,7 +111,7 @@ CREATE TABLE ops (
 
 CREATE INDEX edges_from ON edges (from_id);
 CREATE INDEX edges_to ON edges (to_id);
-CREATE UNIQUE INDEX ops_client_op ON ops (client_id, op_id);
+CREATE UNIQUE INDEX ops_client_op ON ops (actor, client_id, op_id);
 
 INSERT INTO meta (key, value) VALUES ('seq', '0');
 `,
@@ -196,8 +210,9 @@ export class PageDO extends DurableObject<Env> {
     // 再接続後の再送。適用済みの結果をそのまま返す
     const done = this.sql
       .exec(
-        `SELECT seq, body, fixups FROM ops WHERE client_id = ? AND op_id = ?`,
-        input.clientId, input.opId,
+        // clientId はクライアントの自己申告なので、主体も合わせて同じ送信元かを判定する
+        `SELECT seq, body, fixups FROM ops WHERE actor = ? AND client_id = ? AND op_id = ?`,
+        input.actor, input.clientId, input.opId,
       )
       .toArray()[0];
     if (done) {
@@ -238,6 +253,7 @@ export class PageDO extends DurableObject<Env> {
         // fixups は送信元にだけ付ける
         deliver = () =>
           this.broadcast(opsJson(head, body, null), {
+            actor: input.actor,
             clientId: input.clientId,
             toSender: opsJson(head, body, fixupsJson),
           });
@@ -259,9 +275,12 @@ export class PageDO extends DurableObject<Env> {
     const actor = request.headers.get(ACTOR_HEADER);
     if (!actor) return new Response('missing actor', { status: 400 });
 
+    const expires = request.headers.get(AUTH_EXPIRES_HEADER);
+    const expiresAt = expires === null ? undefined : Number(expires);
+
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ actor } satisfies Attachment);
+    server.serializeAttachment({ actor, expiresAt } satisfies Attachment);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -280,6 +299,10 @@ export class PageDO extends DurableObject<Env> {
     if (typeof msg !== 'object' || msg === null) return;
 
     const attachment = ws.deserializeAttachment() as Attachment;
+    if (isExpired(attachment)) {
+      ws.close(CLOSE_AUTH_EXPIRED, 'authentication expired');
+      return;
+    }
     if (msg.type === 'hello') {
       this.onHello(ws, attachment, msg);
     } else if (msg.type === 'ops') {
@@ -319,7 +342,8 @@ export class PageDO extends DurableObject<Env> {
         summary: (row.summary as string | null) ?? undefined,
       };
       // 自分の操作の確定を受け取る前に切断していた場合は、fixups も返す
-      const fixups = head.clientId === clientId ? (row.fixups as string | null) : null;
+      const own = head.clientId === clientId && head.actor === attachment.actor;
+      const fixups = own ? (row.fixups as string | null) : null;
       send(ws, opsJson(head, row.body as string, fixups));
     }
   }
@@ -369,14 +393,25 @@ export class PageDO extends DurableObject<Env> {
   }
 
   /**
-   * hello を済ませた全接続へ送る。`sender` を指定すると、その clientId の接続にだけ
-   * `toSender` を送る（null なら送らない）
+   * hello を済ませた全接続へ送る。`sender` を指定すると、その送信元の接続にだけ
+   * `toSender` を送る（null なら送らない）。clientId はクライアントの自己申告なので、
+   * 送信元かどうかは主体も合わせて判定する
    */
-  private broadcast(json: string, sender?: { clientId: string; toSender: string | null }): void {
+  private broadcast(
+    json: string,
+    sender?: { actor: string; clientId: string; toSender: string | null },
+  ): void {
     for (const ws of this.ctx.getWebSockets()) {
-      const { clientId } = ws.deserializeAttachment() as Attachment;
-      if (!clientId) continue;
-      const out = clientId === sender?.clientId ? sender.toSender : json;
+      const attachment = ws.deserializeAttachment() as Attachment;
+      if (isExpired(attachment)) {
+        ws.close(CLOSE_AUTH_EXPIRED, 'authentication expired');
+        continue;
+      }
+      if (!attachment.clientId) continue;
+      const out =
+        sender && attachment.clientId === sender.clientId && attachment.actor === sender.actor
+          ? sender.toSender
+          : json;
       if (out !== null) send(ws, out);
     }
   }

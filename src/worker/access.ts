@@ -6,6 +6,8 @@ export type AuthEnv = {
   Variables: {
     /** 'user:<email>'。DO に渡す変更の主体 */
     actor: string;
+    /** 認証の期限（UNIX 秒）。ローカル開発では期限がないので未設定 */
+    authExpiresAt?: number;
   };
 };
 
@@ -28,12 +30,17 @@ function remoteKeys(certsUrl: URL) {
   return createRemoteJWKSet(certsUrl, { [jwksCache]: cache });
 }
 
-/** Access が付けた JWT を検証し、email を返す。検証できなければ null */
-async function emailFromAccessJwt(token: string, teamDomain: string, aud: string) {
+/** Access が付けた JWT を検証し、email と期限を返す。検証できなければ null */
+async function verifyAccessJwt(token: string, teamDomain: string, aud: string) {
   try {
     const keys = remoteKeys(new URL('/cdn-cgi/access/certs', teamDomain));
-    const { payload } = await jwtVerify(token, keys, { issuer: teamDomain, audience: aud });
-    return typeof payload.email === 'string' && payload.email !== '' ? payload.email : null;
+    const { payload } = await jwtVerify(token, keys, {
+      issuer: teamDomain,
+      audience: aud,
+      requiredClaims: ['exp'],
+    });
+    if (typeof payload.email !== 'string' || payload.email === '') return null;
+    return { email: payload.email, expiresAt: payload.exp };
   } catch {
     return null;
   }
@@ -51,17 +58,16 @@ async function emailFromAccessJwt(token: string, teamDomain: string, aud: string
 export const requireAccess = createMiddleware<AuthEnv>(async (c, next) => {
   const { ACCESS_TEAM_DOMAIN: teamDomain, ACCESS_AUD: aud, DEV_USER_EMAIL: devEmail } = c.env;
 
-  let email: string | null = null;
   if (teamDomain && aud) {
     const token = c.req.header('Cf-Access-Jwt-Assertion');
-    if (token) email = await emailFromAccessJwt(token, teamDomain, aud);
-    if (!email) return c.json({ error: 'unauthorized' }, 401);
+    const verified = token ? await verifyAccessJwt(token, teamDomain, aud) : null;
+    if (!verified) return c.json({ error: 'unauthorized' }, 401);
+    c.set('actor', `user:${verified.email}`);
+    c.set('authExpiresAt', verified.expiresAt);
   } else if (devEmail && LOCAL_HOSTS.has(new URL(c.req.url).hostname)) {
-    email = devEmail;
+    c.set('actor', `user:${devEmail}`);
   } else {
     return c.json({ error: 'authentication is not configured' }, 500);
   }
-
-  c.set('actor', `user:${email}`);
   await next();
 });
