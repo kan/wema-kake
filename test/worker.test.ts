@@ -1,0 +1,26 @@
+import { SELF } from 'cloudflare:test';
+import { describe, expect, it } from 'vitest';
+import { isValidSlug } from '../src/shared/slug';
+
+describe('isValidSlug', () => {
+  it.each(['a', 'memo-2026', '0abc', 'a'.repeat(64)])('%s を受け付ける', (slug) => {
+    expect(isValidSlug(slug)).toBe(true);
+  });
+
+  it.each(['', '-a', 'Memo', 'a_b', 'a/b', '絵馬', 'a'.repeat(65)])('%s を拒否する', (slug) => {
+    expect(isValidSlug(slug)).toBe(false);
+  });
+});
+
+describe('GET /api/pages/:slug', () => {
+  it('未作成のページは seq 0 を返す', async () => {
+    const res = await SELF.fetch('https://example.com/api/pages/first-page');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ slug: 'first-page', seq: 0 });
+  });
+
+  it('不正なスラッグは 400', async () => {
+    const res = await SELF.fetch('https://example.com/api/pages/Bad_Slug');
+    expect(res.status).toBe(400);
+  });
+});

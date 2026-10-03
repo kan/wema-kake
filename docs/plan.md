@@ -1,0 +1,251 @@
+# wema-kake 設計と実装プラン
+
+`AGENTS.md` の方針を実装に落とすための設計の補足と、作業の順序をまとめる。
+方針そのもの（技術構成、スキーマ、プロトコル）は `AGENTS.md` が正で、ここには重複して書かない。
+
+作成日: 2026-10-03
+
+## 1. 前提の確認結果
+
+### wema の現状（v0.3.3、ローカルの `~/wema` で確認）
+
+`AGENTS.md` の「wema 側で必要な変更」に書かれた内容は、現在のコードと一致していた。
+
+- `HistoryManager` の `Delta` 型は `HistoryDelta` 案と同じ形だが、export されていない。`history:commit` に相当するイベントもない
+- Undo / Redo は `recording = false` で再生するので、デルタが外に出ない
+- `applyRemote`、`onImageUpload`、`board.batch` はない。画像は `FileReader` で data URL にして挿入している
+- `layout.ts` の 3 関数は `NoteManager` を引数に取り、`getNote` / `updateNote` を直接呼ぶ
+- `sanitize.ts` は `DOMParser` に依存しており、Workers ではそのまま使えない
+- `syncAutoSize` は width / height を書き換えた後で `prev` を作っている
+
+issue は次の 2 件を立てた。
+
+- [kan/wema#50](https://github.com/kan/wema/issues/50) リアルタイム同期・LLM 連携対応のための API 追加
+- [kan/wema#51](https://github.com/kan/wema/issues/51) autoSize の `note:update` で `prev` が更新後の値になっている
+
+### Cloudflare と MCP まわり（2026-10-03 に公式ドキュメントで確認）
+
+| 項目 | 結果 | 設計への影響 |
+| --- | --- | --- |
+| DO の SQLite の外部キー | workerd のビルド定義で既定有効（`SQLITE_DEFAULT_FOREIGN_KEYS=1`）。DO のドキュメント本文には記述がない | CASCADE は使える見込み。テストで 1 件確認する |
+| DO のトランザクション | `sql.exec()` で `BEGIN` は使えない。`ctx.storage.transactionSync()` を使い、コールバックは同期でなければならない | サニタイズ（非同期）はトランザクションの前に済ませる（3.2 節） |
+| Alarm | DO 1 つにつき 1 つ。`setAlarm` は上書き。失敗時は再試行される | D1 反映と `ops` の間引きを 1 つの alarm ハンドラで行う |
+| MCP サーバーの実装 | `McpAgent` は非推奨で機能凍結。新規は `createMcpHandler`（ステートレス、DO 不要）が推奨 | `createMcpHandler` を使う。公式サンプル `remote-mcp-cf-access` は `McpAgent` のままなので、OAuth 部分だけ流用する |
+| `workers-oauth-provider` | 1.x になった。単一 Worker の `OAuthProvider` 構成は引き続き使える | 1.x で組む。サンプルは 0.8 系なので移行ガイドを読む |
+| Access のパス切り分け | 公開したいパスだけを対象にした Access アプリを別に作り、Bypass ポリシーを付けるのが公式の手段。パスはより具体的なものが優先 | 4 節のとおり |
+| Worker 単位の Access 保護 | WebSocket に対応していない | 使わない。ホスト名とパス単位の Access アプリで保護する |
+| HTMLRewriter | `removeAndKeepContent()`、属性の列挙と削除、コメントの削除がある。`Response` を経由する必要がある。テキストのエンティティの扱いと DO 内での動作は公式の記述がない | フェーズ 1 で実機確認する |
+| D1 の FTS5 | FTS5 は公式に対応。trigram トークナイザは公式の記述がない。仮想テーブルがあると DB を export できない | フェーズ 1 で実機確認する。3 文字未満の検索語は trigram に一致しないので LIKE を併用する |
+| テスト | 公式の標準は `@cloudflare/vitest-plugin`（vitest `^4.1.0`。vitest 5 は未対応）。DO の SQLite、Alarm、Hibernation をテストできる | これを使う。DO の WebSocket のテストはストレージ分離と併用できないので `--max-workers=1 --no-isolate` で流す |
+| claude.ai の定期実行 | Claude Code の routines は claude.ai のコネクタを呼べる。カスタムコネクタを付けられないという issue（anthropics/claude-code#63233）があり、解消済みかは未確認 | フェーズ 6 の完了後に実際に試す |
+| ChatGPT の定期実行 | カスタム MCP を呼べるという公式の記述は確認できなかった | 同上。使えなければ claude.ai のみで運用する |
+
+## 2. 今回決めたこと
+
+| 項目 | 決定 |
+| --- | --- |
+| ページ名と URL | URL はスラッグ、表示名は別に持つタイトル。URL は `/p/<slug>` |
+| Wiki リンク | 付箋内の `<a href>` を正とする。独自記法は入れない |
+| ルーティング | Hono |
+| revert の衝突 | 部分適用。衝突したデルタだけスキップし、スキップした対象を返す |
+
+### スラッグとタイトル
+
+- スラッグは `^[a-z0-9][a-z0-9-]{0,63}$`。作成時に決め、後から変えない
+- DO は `idFromName(slug)` で引く。D1 の `pages.name` にもスラッグを入れる
+- タイトルは DO の `meta`（キー `title`）に持ち、D1 の `pages.title` に反映する。未設定のときはスラッグを表示する
+- タイトルの変更は付箋のデルタではないので、`applyOps` とは別の DO メソッド `setTitle` で行う。接続中のクライアントへは `{ type: 'meta'; title: string }` を配信する（`ServerMsg` への追加）
+- 存在しないスラッグを開いたら空のボードを表示する。D1 に行ができるのは最初の書き込みの後
+- 新規作成の画面ではタイトルとスラッグを入力する。スラッグの初期値は短い乱数にしておき、手で書き換えられるようにする
+
+### Wiki リンクの抽出
+
+- 対象は、`href` のパスが `/p/<slug>` に一致する `<a>`。相対 URL と、自サイトのオリジンを持つ絶対 URL の両方を拾う
+- 抽出は D1 反映（alarm）のときに全付箋の text に対して行い、そのページ発の `links` を入れ替える
+- リンクを作る操作は wema の既存のリンク機能を使う。ページ名の補完などの入力補助は後から足す
+
+## 3. 設計の補足
+
+### 3.1 ディレクトリ構成
+
+単一パッケージにする。パッケージマネージャは wema と同じ npm。
+
+```
+src/
+  shared/          Worker とブラウザの両方から読む
+    delta.ts       HistoryDelta 型（wema が export するまでの写し）、逆デルタの生成
+    protocol.ts    ClientMsg / ServerMsg
+    tools.ts       MCP ツールの定義（名前、説明、入力スキーマ）と BoardAccess インターフェース
+    slug.ts        スラッグの検証
+  worker/
+    index.ts       OAuthProvider の export、Hono アプリ、DO クラスの export
+    access.ts      Access JWT の検証
+    page-do.ts     PageDO（WebSocket、RPC、alarm）
+    apply-ops.ts   検証と保存
+    sanitize.ts    HTMLRewriter 版のサニタイザ
+    plain-text.ts  タグの除去、リンクの抽出
+    revert.ts      取り消し
+    indexer.ts     D1 への反映
+    images.ts      R2 へのアップロードと配信
+    mcp/           createMcpHandler、ツールの実装、Access for SaaS のログイン処理
+  web/             Vite でビルドし Static Assets で配信する
+    main.ts        ルーティング（一覧、ページ）
+    sync.ts        wema のイベントと WebSocket のメッセージの相互変換
+    ...
+migrations/        D1 のマイグレーション
+test/
+wrangler.jsonc
+```
+
+### 3.2 `applyOps` の処理順
+
+DO の書き込みは `applyOps(actor, clientId, opId, deltas, summary?)` だけにする。
+
+1. 形の検証。デルタの型、数値が有限か、id の形式、1 回の `ops` のデルタ数と text の長さの上限
+2. サニタイズ。`note:create` と `note:update` の text を HTMLRewriter に通す。**ここだけが非同期**
+3. 以降は `await` を挟まずに実行する
+   1. 重複の確認。同じ `client_id` と `op_id` の `ops` がすでにあれば、適用せずにその `seq` を返す（再接続後の再送への対処）
+   2. 状態の検証。対象の付箋と接続線が存在するか、作成する id が未使用か、接続線の両端があるか、text の `before` が現在値と一致するか。1 つでも失敗したら全体を `reject` する
+   3. `transactionSync` の中で `notes` / `edges` を更新し、`seq` を進め、`ops` に記録する。`ops.body` にはサニタイズ後のデルタを入れる
+   4. 接続中の全クライアントへ `ops` を配信する
+   5. alarm が未設定なら数秒後に設定する
+
+手順 2 を先に済ませるのは、`transactionSync` のコールバックが同期でなければならないことと、`await` の間に別のメッセージが割り込めることによる。
+状態の検証を `await` の後に置けば、検証から保存までの間に他の書き込みが入らない。
+
+保存時の扱い。
+
+- `note:update` の `zIndex` と `edge:update` の `from` / `to` は捨てる。捨てた結果 `after` が空になったデルタは `ops` に入れない
+- サニタイズで text が変わった場合、配信する `ops` にはサニタイズ後の text を入れる。送信元は自分の `opId` の `ops` を適用しないので、text が変わったときに限り送信元にも反映させる仕組みが要る。`ops` に `sanitized: true` を付け、送信元はそのデルタだけ `applyRemote()` する
+
+### 3.3 WebSocket
+
+- Hibernation API を使う。接続ごとの `clientId` と `actor` は `serializeAttachment` に入れる
+- `actor` はクライアントの自己申告を使わず、Worker が Access JWT の email から `user:<email>` を作って DO に渡す
+- `preview` と `presence` は保存せず、送信元以外へ中継する
+- `hello` の `lastSeq` 以降の `ops` が残っていれば差分を、間引かれていれば `snapshot` を返す
+
+### 3.4 D1 への反映
+
+alarm ハンドラで次を行う。
+
+1. 全付箋の text からタグを除いて連結し、`pages` を upsert する
+2. リンクを抽出し、そのページ発の `links` を入れ替える
+3. FTS のテーブルを更新する
+4. 保持期間を過ぎた `ops` を消す
+
+D1 は索引だが、**ページの一覧を持つのは D1 だけ**である（DO は名前から列挙できない）。
+D1 を失うと、どのスラッグが存在するかが分からなくなる。D1 の Time Travel による復元を前提にし、FTS の仮想テーブルは、export の前に削除して後から作り直せるように、マイグレーションを分けておく。
+
+### 3.5 取り消し
+
+- `revert(seq, actor)` は `ops.body` から逆デルタを作り、デルタごとに現在値が元の `after` と一致するか確認する。一致しないものはスキップする
+- 残ったデルタを `applyOps` と同じ経路で 1 つの `ops` として適用する。`summary` に元の `seq` を入れる
+- 戻り値は、適用した数と、スキップした付箋と接続線の id、その理由
+- 全部スキップになった場合は `ops` を作らず、`reverted_by` も書かない
+- 付箋の削除を取り消すときは、同じ `ops` に入っている接続線の削除も一緒に戻る（逆順に適用するので付箋が先に復活する）
+
+### 3.6 MCP
+
+- `OAuthProvider` の `apiHandler` に `createMcpHandler` で作ったハンドラ、`defaultHandler` に Hono アプリを渡す
+- ツールの実装は `BoardAccess`（ボードを読む、デルタを適用する、取り消す）越しに書く。サーバー版はページ DO の RPC を呼ぶ
+- `actor` は `agent:<OAuth クライアント名>`。`created_by` と `ops.actor` に入る
+- `add_notes` の id は Worker 側で `crypto.randomUUID()` を使って採番する
+- `auto_layout` は wema が export する純粋なレイアウト関数を Worker で呼び、結果を `note:update` のデルタにして `applyOps` に渡す
+- `revert_operation` が取り消せるのは、同じ `actor` が行った `ops` に限る
+
+`createMcpHandler`、`OAuthProvider`、Access for SaaS の 3 つを組み合わせた公式サンプルは見つかっていない。
+フェーズ 6 の最初にこの 3 つの接続だけを試し、動かなければ `McpAgent` に切り替える。
+
+## 4. 認証とパスの切り分け
+
+| パス | 保護 | 処理 |
+| --- | --- | --- |
+| `/`、`/p/*`、静的ファイル | Access | Static Assets |
+| `/api/*`、`/ws/*`、`/img/*` | Access | Worker。`Cf-Access-Jwt-Assertion` を `jose` で検証する |
+| `/mcp` | Bypass | Worker。OAuth のアクセストークンを検証する |
+| `/authorize`、`/token`、`/register`、`/callback`、`/.well-known/oauth-*` | Bypass | Worker（`OAuthProvider`） |
+
+- Access アプリは、ホスト名全体を保護するものを 1 つと、Bypass するパスごとのものを作る
+- Worker で JWT を検証する目的は 2 つある。Access の設定を誤っても未認証のリクエストを通さないことと、`actor` に使う email を得ること
+- ローカル開発では Access がないので、開発用の変数で固定の email を使う。この変数は本番の設定には入れない
+
+## 5. 実装の順序
+
+フェーズ 0 は wema 側の作業で、フェーズ 1 と 2 は wema の新版を待たずに進められる。
+
+### フェーズ 0: wema の変更（#50、#51）
+
+フェーズ 3 までに必要なのは `history:commit` と `HistoryDelta` の export、`applyRemote`、viewOnly 復元の扱い、#51。
+`onImageUpload` はフェーズ 4、レイアウトの純粋関数はフェーズ 6、`board.batch` はフェーズ 8 までにあればよい。
+
+### フェーズ 1: プロジェクトの初期設定
+
+- `git init`、npm、TypeScript、wrangler、Hono、Vite、`@cloudflare/vitest-plugin`
+- `wrangler.jsonc` に DO（`new_sqlite_classes`）、D1、Static Assets を定義する
+- 実機確認を 2 つ行い、結果を `AGENTS.md` に書く
+  - HTMLRewriter が DO 内で動くか。テキスト中のエンティティ（`&lt;` など）が出力でどうなるか
+  - D1 で `tokenize='trigram'` の FTS5 テーブルが作れるか
+- 完了の条件: `wrangler dev` で空のページが返り、テストが 1 本通る
+
+2026-10-03 に完了した。実機確認の結果は次のとおりで、`test/runtime.test.ts` に固定してある。
+
+- HTMLRewriter は DO 内で動く。テキスト中のエンティティは復号も再エスケープもされず、入力のまま出力される
+- 要素の外にあるコメントは `on('*')` の `comments` に届かないので、`onDocument` の `comments` で除去する
+- DO の SQLite は外部キー制約が既定で有効で、CASCADE が働く
+- trigram の FTS5 テーブルはローカル（miniflare）の D1 で作れ、日本語の部分一致検索ができる。本番の D1 では未確認で、最初のデプロイ時に確かめる
+
+R2 と KV のバインディングは、使い始めるフェーズ（4 と 6）で `wrangler.jsonc` に足すことにした。
+
+### フェーズ 2: ページ DO
+
+- スキーマの作成（`meta.version` で管理）、`applyOps`、スナップショットの取得、`ops` の記録
+- サニタイザ。wema の `tests/sanitize.test.ts` のケースを移して同じ結果になることを確かめる
+- 完了の条件: `applyOps` の検証、サニタイズ、競合（text の `before` 不一致）、重複 `opId`、CASCADE のテストが通る
+
+### フェーズ 3: ブラウザとの同期
+
+- WebSocket（`hello`、`ops`、`snapshot`、`reject`）、再接続と差分の再送
+- `web/sync.ts`。`history:commit` を `ops` として送り、受信した `ops` を `applyRemote()` で反映する
+- Access の設定とデプロイ
+- 完了の条件: 2 つのブラウザで同じページを開き、付箋の作成、編集、移動、削除と、接続線の操作が相互に反映される。ここで個人のメモとして使い始められる
+
+### フェーズ 4: Wiki の機能
+
+- D1 のマイグレーション、alarm での反映、ページ一覧、検索、バックリンクの表示
+- ページの新規作成とタイトルの変更
+- 画像のアップロード（R2）と配信。data URL の `<img>` はサニタイザで除去する
+- 完了の条件: 一覧と検索からページへ移動でき、リンク先のページにバックリンクが出る
+
+### フェーズ 5: 取り消し
+
+- `revert`、`ops` の一覧取得
+- ブラウザの「最近の agent の操作」一覧と取り消しボタン
+- 完了の条件: 複数の付箋を変更する `ops` を取り消せる。途中で人が 1 枚を変更した場合、その 1 枚だけが残り、結果に表示される
+
+### フェーズ 6: リモート MCP
+
+- OAuth（`OAuthProvider` + Access for SaaS）と `createMcpHandler` の接続確認
+- ツールを読み取り系（`list_pages`、`search_pages`、`read_board`）、書き込み系、`auto_layout`、`revert_operation` の順に実装する
+- 完了の条件: claude.ai にコネクタとして登録し、ボードを読んで付箋を追加でき、その操作をブラウザから取り消せる
+- 完了後に、claude.ai と ChatGPT の定期実行からこのコネクタを呼べるかを試す
+
+### フェーズ 7: 複数人での利用
+
+- `preview`（ドラッグ中の中継）、`presence`（選択と編集中の表示）
+- iframe の `src` を埋め込み対象のドメインに限定する
+- agent が作った付箋と変更の見せ方
+
+### フェーズ 8: WebMCP
+
+`shared/tools.ts` の定義を使い、`BoardAccess` のブラウザ版（wema の API を呼ぶ）を足す。
+
+## 6. 残っている未決定事項
+
+| 項目 | 現時点の案 | 決める時期 |
+| --- | --- | --- |
+| `ops` の保持期間 | 30 日、または直近 1000 件の多いほう。agent の `ops` も同じ | フェーズ 2 |
+| 履歴の閲覧 UI の範囲 | 当面は agent の操作一覧のみ。人の操作の履歴表示は作らない | フェーズ 5 |
+| agent が作った付箋の見せ方 | 付箋の隅にバッジを出す。色は agent が分類に使うので専用色にはしない | フェーズ 7 |
+| MCP の text の入力形式 | プレーンテキストと、`- ` の箇条書き、`- [ ]` のチェックリストだけを HTML に変換する | フェーズ 6 |
+| 定期実行からコネクタが使えるか | 実際に試す | フェーズ 6 の後 |
