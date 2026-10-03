@@ -75,7 +75,8 @@ src/
   shared/          Worker とブラウザの両方から読む
     delta.ts       HistoryDelta 型（wema が export するまでの写し）、逆デルタの生成
     protocol.ts    ClientMsg / ServerMsg
-    tools.ts       MCP ツールの定義（名前、説明、入力スキーマ）と BoardAccess インターフェース
+    tools.ts       MCP ツールの定義と実装、BoardAccess インターフェース
+    note-text.ts   プレーンテキストから付箋の HTML への変換
     slug.ts        スラッグの検証
   worker/
     index.ts       OAuthProvider の export、Hono アプリ、DO クラスの export
@@ -86,6 +87,7 @@ src/
     plain-text.ts  タグの除去、リンクの抽出
     revert.ts      取り消し
     indexer.ts     D1 への反映
+    page-queries.ts  D1 の一覧と検索（HTTP API と MCP で共有）
     images.ts      R2 へのアップロードと配信
     mcp/           createMcpHandler、ツールの実装、Access for SaaS のログイン処理
   web/             Vite でビルドし Static Assets で配信する
@@ -166,8 +168,13 @@ D1 を失うと、どのスラッグが存在するかが分からなくなる�
 - `auto_layout` は wema が export する純粋なレイアウト関数を Worker で呼び、結果を `note:update` のデルタにして `applyOps` に渡す
 - `revert_operation` が取り消せるのは、同じ `actor` が行った `ops` に限る
 
-`createMcpHandler`、`OAuthProvider`、Access for SaaS の 3 つを組み合わせた公式サンプルは見つかっていない。
-フェーズ 6 の最初にこの 3 つの接続だけを試し、動かなければ `McpAgent` に切り替える。
+`createMcpHandler`、`OAuthProvider`、Access for SaaS の 3 つを組み合わせた公式サンプルは見つからなかった。
+フェーズ 6 で実際に組み合わせ、`McpAgent` を使わずに動くことをテストで確かめた。
+
+- `OAuthProvider`（1.2.1）は `resourceMetadata.resource`（MCP サーバーの正式な URL）を必須にしている。サイトの URL は実行時にしか分からないので、Worker の入口でオリジンごとに `OAuthProvider` を作って使い回す。`SITE_ORIGIN` があればそれを使い、空ならリクエストのオリジンを使う
+- `createMcpHandler` は、localhost に届いたリクエストでだけ `Host` ヘッダーを検査する（DNS リバインディング対策）。本番のホスト名では検査しない
+- MCP のサーバーは、同時に走るリクエストで共有できない。リクエストごとに `McpServer` を作る
+- `@modelcontextprotocol/server` と、テスト用の `@modelcontextprotocol/client` は 2.0.0 を直接の依存にした。`agents` が同じ版を使う
 
 ### 3.7 画面
 
@@ -341,6 +348,21 @@ DO の WebSocket のテストは、既知の問題にあった `--max-workers=1 
 - 完了の条件: claude.ai にコネクタとして登録し、ボードを読んで付箋を追加でき、その操作をブラウザから取り消せる
 - 完了後に、claude.ai と ChatGPT の定期実行からこのコネクタを呼べるかを試す
 
+実装は済んでいる。ローカルで確かめた範囲と、残っている確認は次のとおり。
+
+- テストで確かめたこと
+  - ツール 10 個の動作（実際の DO と D1 に対して実行）
+  - MCP のクライアントからの呼び出し
+  - OAuth の通しの流れ（クライアントの登録、承認、`/callback`、トークンの発行、`/mcp` の呼び出し）。Access への通信（トークンの発行と公開鍵の取得）だけは模擬の応答に差し替えた
+- 本番でしか確かめられないこと
+  - Access for SaaS の実際のログイン
+  - Bypass するパスの設定
+  - claude.ai のコネクタとしての登録（完了の条件）
+- デプロイ時に要る作業
+  - KV の作成（`OAUTH_KV`）
+  - Access for SaaS のアプリケーションの作成（リダイレクト先は `https://<ホスト名>/callback`）
+  - wrangler secret の設定（`ACCESS_CLIENT_ID`、`ACCESS_CLIENT_SECRET`、`ACCESS_TOKEN_URL`、`ACCESS_AUTHORIZATION_URL`、`ACCESS_JWKS_URL`、`COOKIE_ENCRYPTION_KEY`）
+
 ### セキュリティレビュー（フェーズ 6 の後）
 
 フェーズ 6 までの実装が済んだら、`/security-review` を 1 回まとめて回す。
@@ -379,5 +401,5 @@ DO のスキーマは、最初のデプロイまでは最初のマイグレー�
 | `ops` の保持期間 | 決定済み。30 日以内か直近 1000 件のどちらかに収まっていれば残す。agent の `ops` も同じ | フェーズ 4 で実装した |
 | 履歴の閲覧 UI の範囲 | 当面は agent の操作一覧のみ。人の操作の履歴表示は作らない | フェーズ 5 |
 | agent が作った付箋の見せ方 | 付箋の隅にバッジを出す。色は agent が分類に使うので専用色にはしない | フェーズ 7 |
-| MCP の text の入力形式 | プレーンテキストと、`- ` の箇条書き、`- [ ]` のチェックリストだけを HTML に変換する | フェーズ 6 |
+| MCP の text の入力形式 | 決定済み。プレーンテキストと、`- ` の箇条書き、`- [ ]` のチェックリストだけを HTML に変換する | フェーズ 6 で実装した |
 | 定期実行からコネクタが使えるか | 実際に試す | フェーズ 6 の後 |

@@ -7,8 +7,21 @@
     "directory": "./dist/web",
     // /p/<slug> などアセットに一致しないパスは index.html を返す
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/ws/*", "/img/*"]
+    "run_worker_first": [
+      "/api/*",
+      "/ws/*",
+      "/img/*",
+      // MCP と、その OAuth 用のパス。Access の保護対象から外しておくこと（AGENTS.md の「認証」）
+      "/mcp",
+      "/authorize",
+      "/callback",
+      "/token",
+      "/register",
+      "/.well-known/*"
+    ]
   },
+  // MCP の OAuth（クライアントの登録、認可コード、トークン）の保存先
+  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   "vars": {
     // Cloudflare Access の設定。両方が空のままだと /api と /ws は 500 を返す（ローカル開発は .dev.vars.example を参照）
     // 例: "https://<team>.cloudflareaccess.com"

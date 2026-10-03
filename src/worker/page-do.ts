@@ -9,7 +9,14 @@ import {
   PONG,
   type ServerMsg,
 } from '../shared/protocol';
-import { applyDeltas, readBoard, type Sanitized, sanitizeDeltas } from './apply-ops';
+import type { BoardState } from '../shared/tools';
+import {
+  applyDeltas,
+  readBoard,
+  readBoardWithAuthors,
+  type Sanitized,
+  sanitizeDeltas,
+} from './apply-ops';
 import { buildPageContent, contentHash, removePage, touchPage, writePage } from './indexer';
 import { applyRevert } from './revert';
 import { SanitizeError } from './sanitize';
@@ -68,6 +75,8 @@ export interface ApplyInput {
   /** 外から来た値をそのまま渡す。検証は applyOps が行う */
   deltas: unknown;
   summary?: string;
+  /** ページがまだ作られていなければ、適用せずに断る（MCP のツールはページを作らない） */
+  mustExist?: boolean;
 }
 
 export type ApplyResult =
@@ -261,6 +270,12 @@ export class PageDO extends DurableObject<Env> {
       epoch: this.getMeta('epoch'),
       data: readBoard(this.sql),
     };
+  }
+
+  /** agent（MCP）に渡すボード。付箋には作成者が付く。ページがまだ作られていなければ null */
+  getBoardState(): BoardState | null {
+    if (this.version === 0) return null;
+    return { title: this.getMeta('title'), ...readBoardWithAuthors(this.sql) };
   }
 
   /**
@@ -471,6 +486,7 @@ export class PageDO extends DurableObject<Env> {
       throw e;
     }
 
+    if (input.mustExist && this.version === 0) return { ok: false, reason: 'page not found' };
     this.migrate();
 
     // 再接続後の再送。適用済みの結果をそのまま返す

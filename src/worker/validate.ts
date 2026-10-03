@@ -185,8 +185,9 @@ function parseDelta(v: unknown): HistoryDelta {
 
 /** 外から来たデルタの形を検証し、既知のフィールドだけを持つデルタにして返す */
 export function parseDeltas(input: unknown): HistoryDelta[] {
-  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_DELTAS) {
-    throw new RejectError('invalid deltas');
+  if (!Array.isArray(input) || input.length === 0) throw new RejectError('invalid deltas');
+  if (input.length > MAX_DELTAS) {
+    throw new RejectError(`too many deltas (${input.length}, limit ${MAX_DELTAS})`);
   }
   // サニタイズは text の量に比例して時間がかかる。記録できない大きさの入力は、
   // サニタイズに回す前にここで断る（記録時の MAX_OP_BYTES の検査より手前で止める）

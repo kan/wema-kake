@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:test';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import app from '../src/worker/index';
+import { app } from '../src/worker/index';
 
 const TEAM = 'https://team.cloudflareaccess.com';
 const AUD = 'aud-tag';

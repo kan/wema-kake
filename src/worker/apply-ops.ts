@@ -1,5 +1,6 @@
 import type { BoardData, HistoryDelta, WemaEdge, WemaNote } from '../shared/delta';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
+import type { BoardState } from '../shared/tools';
 import { sanitizeHtml } from './sanitize';
 import { type Obj, RejectError, REQUIRED_EDGE_FIELDS } from './validate';
 
@@ -73,12 +74,19 @@ export function readEdge(sql: SqlStorage, id: string): WemaEdge | undefined {
   return row && rowToEdge(row);
 }
 
-export function readBoard(sql: SqlStorage): BoardData {
+const noteRows = (sql: SqlStorage) => sql.exec(`SELECT * FROM notes ORDER BY rowid`).toArray();
+const readEdges = (sql: SqlStorage) => sql.exec(`SELECT * FROM edges ORDER BY rowid`).toArray().map(rowToEdge);
+
+/** 付箋（作成者つき）と接続線。agent に渡す */
+export function readBoardWithAuthors(sql: SqlStorage): Pick<BoardState, 'notes' | 'edges'> {
   return {
-    version: 1,
-    notes: sql.exec(`SELECT * FROM notes ORDER BY rowid`).toArray().map(rowToNote),
-    edges: sql.exec(`SELECT * FROM edges ORDER BY rowid`).toArray().map(rowToEdge),
+    notes: noteRows(sql).map((row) => ({ ...rowToNote(row), createdBy: row.created_by as string | null })),
+    edges: readEdges(sql),
   };
+}
+
+export function readBoard(sql: SqlStorage): BoardData {
+  return { version: 1, notes: noteRows(sql).map(rowToNote), edges: readEdges(sql) };
 }
 
 export interface Sanitized {

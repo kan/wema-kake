@@ -42,7 +42,16 @@ MCP クライアント ──/mcp──> MCP ┘          │
 - **MCP エンドポイント（`/mcp` と OAuth 用のパス）**: Access アプリケーションの保護対象から外し、Worker 自身が `@cloudflare/workers-oauth-provider` で OAuth 2.1 を処理する。ログインの実体は Access for SaaS（OIDC）に委ねるので、認証の仕組みは Access に一元化される
 - claude.ai / ChatGPT のコネクタはそれぞれのサーバーから接続してくるため、`/mcp` まで Access のログイン画面で塞ぐと接続できない。パスの切り分けを間違えないこと
 - 参考: Cloudflare 公式の「Secure MCP servers with Access for SaaS」とサンプル `cloudflare/ai/demos/remote-mcp-cf-access`
-- **Worker でも Access の JWT（`Cf-Access-Jwt-Assertion`）を検証する**（`src/worker/access.ts`）。Access の設定を誤っても未認証のリクエストを通さないためと、変更の主体（`user:<email>`）を得るため。Worker に届くリクエストすべてに掛けてある（`src/worker/index.ts` の `app.use(requireAccess)`）。**認証なしで公開するパス（`/mcp` と OAuth 用）を足すときは、このアプリの外に置くこと。このミドルウェアを外したり、パスを列挙する形に戻したりしない**
+- **Worker の入口は `OAuthProvider`**（`src/worker/index.ts`）。`/mcp` は Worker が発行したアクセストークンで保護し、`/token`、`/register`、`/.well-known/*` は `OAuthProvider` が処理する。`/authorize` と `/callback` は `src/worker/mcp/authorize.ts`、それ以外は下の Access の JWT 検証を掛けたアプリ（`app`）に届く
+  - Access for SaaS の設定は wrangler secret で入れる: `ACCESS_CLIENT_ID`、`ACCESS_CLIENT_SECRET`、`ACCESS_TOKEN_URL`、`ACCESS_AUTHORIZATION_URL`、`ACCESS_JWKS_URL`、`COOKIE_ENCRYPTION_KEY`。**1 つでも欠けていれば `/authorize` と `/callback` は 503 を返す**（認可を完了できないので、`/mcp` は誰も使えない）
+  - OAuth のデータ（クライアントの登録、認可コード、トークン）は KV（`OAUTH_KV`）に置く
+  - `/callback` では Access の ID トークンの署名、期限、宛先（`ACCESS_CLIENT_ID`）を `jose` で検証する。**サンプルの `verifyToken` は宛先を確かめないので使わない**
+  - **認可の state は、承認したブラウザに Cookie（`__Host-OAUTH_STATE`）で結び付ける。`/callback` はこの Cookie が state と対応しなければ断る。この検査を外さないこと**。クライアントの登録（`/register`）は誰でもできるので、検査がないと、攻撃者が自分のクライアントで承認まで済ませて Access のログインの URL を利用者に踏ませるだけで、利用者の権限のトークンを得られる
+  - 本人確認は認可のときの 1 回だけ。Access から外した人も、リフレッシュトークンの期限（`OAuthProvider` の既定で 30 日）までは MCP を使える。すぐに止めるには、KV（`OAUTH_KV`）からその人の認可を消す
+  - POST `/authorize` はフォームから認可要求を受け取る。**登録済みのクライアントとリダイレクト先かを確かめ直すこと**（`isRegisteredRequest`）
+  - 変更の主体は `agent:<OAuth クライアントの名前>`（`actorFromProps`）。認可のときに `props` に保存した値から決める。クライアントの名前は自己申告なので、権限の判定には使わない（誰が認可したかは `props.email`）
+  - `src/worker/mcp/workers-oauth-utils.ts` はサンプルの無改変コピー（MIT）。**ここを直接編集しない**。上流の更新を取り込むときは丸ごと差し替える
+- **Worker でも Access の JWT（`Cf-Access-Jwt-Assertion`）を検証する**（`src/worker/access.ts`）。Access の設定を誤っても未認証のリクエストを通さないためと、変更の主体（`user:<email>`）を得るため。`app` に届くリクエストすべてに掛けてある（`src/worker/index.ts` の `app.use(requireAccess)`）。**認証なしで公開するパス（`/mcp` と OAuth 用）は、このアプリの外に置くこと。このミドルウェアを外したり、パスを列挙する形に戻したりしない**
   - 設定は `wrangler.jsonc` の `vars` の `ACCESS_TEAM_DOMAIN`（`https://<team>.cloudflareaccess.com`）と `ACCESS_AUD`（Access アプリケーションの AUD タグ）。両方が空なら 500 を返す
   - ローカル開発は `.dev.vars` の `DEV_USER_EMAIL` を使う（`.dev.vars.example` を参照）。localhost へのリクエストでだけ有効で、Access の設定があれば無視される
 - WebSocket の接続要求は `Origin` を確かめ、他のオリジンからの接続を断る（WebSocket は同一オリジンの制約を受けず、Access の Cookie は他サイトからの接続にも付くため）
@@ -272,7 +281,14 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 - 1 回のツール呼び出し = 1 つの `ops`（`actor: 'agent:<client>'`、`summary` にツール名と LLM が渡した説明）。複数の付箋を動かす整理も 1 つの `ops` にまとめ、後から 1 操作として取り消せるようにする
 - ツールの定義（名前・説明・入力スキーマ）は共通モジュールに置き、将来の WebMCP 版と共有する。実装は「ボードを読む・デルタを適用する」インターフェース越しに書き、サーバー版（DO を呼ぶ）とブラウザ版（wema の API を呼ぶ）を差し替えられるようにする
 
-### ツール案
+実装の場所:
+
+- `src/shared/tools.ts`: ツールの定義と実装（`TOOLS`）。`BoardAccess` 越しに書いてあり、Workers の API に依存しない
+- `src/shared/note-text.ts`: プレーンテキストを付箋の HTML にする（`textToHtml`）
+- `src/worker/mcp/board-access.ts`: `BoardAccess` のサーバー版。ページの DO と D1 を呼ぶ
+- `src/worker/mcp/server.ts`: `TOOLS` を MCP のサーバーに登録する。リクエストごとにサーバーを作る
+
+### ツール
 
 | ツール | 内容 |
 | --- | --- |
@@ -286,8 +302,11 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 | `auto_layout` | 接続線に基づく自動レイアウト。wema のレイアウト関数を DO 側で実行する（末尾の wema 側の変更を参照） |
 | `revert_operation` | agent 自身の直前の操作を取り消す（後述の取り消し機能を使う） |
 
-- `add_notes` / `update_notes` のテキストはプレーンテキスト（改行は `<br>` に変換してエスケープ）を基本とし、箇条書きやチェックリストだけ限定的に受け付ける案。最終的には必ずサーバーのサニタイズを通す
-- ページの作成・削除・改名のツールは当面提供しない
+- `add_notes` / `update_notes` のテキストはプレーンテキスト。改行は `<br>` にし、`- ` の箇条書きと `- [ ]` / `- [x]` のチェックリストだけを HTML に変換する。それ以外はエスケープするので、LLM は HTML を書けない。変換後も必ずサーバーのサニタイズを通す
+- ページの作成・削除・改名のツールは当面提供しない。**書き込み系のツールは、存在しないページには適用しない**（`applyOps` の `mustExist`。読んでから適用するまでの間に削除されたページも作り直さない）
+- 書き込み系のツールは、記録した操作の番号（`operation`）を返す。LLM はこれを `revert_operation` に渡せる。**何も変わらなかった操作は番号を返さずにエラーにする**（`applyOps` は seq を進めないので、返すと別の操作の番号になる）
+- `revert_operation` が取り消せるのは、同じ主体（`agent:<client>`）の操作だけ。`operation` を省略すると、取り消しでない直近の自分の操作が対象になる
+- ツールが断る場合（ページがない、付箋がない、本文の競合など）は `ToolError` を投げ、MCP では `isError` の結果として返す。LLM が読んで直せるようにするため
 - アドバイスの付箋など agent が作った付箋を見分けられるよう、`created_by` を保存する。見た目での区別（専用の色、バッジ等）は未決定
 
 ### 取り消し（revert）

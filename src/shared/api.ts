@@ -1,5 +1,8 @@
 // サーバーとブラウザの両方が使う、HTTP API と DO のメソッドの型と定数。
 
+/** ページの一覧で 1 回に返す件数の上限 */
+export const MAX_LIST_LIMIT = 500;
+
 /** 表示名の長さの上限 */
 export const MAX_TITLE_LENGTH = 200;
 

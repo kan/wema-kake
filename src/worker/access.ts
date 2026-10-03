@@ -21,7 +21,7 @@ const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
  */
 const keyCaches = new Map<string, JWKSCacheInput>();
 
-function remoteKeys(certsUrl: URL) {
+export function remoteKeys(certsUrl: URL) {
   let cache = keyCaches.get(certsUrl.href);
   if (!cache) {
     cache = {};
