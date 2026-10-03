@@ -89,12 +89,17 @@ CREATE TABLE ops (
   actor       TEXT NOT NULL,         -- 'user:<id>' / 'agent:<client>'
   client_id   TEXT NOT NULL,
   op_id       TEXT NOT NULL,
-  body        TEXT NOT NULL,         -- 適用したデルタ配列の JSON（before/after を含む）
-  fixups      TEXT,                  -- 送信元だけが適用するデルタ配列の JSON（同じ op_id の再送で返す）
   summary     TEXT,                  -- MCP の場合、ツール名や LLM が付けた説明
-  reverted_by INTEGER,               -- 取り消し操作の seq
-  created_at  INTEGER NOT NULL
+  reverts     INTEGER,               -- この操作が取り消しなら、取り消した対象の seq
+  reverted_by INTEGER,               -- この操作を取り消した操作の seq
+  created_at  INTEGER NOT NULL,
+  -- 大きくなる列は最後に置く（一覧などで手前の列だけを読むときに、中身まで読まずに済む）
+  body        TEXT NOT NULL,         -- 適用したデルタ配列の JSON（before/after を含む）
+  fixups      TEXT                   -- 送信元だけが適用するデルタ配列の JSON（同じ op_id の再送で返す）
 );
+
+CREATE INDEX ops_reverted_by ON ops (reverted_by) WHERE reverted_by IS NOT NULL;
+CREATE UNIQUE INDEX ops_client_op ON ops (actor, client_id, op_id);
 ```
 
 - `ops` は再接続時の差分送信・履歴表示・取り消し（後述）に使う。件数か日数で古いものを間引くが、agent の操作は取り消し可能期間のあいだ残す
@@ -154,6 +159,8 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | `PUT /api/pages/<slug>/title` | 表示名の変更（本文は `{ "title": "..." }`）。空文字で未設定に戻す。書き込みのないページに対して呼ぶとページが作られる |
 | `POST /api/images` | 画像のアップロード（本文は画像のバイト列、`Content-Type` は png / jpeg / gif / webp / avif）。`{ "url": "/img/<key>" }` を返す。10MB まで |
 | `GET /img/<key>` | 画像の取得（R2） |
+| `GET /api/pages/<slug>/ops?agent=1&limit=` | 最近の操作（新しい順）。`agent=1` で agent の操作に絞る |
+| `POST /api/pages/<slug>/ops/<seq>/revert` | 操作の取り消し（本文は `{ "clientId": "...", "opId": "..." }`）。`{ seq, applied, skipped }` を返す |
 | `GET /ws/<slug>` | WebSocket |
 
 ## ページ名と URL
@@ -195,6 +202,7 @@ type ServerMsg =
   | { type: 'snapshot'; seq: number; title: string | null; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] } }
   | { type: 'meta'; title: string | null }   // 表示名が変わった。seq は進まない
   | { type: 'ops'; seq: number; actor: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
+      reverts?: number;           // 取り消しなら、取り消した対象の seq（「取り消し」の節を参照）
       fixups?: HistoryDelta[] }   // fixups は送信元にだけ付ける（後述）
   | { type: 'reject'; opId: string; reason: string; current?: { notes: WemaNote[]; edges: WemaEdge[] } }
   | { type: 'preview'; clientId: string; noteId: string; x?: number; y?: number; width?: number; height?: number }
@@ -279,6 +287,15 @@ MCP 経由の変更はブラウザにはリモートの変更として届くた�
 
 - `ops.body` の各デルタから逆向きのデルタを作り（逆順、create ↔ delete、before ↔ after の入れ替え）、新しい `ops` として適用する。元の `ops.reverted_by` に取り消し操作の `seq` を記録する
 - 取り消し時、対象の現在値が元の `after` と一致しない（その後に誰かが変更した）デルタはスキップし、残りを適用する（部分適用）。スキップした付箋と接続線は結果として返す
+  - 更新はフィールドごとに判定する。その後に変更されたフィールドだけを戻さない
+  - 付箋の作成の取り消しは、text が変わっていたら消さない。位置、大きさ、色だけの変更なら消す（agent が貼った付箋を動かしただけで取り消せなくなるのを避ける）。接続線は label で判定する
+  - 取り消さない接続線（変更されていたもの、他の人が後からつないだもの）がつながっている付箋は消さない。消すと、その接続線も一緒に消えるため
+  - 削除の取り消しは、同じ id のものがすでにあるか、接続線の両端がなければ戻さない
+  - 取り消せるものが 1 つもなければ、`ops` に記録せず、`reverted_by` も書かない
+- 取り消しの `ops` には `reverts`（取り消した対象の `seq`）が付く。取り消しは HTTP の API か MCP から行われ、要求元のブラウザも手元には適用していない。**クライアントは、自分の `clientId` の `ops` でも `reverts` があればリモートの変更として適用すること**
+- 取り消しの失敗は `code` で分類する（`not-found` / `conflict` / `forbidden` / `invalid`）。HTTP の API は順に 404 / 409 / 403 / 400 を返す
+- 取り消しも `ops` の 1 つなので、取り消しを取り消せる（元の変更が戻る）。そのとき元の操作の `reverted_by` を消し、元の操作をもう一度取り消せるようにする
+- 実装は `src/worker/revert.ts`。DO の `revert()` の `ownOnly` を指定すると、同じ主体の操作だけを取り消せる（MCP の `revert_operation` で使う）
 - ブラウザには「最近の agent の操作」一覧と取り消しボタンを用意する。定期タスクで LLM が勝手に整理する前提なので、早めに実装する
 
 ### WebMCP（後から追加）

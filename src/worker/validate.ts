@@ -34,6 +34,11 @@ const ROUTINGS = ['curve', 'polyline'] satisfies EdgeRouting[];
 /** 省略できない接続線のフィールド。未設定に戻す指定は無視する */
 export const REQUIRED_EDGE_FIELDS: string[] = ['fromAnchor', 'toAnchor', 'style'];
 
+/** 件数の指定を整数にして範囲に収める。数値でなければ `fallback` を使う */
+export function clampLimit(value: unknown, fallback: number, max: number): number {
+  return Math.min(Math.max(Math.trunc(Number(value)) || fallback, 1), max);
+}
+
 const encoder = new TextEncoder();
 
 /** `s` の UTF-8 でのバイト数が `max` を超えるか。長さだけで決まるときはエンコードしない */

@@ -3,11 +3,21 @@ import type { BoardContent, HistoryDelta, Snapshot } from '../shared/delta';
 import type { OpsMsg, ServerMsg } from '../shared/protocol';
 import { applyDeltas, readBoard, type Sanitized, sanitizeDeltas } from './apply-ops';
 import { buildPageContent, contentHash, touchPage, writePage } from './indexer';
+import { applyRevert, invertDeltas, type Skipped } from './revert';
 import { SanitizeError } from './sanitize';
-import { exceedsBytes, MAX_OP_BYTES, parseDeltas, parseId, RejectError } from './validate';
+import {
+  clampLimit,
+  exceedsBytes,
+  MAX_OP_BYTES,
+  parseDeltas,
+  parseId,
+  RejectError,
+} from './validate';
 
 const MAX_SUMMARY_LENGTH = 500;
 const MAX_TITLE_LENGTH = 200;
+const DEFAULT_LIST_OPS = 50;
+const MAX_LIST_OPS = 200;
 /** 変更してから D1 へ反映するまでの時間 */
 const INDEX_DELAY_MS = 5000;
 /** ops を残す期間と件数。どちらかに収まっていれば残す（再接続時の差分、履歴、取り消しに使う） */
@@ -72,6 +82,51 @@ export type ApplyResult =
     }
   | { ok: false; reason: string; current?: BoardContent };
 
+export interface OpSummary {
+  seq: number;
+  actor: string;
+  summary: string | null;
+  /** この操作が取り消しなら、取り消した対象の seq。取り消しでなければ null */
+  reverts: number | null;
+  /** この操作を取り消した操作の seq。取り消されていなければ null */
+  revertedBy: number | null;
+  createdAt: number;
+}
+
+export interface RevertInput {
+  /** 取り消す操作の seq */
+  seq: number;
+  /** 取り消しを行う主体。呼び出し側（Worker）が認証結果から決める */
+  actor: string;
+  clientId: string;
+  opId: string;
+  /** 自分（同じ主体）の操作だけを取り消せるようにする。MCP の revert_operation で使う */
+  ownOnly?: boolean;
+  /** 一覧に出す説明。省略すると `revert #<seq>` */
+  summary?: string;
+}
+
+/**
+ * 取り消せなかった理由の分類。
+ * - not-found: 対象の操作がない（間引かれた場合を含む）
+ * - conflict: すでに取り消されている
+ * - forbidden: `ownOnly` で、他の主体の操作を指定した
+ * - invalid: 入力が不正
+ */
+export type RevertFailure = 'not-found' | 'conflict' | 'forbidden' | 'invalid';
+
+export type RevertResult =
+  | {
+      ok: true;
+      /** 取り消しとして記録した操作の seq。取り消せるものが 1 つもなかった場合は null */
+      seq: number | null;
+      /** 取り消したデルタの数 */
+      applied: number;
+      /** その後に変更されていたなどの理由で、取り消さなかったもの */
+      skipped: Skipped[];
+    }
+  | { ok: false; code: RevertFailure; reason: string };
+
 const META_TABLE = `
 CREATE TABLE IF NOT EXISTS meta (
   key   TEXT PRIMARY KEY,
@@ -109,12 +164,17 @@ CREATE TABLE ops (
   actor       TEXT NOT NULL,
   client_id   TEXT NOT NULL,
   op_id       TEXT NOT NULL,
-  body        TEXT NOT NULL,
-  fixups      TEXT,
   summary     TEXT,
+  reverts     INTEGER,
   reverted_by INTEGER,
-  created_at  INTEGER NOT NULL
+  created_at  INTEGER NOT NULL,
+  -- 大きくなる列は最後に置く。一覧や取り消しの判定で手前の列だけを読むときに、
+  -- これらの中身（最大 1.8MB）まで読まずに済む
+  body        TEXT NOT NULL,
+  fixups      TEXT
 );
+
+CREATE INDEX ops_reverted_by ON ops (reverted_by) WHERE reverted_by IS NOT NULL;
 
 CREATE INDEX edges_from ON edges (from_id);
 CREATE INDEX edges_to ON edges (to_id);
@@ -270,13 +330,69 @@ export class PageDO extends DurableObject<Env> {
    * その付箋の更新が処理されるなど）ので、呼び出しを 1 つずつ順に処理する。
    */
   applyOps(input: ApplyInput): Promise<ApplyResult> {
-    const result = this.applyQueue.then(() => this.applyOpsInOrder(input));
+    return this.inOrder(() => this.applyOpsInOrder(input));
+  }
+
+  /** 前の書き込みが終わってから `run` を始める */
+  private inOrder<T>(run: () => Promise<T>): Promise<T> {
+    const result = this.applyQueue.then(run);
     // 結果（大きなデルタを含む）を次の呼び出しまで掴まないよう、値を捨てて繋ぐ
     this.applyQueue = result.then(
       () => {},
       () => {},
     );
     return result;
+  }
+
+  /** 同じ送信元の同じ操作が記録済みなら、その行を返す */
+  private findOp(actor: string, clientId: string, opId: string) {
+    return this.sql
+      .exec(
+        // clientId はクライアントの自己申告なので、主体も合わせて同じ送信元かを判定する
+        `SELECT seq, reverts, body, fixups FROM ops
+         WHERE actor = ? AND client_id = ? AND op_id = ?`,
+        actor, clientId, opId,
+      )
+      .toArray()[0];
+  }
+
+  /**
+   * 適用したデルタを ops に記録し、seq を進める。`transactionSync` の中で呼ぶこと。
+   * 戻り値の `deliver` は、トランザクションが確定してから呼ぶ（接続中のクライアントへの配信）。
+   */
+  private recordOp(
+    op: { actor: string; clientId: string; opId: string; summary?: string; reverts?: number },
+    deltas: HistoryDelta[],
+    fixups: HistoryDelta[],
+    now: number,
+  ): { seq: number; deliver: () => void } {
+    const body = JSON.stringify(deltas);
+    const fixupsJson = fixups.length > 0 ? JSON.stringify(fixups) : null;
+    if (exceedsBytes(body + (fixupsJson ?? ''), MAX_OP_BYTES)) {
+      throw new RejectError('operation too large');
+    }
+    const summary = op.summary?.slice(0, MAX_SUMMARY_LENGTH);
+    const seq = this.getSeq() + 1;
+    this.setMeta('seq', String(seq));
+    this.sql.exec(
+      `INSERT INTO ops (seq, actor, client_id, op_id, summary, reverts, created_at, body, fixups)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      seq, op.actor, op.clientId, op.opId, summary ?? null, op.reverts ?? null, now, body, fixupsJson,
+    );
+    const head: OpsHead = {
+      type: 'ops', seq, actor: op.actor, clientId: op.clientId, opId: op.opId, summary,
+      reverts: op.reverts,
+    };
+    const deliver = () => {
+      // fixups は送信元にだけ付ける
+      this.broadcast(opsJson(head, body, null), {
+        actor: op.actor,
+        clientId: op.clientId,
+        toSender: opsJson(head, body, fixupsJson),
+      });
+      this.scheduleIndexing();
+    };
+    return { seq, deliver };
   }
 
   private async applyOpsInOrder(input: ApplyInput): Promise<ApplyResult> {
@@ -297,13 +413,7 @@ export class PageDO extends DurableObject<Env> {
     this.migrate();
 
     // 再接続後の再送。適用済みの結果をそのまま返す
-    const done = this.sql
-      .exec(
-        // clientId はクライアントの自己申告なので、主体も合わせて同じ送信元かを判定する
-        `SELECT seq, body, fixups FROM ops WHERE actor = ? AND client_id = ? AND op_id = ?`,
-        input.actor, input.clientId, input.opId,
-      )
-      .toArray()[0];
+    const done = this.findOp(input.actor, input.clientId, input.opId);
     if (done) {
       return {
         ok: true,
@@ -314,7 +424,6 @@ export class PageDO extends DurableObject<Env> {
       };
     }
 
-    const summary = input.summary?.slice(0, MAX_SUMMARY_LENGTH);
     let deliver: (() => void) | undefined;
     try {
       const result = this.ctx.storage.transactionSync((): ApplyResult => {
@@ -324,38 +433,106 @@ export class PageDO extends DurableObject<Env> {
         if (applied.deltas.length === 0) {
           return { ok: true, seq: this.getSeq(), deltas: [], fixups, broadcast: false };
         }
-        const body = JSON.stringify(applied.deltas);
-        const fixupsJson = fixups.length > 0 ? JSON.stringify(fixups) : null;
-        if (exceedsBytes(body + (fixupsJson ?? ''), MAX_OP_BYTES)) {
-          throw new RejectError('operation too large');
-        }
-        const seq = this.getSeq() + 1;
-        this.sql.exec(`UPDATE meta SET value = ? WHERE key = 'seq'`, String(seq));
-        this.sql.exec(
-          `INSERT INTO ops (seq, actor, client_id, op_id, body, fixups, summary, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          seq, input.actor, input.clientId, input.opId, body, fixupsJson, summary ?? null, now,
-        );
-        const head: OpsHead = {
-          type: 'ops', seq, actor: input.actor, clientId: input.clientId, opId: input.opId, summary,
-        };
-        // fixups は送信元にだけ付ける
-        deliver = () =>
-          this.broadcast(opsJson(head, body, null), {
-            actor: input.actor,
-            clientId: input.clientId,
-            toSender: opsJson(head, body, fixupsJson),
-          });
-        return { ok: true, seq, deltas: applied.deltas, fixups, broadcast: true };
+        const recorded = this.recordOp(input, applied.deltas, fixups, now);
+        deliver = recorded.deliver;
+        return { ok: true, seq: recorded.seq, deltas: applied.deltas, fixups, broadcast: true };
       });
       // トランザクションが確定してから配信する。保存と同じ同期の区間なので、順序は seq の順になる
-      if (deliver) {
-        deliver();
-        this.scheduleIndexing();
-      }
+      deliver?.();
       return result;
     } catch (e) {
       if (e instanceof RejectError) return { ok: false, reason: e.message, current: e.current };
+      throw e;
+    }
+  }
+
+  // --- 取り消しと履歴 ---
+
+  /**
+   * 最近の操作を新しい順に返す。`agentOnly` なら agent（MCP 経由）の操作に、
+   * `actor` を指定するとその主体の操作に絞る。
+   */
+  listOps(options: { limit?: number; agentOnly?: boolean; actor?: string } = {}): OpSummary[] {
+    if (this.version === 0) return [];
+    return this.sql
+      .exec(
+        `SELECT seq, actor, summary, reverts, reverted_by, created_at FROM ops
+         WHERE (?1 = 0 OR substr(actor, 1, 6) = 'agent:') AND (?2 IS NULL OR actor = ?2)
+         ORDER BY seq DESC LIMIT ?3`,
+        options.agentOnly ? 1 : 0, options.actor ?? null,
+        clampLimit(options.limit, DEFAULT_LIST_OPS, MAX_LIST_OPS),
+      )
+      .toArray()
+      .map((row) => ({
+        seq: row.seq as number,
+        actor: row.actor as string,
+        summary: row.summary as string | null,
+        reverts: row.reverts as number | null,
+        revertedBy: row.reverted_by as number | null,
+        createdAt: row.created_at as number,
+      }));
+  }
+
+  /**
+   * 記録済みの操作を取り消す。逆向きのデルタを新しい操作として適用する。
+   * その後に変更された付箋や接続線は取り消さず、`skipped` で返す（部分適用）。
+   */
+  revert(input: RevertInput): Promise<RevertResult> {
+    return this.inOrder(() => this.revertInOrder(input));
+  }
+
+  private async revertInOrder(input: RevertInput): Promise<RevertResult> {
+    const fail = (code: RevertFailure, reason: string): RevertResult => ({ ok: false, code, reason });
+    const notFound = () => fail('not-found', 'operation not found');
+    const { seq: target, actor, clientId, opId } = input;
+    try {
+      parseId(clientId, 'clientId');
+      parseId(opId, 'opId');
+      if (this.version === 0 || !Number.isInteger(target)) return notFound();
+
+      const done = this.findOp(actor, clientId, opId);
+      if (done) {
+        // 同じ opId を別の操作に使い回した場合。成功として返すと、実行されていないのに
+        // 取り消せたように見える
+        if (done.reverts !== target) return fail('invalid', 'opId already used');
+        // 再送。記録済みの結果を返す（skipped は残していない）
+        const applied = this.sql
+          .exec(`SELECT json_array_length(body) AS n FROM ops WHERE seq = ?`, done.seq)
+          .one().n as number;
+        return { ok: true, seq: done.seq as number, applied, skipped: [] };
+      }
+
+      // 記録済みの body は変わらないので、トランザクションの前に読んでよい
+      const row = this.sql.exec(`SELECT body FROM ops WHERE seq = ?`, target).toArray()[0];
+      if (!row) return notFound();
+      const inverse = invertDeltas(JSON.parse(row.body as string));
+      // 戻す text も、今のサニタイズの規則を通す
+      await sanitizeDeltas(inverse, { cleanBefore: false });
+
+      let deliver: (() => void) | undefined;
+      const result = this.ctx.storage.transactionSync((): RevertResult => {
+        // 対象の状態は、サニタイズを待った後のここで確かめる
+        const op = this.sql.exec(`SELECT actor, reverted_by FROM ops WHERE seq = ?`, target).toArray()[0];
+        if (!op) return notFound();
+        if (op.reverted_by !== null) return fail('conflict', 'already reverted');
+        if (input.ownOnly && op.actor !== actor) return fail('forbidden', 'not your operation');
+
+        const now = Date.now();
+        const { deltas, skipped } = applyRevert(this.sql, inverse, actor, now);
+        if (deltas.length === 0) return { ok: true, seq: null, applied: 0, skipped };
+
+        const summary = input.summary ?? `revert #${target}`;
+        const recorded = this.recordOp({ actor, clientId, opId, summary, reverts: target }, deltas, [], now);
+        // 取り消しを取り消した場合は、元の操作の内容が戻るので、元の操作をもう一度取り消せるようにする
+        this.sql.exec(`UPDATE ops SET reverted_by = NULL WHERE reverted_by = ?`, target);
+        this.sql.exec(`UPDATE ops SET reverted_by = ? WHERE seq = ?`, recorded.seq, target);
+        deliver = recorded.deliver;
+        return { ok: true, seq: recorded.seq, applied: deltas.length, skipped };
+      });
+      deliver?.();
+      return result;
+    } catch (e) {
+      if (e instanceof RejectError || e instanceof SanitizeError) return fail('invalid', e.message);
       throw e;
     }
   }
@@ -422,7 +599,7 @@ export class PageDO extends DurableObject<Env> {
     // 表示名の変更は seq を進めないので、切断中に変わっていても差分には出ない。現在値を送る
     send(ws, JSON.stringify({ type: 'meta', title: this.getMeta('title') } satisfies ServerMsg));
     const rows = this.sql.exec(
-      `SELECT seq, actor, client_id, op_id, body, fixups, summary FROM ops
+      `SELECT seq, actor, client_id, op_id, summary, reverts, body, fixups FROM ops
        WHERE seq > ? ORDER BY seq`,
       lastSeq,
     );
@@ -434,6 +611,7 @@ export class PageDO extends DurableObject<Env> {
         clientId: row.client_id as string,
         opId: row.op_id as string,
         summary: (row.summary as string | null) ?? undefined,
+        reverts: (row.reverts as number | null) ?? undefined,
       };
       // 自分の操作の確定を受け取る前に切断していた場合は、fixups も返す
       const own = head.clientId === clientId && head.actor === attachment.actor;

@@ -42,16 +42,32 @@ function edgeProps(edge: Obj): string {
   return JSON.stringify(props);
 }
 
-function exists(sql: SqlStorage, table: 'notes' | 'edges', id: string): boolean {
+export function exists(sql: SqlStorage, table: 'notes' | 'edges', id: string): boolean {
   return sql.exec(`SELECT 1 FROM ${table} WHERE id = ?`, id).toArray().length > 0;
 }
 
-function readNote(sql: SqlStorage, id: string): WemaNote | undefined {
+export function readNote(sql: SqlStorage, id: string): WemaNote | undefined {
   const row = sql.exec(`SELECT * FROM notes WHERE id = ?`, id).toArray()[0];
   return row && rowToNote(row);
 }
 
-function readEdge(sql: SqlStorage, id: string): WemaEdge | undefined {
+/**
+ * 付箋の、指定したフィールドだけを読む（`keys` のうち更新できるフィールド以外は無視する）。
+ * 移動だけの更新で大きな text を読まないようにするためのもの。autoSize は真偽値で返す。
+ */
+export function readNoteFields(sql: SqlStorage, id: string, keys: string[]): Obj | undefined {
+  const fields = keys.filter((k) => k in NOTE_COLUMNS);
+  const columns = fields.length > 0 ? fields.map((k) => NOTE_COLUMNS[k]).join(', ') : '1';
+  const row = sql.exec(`SELECT ${columns} FROM notes WHERE id = ?`, id).toArray()[0];
+  if (!row) return undefined;
+  const out: Obj = {};
+  for (const k of fields) {
+    out[k] = k === 'autoSize' ? Boolean(row[NOTE_COLUMNS[k]]) : row[NOTE_COLUMNS[k]];
+  }
+  return out;
+}
+
+export function readEdge(sql: SqlStorage, id: string): WemaEdge | undefined {
   const row = sql.exec(`SELECT * FROM edges WHERE id = ?`, id).toArray()[0];
   return row && rowToEdge(row);
 }
@@ -71,8 +87,14 @@ export interface Sanitized {
   cleanBefore: Map<HistoryDelta, string>;
 }
 
-/** デルタ中の text をサニタイズする（`note.text` と `after.text` を書き換える） */
-export async function sanitizeDeltas(deltas: HistoryDelta[]): Promise<Sanitized> {
+/**
+ * デルタ中の text をサニタイズする（`note.text` と `after.text` を書き換える）。
+ * `cleanBefore: false` なら `before.text` のサニタイズを省く（競合の判定に使わない場合）。
+ */
+export async function sanitizeDeltas(
+  deltas: HistoryDelta[],
+  options = { cleanBefore: true },
+): Promise<Sanitized> {
   const fixups: HistoryDelta[] = [];
   const cleanBefore = new Map<HistoryDelta, string>();
   const fix = (noteId: string, sent: string, clean: string) => {
@@ -91,7 +113,7 @@ export async function sanitizeDeltas(deltas: HistoryDelta[]): Promise<Sanitized>
       d.after.text = await sanitizeHtml(sent);
       fix(d.noteId, sent, d.after.text);
       const before = d.before.text;
-      if (before !== undefined) {
+      if (options.cleanBefore && before !== undefined) {
         cleanBefore.set(d, before === sent ? d.after.text : await sanitizeHtml(before));
       }
     }
@@ -149,15 +171,8 @@ export function applyDeltas(
         if ('autoSize' in d.before || 'autoSize' in next) next.autoSize = next.autoSize === true;
         const keys = Object.keys(NOTE_COLUMNS).filter((k) => next[k] !== undefined);
         if (keys.length === 0) break;
-        // 触る列だけを読む。移動だけの更新で大きな text を読まないようにする
-        const row = sql
-          .exec(`SELECT ${keys.map((k) => NOTE_COLUMNS[k]).join(', ')} FROM notes WHERE id = ?`, d.noteId)
-          .toArray()[0];
-        if (!row) break;
-        const cur: Obj = {};
-        for (const k of keys) {
-          cur[k] = k === 'autoSize' ? Boolean(row[NOTE_COLUMNS[k]]) : row[NOTE_COLUMNS[k]];
-        }
+        const cur = readNoteFields(sql, d.noteId, keys);
+        if (!cur) break;
         if (
           next.text !== undefined &&
           d.before.text !== cur.text &&

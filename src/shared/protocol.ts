@@ -15,6 +15,11 @@ export interface OpsMsg {
   /** サーバーが実際に適用したデルタ。送信元は自分の opId のものを適用しない */
   deltas: HistoryDelta[];
   summary?: string;
+  /**
+   * この操作が取り消しなら、取り消した対象の seq。取り消しは HTTP の API か MCP から行われ、
+   * 要求元のブラウザも手元には適用していない。自分の clientId の操作でも、これがあれば適用する
+   */
+  reverts?: number;
   /** 送信元にだけ付く。サーバーが変えた分で、送信元はこれだけを適用する */
   fixups?: HistoryDelta[];
 }

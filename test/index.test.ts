@@ -1,6 +1,6 @@
-import { env, runDurableObjectAlarm, runInDurableObject, SELF } from 'cloudflare:test';
+import { env, runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
-import { createNote, note } from './helpers';
+import { api, createNote, join, note } from './helpers';
 
 let opCount = 0;
 
@@ -17,7 +17,6 @@ async function seed(slug: string, texts: string[], title?: string) {
   return stub;
 }
 
-const api = (path: string, init?: RequestInit) => SELF.fetch(`http://localhost${path}`, init);
 const names = async (res: Response) =>
   ((await res.json()) as { pages: { name: string }[] }).pages.map((p) => p.name);
 
@@ -196,12 +195,7 @@ describe('ページの API', () => {
 
   it('表示名を変えるとスナップショットと索引に反映され、接続中のブラウザに届く', async () => {
     const slug = 'title-page';
-    const wsRes = await api(`/ws/${slug}`, { headers: { Upgrade: 'websocket' } });
-    const ws = wsRes.webSocket!;
-    ws.accept();
-    const messages: unknown[] = [];
-    ws.addEventListener('message', (e) => messages.push(JSON.parse(e.data as string)));
-    ws.send(JSON.stringify({ type: 'hello', clientId: 'c1' }));
+    const browser = await join(slug, 'c1');
 
     const put = (title: unknown) =>
       api(`/api/pages/${slug}/title`, { method: 'PUT', body: JSON.stringify({ title }) });
@@ -213,12 +207,12 @@ describe('ページの API', () => {
     await runDurableObjectAlarm(env.PAGE.getByName(slug));
     expect(await env.DB.prepare(`SELECT title, note_count FROM pages WHERE name = ?`).bind(slug).first())
       .toEqual({ title: '新しい表示名', note_count: 0 });
-    await new Promise((r) => setTimeout(r, 50));
-    expect(messages).toContainEqual({ type: 'meta', title: '新しい表示名' });
+    expect(await browser.next()).toEqual({ type: 'meta', title: '新しい表示名' });
 
     // 空文字で未設定に戻す
     expect(await (await put('')).json()).toEqual({ ok: true, title: null });
-    ws.close();
+    expect(await browser.next()).toEqual({ type: 'meta', title: null });
+    browser.close();
   });
 
   it.each([
