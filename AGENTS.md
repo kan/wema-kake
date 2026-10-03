@@ -105,18 +105,26 @@ CREATE TABLE ops (
 
 ```sql
 CREATE TABLE pages (
-  name       TEXT PRIMARY KEY,   -- スラッグ
-  title      TEXT,               -- 表示名。未設定ならスラッグを表示する
-  plain_text TEXT,        -- 全付箋のテキストをタグ除去して連結したもの
+  id         INTEGER PRIMARY KEY, -- pages_fts の rowid と対応させる
+  name       TEXT NOT NULL UNIQUE, -- スラッグ
+  title      TEXT,                -- 表示名。未設定ならスラッグを表示する
+  plain_text TEXT,                -- 全付箋のテキストをタグ除去して連結したもの
   note_count INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );
+
+CREATE INDEX pages_updated_at ON pages (updated_at);
 
 CREATE TABLE links (
   from_page TEXT NOT NULL,
   to_page   TEXT NOT NULL,
   PRIMARY KEY (from_page, to_page)
 );
+
+CREATE INDEX links_to_page ON links (to_page);
+
+-- rowid は pages.id と同じ値にする
+CREATE VIRTUAL TABLE pages_fts USING fts5(title, plain_text, tokenize = 'trigram');
 ```
 
 全文検索は FTS5 の trigram トークナイザを使う（`migrations/0002_fts.sql`）。ローカル（miniflare）では動作を確認し `test/runtime.test.ts` で固定した。本番の D1 では未確認なので、最初のデプロイ時にマイグレーションが通るか確認すること。3 文字未満の検索語は trigram に一致しないため LIKE を併用する。仮想テーブルがあると D1 を export できないので、FTS のテーブルは削除して作り直せるようにマイグレーションを分ける。
@@ -124,6 +132,29 @@ CREATE TABLE links (
 `links` は、付箋内の `<a href>` のうちパスが `/p/<slug>` に一致するものから作る（独自の Wiki リンク記法は入れない）。
 
 ページの一覧を持つのは D1 だけである（DO は名前から列挙できない）。D1 を失うと存在するスラッグが分からなくなる点に注意。
+
+D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変更の 5 秒後に 1 ページ分の `pages` / `links` / `pages_fts` を入れ替え、同じ alarm で古い `ops` も消す。
+
+- DO は自分のスラッグを `ctx.id.name` から得て、スキーマを作るとき（最初の書き込み）に `meta` の `slug` に保存する。alarm は保存した値だけを使う（alarm はリクエストを伴わずに起動されるので、そこで名前を取得できない場合に備えている）。ローカルでは `ctx.id.name` を取得できることを `test/runtime.test.ts` で固定した。本番では未確認なので、最初のデプロイ時に索引ができるか確認すること
+- 検索とリンクに関わる内容（表示名、テキスト、リンク先）が前回の反映から変わっていなければ、`pages` の `note_count` と `updated_at` だけを書く。付箋の移動や色の変更のたびに全文検索の索引を書き直さないため。前回の内容のハッシュは DO の `meta` の `index_hash` に持つ
+- alarm が設定済みかどうかは `ctx.storage.getAlarm()` で確かめる（メモリには持たない）
+- 絶対 URL のリンクを拾うには `wrangler.jsonc` の `vars` の `SITE_ORIGIN` を設定する。空のときは相対 URL（`/p/<slug>`）だけを拾う
+- `ops` は 30 日以内か直近 1000 件のどちらかに収まっていれば残す
+
+## HTTP API
+
+すべて Access の認証が要る。状態を変えるリクエストは、他のオリジンからのものを断る。
+
+| メソッドとパス | 内容 |
+| --- | --- |
+| `GET /api/pages?limit=&updated_after=` | ページ一覧（D1）。更新の新しい順 |
+| `GET /api/search?q=` | 全文検索（D1）。3 文字以上は FTS、3 文字未満は LIKE |
+| `GET /api/pages/<slug>` | スナップショット（`seq`、`title`、付箋と接続線） |
+| `GET /api/pages/<slug>/backlinks` | このページへリンクしているページ（D1） |
+| `PUT /api/pages/<slug>/title` | 表示名の変更（本文は `{ "title": "..." }`）。空文字で未設定に戻す。書き込みのないページに対して呼ぶとページが作られる |
+| `POST /api/images` | 画像のアップロード（本文は画像のバイト列、`Content-Type` は png / jpeg / gif / webp / avif）。`{ "url": "/img/<key>" }` を返す。10MB まで |
+| `GET /img/<key>` | 画像の取得（R2） |
+| `GET /ws/<slug>` | WebSocket |
 
 ## ページ名と URL
 
@@ -161,7 +192,8 @@ type ClientMsg =
 
 // Server → Client
 type ServerMsg =
-  | { type: 'snapshot'; seq: number; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] } }
+  | { type: 'snapshot'; seq: number; title: string | null; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] } }
+  | { type: 'meta'; title: string | null }   // 表示名が変わった。seq は進まない
   | { type: 'ops'; seq: number; actor: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
       fixups?: HistoryDelta[] }   // fixups は送信元にだけ付ける（後述）
   | { type: 'reject'; opId: string; reason: string; current?: { notes: WemaNote[]; edges: WemaEdge[] } }
@@ -173,7 +205,8 @@ type ServerMsg =
 
 - 接続先は `/ws/<slug>`
 - 接続時に `hello` を送る。`lastSeq` が `ops` に残っていれば差分の `ops` を、なければ `snapshot` を返す。クライアントは `snapshot.data` を `importData()` で読み込む
-  - `lastSeq` が最新なら何も返さない。差分が 500 件を超えるときは `snapshot` を返す
+  - 差分を返すときは、先に `meta`（表示名の現在値）を送る。表示名の変更は `seq` を進めず、差分に出ないため。`lastSeq` が最新なら `meta` だけを返す
+  - 差分が 500 件か合計 4MB を超えるとき、または書き込みのないページでは `snapshot` を返す
   - 差分のうち自分の `clientId` の `ops` には `fixups` を付ける（確定を受け取る前に切断していた場合のため）
   - `hello` を送るまでは配信の対象にならず、`ops` を送ると接続を閉じられる
   - 再接続したクライアントは、確定を受け取っていない `ops` を同じ `opId` で送り直してよい（適用済みなら記録済みの結果が返る）
@@ -269,7 +302,7 @@ WebMCP 版はブラウザ内で wema の API を直接呼ぶので、LLM の変�
 実装前・実装中に決める。決まったらこのファイルを更新すること。
 実装の順序と、各項目の現時点の案は `docs/plan.md` にある。
 
-- 更新履歴・`ops` の保持期間と、履歴閲覧 UI の範囲
+- 履歴閲覧 UI の範囲
 - agent が作った付箋・変更のブラウザでの見せ方
 - claude.ai / ChatGPT それぞれの定期実行機能からカスタムコネクタが使えるかの確認（MCP サーバーの実装後に実際に試す。ChatGPT は公式の記述を確認できていない）
 

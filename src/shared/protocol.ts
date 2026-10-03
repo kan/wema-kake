@@ -21,6 +21,8 @@ export interface OpsMsg {
 
 /** サーバー → ブラウザ */
 export type ServerMsg =
-  | { type: 'snapshot'; seq: number; data: BoardData }
+  | { type: 'snapshot'; seq: number; title: string | null; data: BoardData }
   | OpsMsg
+  /** 表示名が変わった。付箋の変更ではないので seq は進まない */
+  | { type: 'meta'; title: string | null }
   | { type: 'reject'; opId: string; reason: string; current?: BoardContent };

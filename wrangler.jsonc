@@ -14,8 +14,12 @@
     // 例: "https://<team>.cloudflareaccess.com"
     "ACCESS_TEAM_DOMAIN": "",
     // Access アプリケーションの AUD タグ
-    "ACCESS_AUD": ""
+    "ACCESS_AUD": "",
+    // このサイトのオリジン（例: "https://wiki.example.com"）。付箋内の絶対 URL のリンクを
+    // ページ間リンクとして拾うのに使う。空のときは相対 URL（/p/<slug>）だけを拾う
+    "SITE_ORIGIN": ""
   },
+  "r2_buckets": [{ "binding": "IMAGES", "bucket_name": "wema-kake-images" }],
   "durable_objects": {
     "bindings": [{ "name": "PAGE", "class_name": "PageDO" }]
   },

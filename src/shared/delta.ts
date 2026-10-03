@@ -25,5 +25,7 @@ export type BoardContent = Pick<BoardData, 'notes' | 'edges'>;
 
 export interface Snapshot {
   seq: number;
+  /** 表示名。未設定なら null（表示にはスラッグを使う） */
+  title: string | null;
   data: BoardData;
 }

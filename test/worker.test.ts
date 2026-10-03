@@ -19,6 +19,7 @@ describe('GET /api/pages/:slug', () => {
     expect(await res.json()).toEqual({
       slug: 'first-page',
       seq: 0,
+      title: null,
       data: { version: 1, notes: [], edges: [] },
     });
 

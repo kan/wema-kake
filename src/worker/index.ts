@@ -1,7 +1,8 @@
 import { Hono } from 'hono';
-import { isValidSlug } from '../shared/slug';
 import { type AuthEnv, requireAccess } from './access';
+import { images } from './images';
 import { ACTOR_HEADER, AUTH_EXPIRES_HEADER } from './page-do';
+import { pagesApi, validSlug } from './pages-api';
 
 export { PageDO } from './page-do';
 
@@ -11,27 +12,24 @@ const app = new Hono<AuthEnv>();
 // 認証なしで公開するパス（/mcp と OAuth 用）を足すときは、このアプリの外に置く
 app.use(requireAccess);
 
-app.get('/api/pages/:slug', async (c) => {
-  const slug = c.req.param('slug');
-  if (!isValidSlug(slug)) {
-    return c.json({ error: 'invalid slug' }, 400);
+// Access の Cookie は他サイトからのリクエストにも付く。状態を変えるリクエストと WebSocket の
+// 接続要求（同一オリジンの制約を受けない）は、他のオリジンからのものを断る
+app.use(async (c, next) => {
+  const method = c.req.method;
+  const guarded = (method !== 'GET' && method !== 'HEAD') || c.req.header('Upgrade') === 'websocket';
+  const origin = c.req.header('Origin');
+  if (guarded && origin && origin !== new URL(c.req.url).origin) {
+    return c.json({ error: 'forbidden origin' }, 403);
   }
-  return c.json({ slug, ...(await c.env.PAGE.getByName(slug).getSnapshot()) });
+  await next();
 });
 
-app.get('/ws/:slug', async (c) => {
-  const slug = c.req.param('slug');
-  if (!isValidSlug(slug)) {
-    return c.json({ error: 'invalid slug' }, 400);
-  }
+app.route('/api', pagesApi);
+app.route('/', images);
+
+app.get('/ws/:slug', validSlug, async (c) => {
   if (c.req.header('Upgrade') !== 'websocket') {
     return c.json({ error: 'expected websocket' }, 426);
-  }
-  // WebSocket は同一オリジンの制約を受けず、Access の Cookie は他サイトからの接続にも付く。
-  // 他サイトのページからこのボードを操作されないよう、Origin を確かめる
-  const origin = c.req.header('Origin');
-  if (origin && origin !== new URL(c.req.url).origin) {
-    return c.json({ error: 'forbidden origin' }, 403);
   }
 
   // クライアントが同名のヘッダーを付けてきても、認証結果で上書きする
@@ -40,7 +38,7 @@ app.get('/ws/:slug', async (c) => {
   const expiresAt = c.get('authExpiresAt');
   if (expiresAt === undefined) headers.delete(AUTH_EXPIRES_HEADER);
   else headers.set(AUTH_EXPIRES_HEADER, String(expiresAt));
-  return c.env.PAGE.getByName(slug).fetch(new Request(c.req.raw, { headers }));
+  return c.env.PAGE.getByName(c.req.param('slug')).fetch(new Request(c.req.raw, { headers }));
 });
 
 export default app;

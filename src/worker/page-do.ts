@@ -2,10 +2,17 @@ import { DurableObject } from 'cloudflare:workers';
 import type { BoardContent, HistoryDelta, Snapshot } from '../shared/delta';
 import type { OpsMsg, ServerMsg } from '../shared/protocol';
 import { applyDeltas, readBoard, type Sanitized, sanitizeDeltas } from './apply-ops';
+import { buildPageContent, contentHash, touchPage, writePage } from './indexer';
 import { SanitizeError } from './sanitize';
 import { exceedsBytes, MAX_OP_BYTES, parseDeltas, parseId, RejectError } from './validate';
 
 const MAX_SUMMARY_LENGTH = 500;
+const MAX_TITLE_LENGTH = 200;
+/** 変更してから D1 へ反映するまでの時間 */
+const INDEX_DELAY_MS = 5000;
+/** ops を残す期間と件数。どちらかに収まっていれば残す（再接続時の差分、履歴、取り消しに使う） */
+const OPS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const OPS_RETENTION_COUNT = 1000;
 /** 受信メッセージの上限（文字数）。1 回の ops に入る text の合計の上限より少し大きくしている */
 const MAX_MESSAGE_LENGTH = 2_000_000;
 /** 再接続時に差分で返す ops の数の上限。これより離れていたらスナップショットを返す */
@@ -139,38 +146,120 @@ export class PageDO extends DurableObject<Env> {
     return this.ctx.storage.sql;
   }
 
+  /** スキーマがある（version > 0）ときだけ呼ぶ */
+  private getMeta(key: string): string | null {
+    const row = this.sql.exec(`SELECT value FROM meta WHERE key = ?`, key).toArray()[0];
+    return row ? (row.value as string) : null;
+  }
+
+  private setMeta(key: string, value: string | null): void {
+    if (value === null) this.sql.exec(`DELETE FROM meta WHERE key = ?`, key);
+    else this.sql.exec(`INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)`, key, value);
+  }
+
   private readVersion(): number {
     const hasMeta = this.sql
       .exec(`SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'`)
       .toArray().length;
-    if (!hasMeta) return 0;
-    const row = this.sql.exec(`SELECT value FROM meta WHERE key = 'version'`).toArray()[0];
-    return row ? Number(row.value) : 0;
+    return hasMeta ? Number(this.getMeta('version') ?? 0) : 0;
   }
 
+  /** スキーマを最新にする。書き込みの前に呼ぶ */
   private migrate(): void {
     if (this.version >= MIGRATIONS.length) return;
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(META_TABLE);
+      // 自分のスラッグは、スキーマを作るとき（最初の書き込み）に保存する。D1 への反映（alarm）は
+      // リクエストを伴わずに起動され、そこでは名前を取得できない可能性があるため
+      if (this.version === 0 && this.ctx.id.name) this.setMeta('slug', this.ctx.id.name);
       for (const migration of MIGRATIONS.slice(this.version)) {
         this.sql.exec(migration);
       }
-      this.sql.exec(
-        `INSERT OR REPLACE INTO meta (key, value) VALUES ('version', ?)`,
-        String(MIGRATIONS.length),
-      );
+      this.setMeta('version', String(MIGRATIONS.length));
     });
     this.version = MIGRATIONS.length;
   }
 
   /** スキーマがある（version > 0）ときだけ呼ぶ */
   private getSeq(): number {
-    return Number(this.sql.exec(`SELECT value FROM meta WHERE key = 'seq'`).one().value);
+    return Number(this.getMeta('seq'));
   }
 
   getSnapshot(): Snapshot {
-    if (this.version === 0) return { seq: 0, data: { version: 1, notes: [], edges: [] } };
-    return { seq: this.getSeq(), data: readBoard(this.sql) };
+    if (this.version === 0) {
+      return { seq: 0, title: null, data: { version: 1, notes: [], edges: [] } };
+    }
+    return { seq: this.getSeq(), title: this.getMeta('title'), data: readBoard(this.sql) };
+  }
+
+  /**
+   * 表示名を変える。空文字なら未設定に戻す（表示はスラッグになる）。
+   * 付箋のデルタではないので ops には記録しない。
+   */
+  setTitle(input: unknown): { ok: true; title: string | null } | { ok: false; reason: string } {
+    if (typeof input !== 'string') return { ok: false, reason: 'invalid title' };
+    const title = input.trim();
+    // 制御文字（改行を含む）は表示と一覧を崩すので受け付けない
+    if (title.length > MAX_TITLE_LENGTH || /[\u0000-\u001f\u007f]/.test(title)) {
+      return { ok: false, reason: 'invalid title' };
+    }
+    const value = title || null;
+    this.migrate();
+    this.setMeta('title', value);
+    this.broadcast(JSON.stringify({ type: 'meta', title: value } satisfies ServerMsg));
+    this.scheduleIndexing();
+    return { ok: true, title: value };
+  }
+
+  // --- D1 の索引への反映 ---
+
+  /**
+   * 変更から少し後に、まとめて D1 へ反映する（書き込みごとには反映しない）。
+   * alarm が設定済みなら何もしない。alarm の実行中は未設定に見えるので、反映中に届いた変更は
+   * 次の alarm で反映される。
+   */
+  private scheduleIndexing(): void {
+    this.ctx.waitUntil(
+      this.ctx.storage.getAlarm().then((alarm) => {
+        if (alarm === null) return this.ctx.storage.setAlarm(Date.now() + INDEX_DELAY_MS);
+      }),
+    );
+  }
+
+  /** 失敗して例外で終わると、ランタイムが間隔を空けて再実行する */
+  async alarm(): Promise<void> {
+    if (this.version === 0) return;
+    const now = Date.now();
+    this.pruneOps(now);
+    await this.reindex(now);
+  }
+
+  /** 保持期間を過ぎた ops を消す。直近の分は期間を過ぎていても残す */
+  private pruneOps(now: number): void {
+    this.sql.exec(
+      `DELETE FROM ops WHERE created_at < ? AND seq <= ?`,
+      now - OPS_RETENTION_MS,
+      this.getSeq() - OPS_RETENTION_COUNT,
+    );
+  }
+
+  private async reindex(now: number): Promise<void> {
+    const slug = this.getMeta('slug');
+    if (!slug) throw new Error('page slug is not saved in the Durable Object');
+    const title = this.getMeta('title');
+    const texts = this.sql
+      .exec(`SELECT text FROM notes ORDER BY rowid`)
+      .toArray()
+      .map((row) => row.text as string);
+
+    const content = await buildPageContent(slug, texts, this.env.SITE_ORIGIN);
+    const hash = await contentHash(title, content);
+    // 付箋の移動や色の変更では、検索とリンクに関わる内容は変わらない。そのときは全文検索と
+    // リンクの索引を書き直さない（ページの行が D1 にないときは作り直す）
+    const unchanged = hash === this.getMeta('index_hash');
+    if (unchanged && (await touchPage(this.env.DB, slug, texts.length, now))) return;
+    await writePage(this.env.DB, slug, title, content, texts.length, now);
+    this.setMeta('index_hash', hash);
   }
 
   /**
@@ -260,7 +349,10 @@ export class PageDO extends DurableObject<Env> {
         return { ok: true, seq, deltas: applied.deltas, fixups, broadcast: true };
       });
       // トランザクションが確定してから配信する。保存と同じ同期の区間なので、順序は seq の順になる
-      deliver?.();
+      if (deliver) {
+        deliver();
+        this.scheduleIndexing();
+      }
       return result;
     } catch (e) {
       if (e instanceof RejectError) return { ok: false, reason: e.message, current: e.current };
@@ -327,6 +419,8 @@ export class PageDO extends DurableObject<Env> {
       send(ws, JSON.stringify({ type: 'snapshot', ...this.getSnapshot() } satisfies ServerMsg));
       return;
     }
+    // 表示名の変更は seq を進めないので、切断中に変わっていても差分には出ない。現在値を送る
+    send(ws, JSON.stringify({ type: 'meta', title: this.getMeta('title') } satisfies ServerMsg));
     const rows = this.sql.exec(
       `SELECT seq, actor, client_id, op_id, body, fixups, summary FROM ops
        WHERE seq > ? ORDER BY seq`,
@@ -350,7 +444,9 @@ export class PageDO extends DurableObject<Env> {
 
   /** `lastSeq` 以降の変更を、差分（ops の再送）で返せるか */
   private canReplay(lastSeq: unknown): lastSeq is number {
-    const seq = this.version === 0 ? 0 : this.getSeq();
+    // 書き込みのないページにはテーブルがない。空のスナップショットを返す
+    if (this.version === 0) return false;
+    const seq = this.getSeq();
     if (typeof lastSeq !== 'number' || !Number.isInteger(lastSeq) || lastSeq < 0 || lastSeq > seq) {
       return false;
     }

@@ -67,19 +67,26 @@ describe('DO の SQLite', () => {
   });
 });
 
+describe('DO の名前', () => {
+  it('DO の中から、作成時に指定した名前（スラッグ）を取得できる', async () => {
+    const stub = env.PAGE.getByName('runtime-name');
+    expect(await runInDurableObject(stub, (_do, state) => state.id.name)).toBe('runtime-name');
+  });
+});
+
 describe('D1 の FTS5', () => {
   it('trigram トークナイザで日本語を部分一致検索できる。3 文字未満は LIKE が要る', async () => {
-    await env.DB.prepare(`INSERT INTO pages_fts (name, title, plain_text) VALUES (?, ?, ?)`)
-      .bind('p1', '絵馬掛', '付箋ボードで作る Wiki のメモ')
+    await env.DB.prepare(`INSERT INTO pages_fts (rowid, title, plain_text) VALUES (?, ?, ?)`)
+      .bind(900001, '絵馬掛', '付箋ボードで作る Wiki のメモ')
       .run();
-    const names = async (sql: string, arg: string) =>
-      (await env.DB.prepare(sql).bind(arg).all<{ name: string }>()).results.map((r) => r.name);
+    const rowids = async (sql: string, arg: string) =>
+      (await env.DB.prepare(sql).bind(arg).all<{ rowid: number }>()).results.map((r) => r.rowid);
 
-    const match = `SELECT name FROM pages_fts WHERE pages_fts MATCH ?`;
-    expect(await names(match, '"付箋ボード"')).toEqual(['p1']);
-    expect(await names(match, '"付箋"')).toEqual([]);
-    expect(await names(`SELECT name FROM pages_fts WHERE plain_text LIKE ?`, '%付箋%')).toEqual([
-      'p1',
+    const match = `SELECT rowid FROM pages_fts WHERE pages_fts MATCH ?`;
+    expect(await rowids(match, '"付箋ボード"')).toEqual([900001]);
+    expect(await rowids(match, '"付箋"')).toEqual([]);
+    expect(await rowids(`SELECT rowid FROM pages_fts WHERE plain_text LIKE ?`, '%付箋%')).toEqual([
+      900001,
     ]);
   });
 });

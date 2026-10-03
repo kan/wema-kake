@@ -73,6 +73,7 @@ describe('WebSocket', () => {
     expect(await c.next()).toEqual({
       type: 'snapshot',
       seq: 0,
+      title: null,
       data: { version: 1, notes: [], edges: [] },
     });
   });
@@ -159,6 +160,8 @@ describe('WebSocket', () => {
 
     const again = await open(slug);
     again.send({ type: 'hello', clientId: 'ca', lastSeq: 1 });
+    // 表示名は差分に出ないので、現在値が先に届く
+    expect(await again.next()).toEqual({ type: 'meta', title: null });
     const second = await again.next();
     expect(second).toMatchObject({ type: 'ops', seq: 2, clientId: 'ca', opId: 'o2' });
     expect(second).toHaveProperty('fixups');
@@ -172,10 +175,18 @@ describe('WebSocket', () => {
       deltas: [createNote('n3')],
     });
 
-    // 最新まで受け取っていれば何も返さない
+    // 最新まで受け取っていれば、表示名の現在値だけを返す（切断中に変わっていても追従できる）
+    await stub.setTitle('変更後の表示名');
     const upToDate = await open(slug);
     upToDate.send({ type: 'hello', clientId: 'cc', lastSeq: 3 });
+    expect(await upToDate.next()).toEqual({ type: 'meta', title: '変更後の表示名' });
     await upToDate.expectSilent();
+  });
+
+  it('書き込みのないページに lastSeq 付きで接続しても、空のスナップショットを返す', async () => {
+    const c = await open(newSlug());
+    c.send({ type: 'hello', clientId: 'c1', lastSeq: 0 });
+    expect(await c.next()).toMatchObject({ type: 'snapshot', seq: 0 });
   });
 
   it('lastSeq がサーバーより進んでいる、または差分が残っていなければスナップショットを返す', async () => {
