@@ -104,8 +104,8 @@ export function openIndex(app: HTMLElement): void {
     const total = index.data.notes.length;
     if (q === '') {
       board.setNoteFilter(null);
-      // 開いたときと同じ表示位置へ戻す（配置は、この位置で幅に収まるように組んである）
-      board.setViewport({ x: 0, y: 0 });
+      // 開いたときと同じ表示位置と倍率へ戻す（配置は、この位置で幅に収まるように組んである）
+      board.setViewport({ x: 0, y: 0, zoom: 1 });
       count.textContent = `${total} ページ`;
       return;
     }
@@ -114,8 +114,8 @@ export function openIndex(app: HTMLElement): void {
     };
     const show = (matched: Set<string>) => {
       board?.setNoteFilter([...matched]);
-      // 付箋の位置は変えず、残った付箋が見える位置へ表示を寄せる
-      board?.centerContent();
+      // 付箋の位置は変えず、残った付箋がすべて見える位置と倍率にする（等倍より大きくはしない）
+      board?.fitToContent();
       showCount(matched);
     };
     // 表示名とスラッグは手元で照合し、すぐに反映する
