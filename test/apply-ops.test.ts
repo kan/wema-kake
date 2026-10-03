@@ -1,6 +1,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { PageDO } from '../src/worker/page-do';
+import { createNote, edge, note } from './helpers';
 
 let pageCount = 0;
 let opCount = 0;
@@ -12,33 +13,6 @@ function newPage() {
     stub.applyOps({ actor, clientId: 'c1', opId, deltas });
   return { stub, apply };
 }
-
-const note = (id: string, over: Record<string, unknown> = {}) => ({
-  id,
-  x: 10,
-  y: 20,
-  width: 200,
-  height: 150,
-  text: 'hello',
-  color: '#FFF9C4',
-  zIndex: 1,
-  ...over,
-});
-
-const edge = (id: string, from: string, to: string, over: Record<string, unknown> = {}) => ({
-  id,
-  from,
-  to,
-  fromAnchor: 'auto',
-  toAnchor: 'auto',
-  style: 'arrow',
-  ...over,
-});
-
-const createNote = (id: string, over?: Record<string, unknown>) => ({
-  type: 'note:create',
-  note: note(id, over),
-});
 
 describe('applyOps', () => {
   it('付箋と接続線を作成し、スナップショットで読める', async () => {
@@ -88,7 +62,7 @@ describe('applyOps', () => {
     const res = await apply([
       { type: 'note:update', noteId: 'n1', before: { zIndex: 1 }, after: { zIndex: 9 } },
     ]);
-    expect(res).toEqual({ ok: true, seq: 1, deltas: [], fixups: [], duplicate: false });
+    expect(res).toEqual({ ok: true, seq: 1, deltas: [], fixups: [], broadcast: false });
     expect((await stub.getSnapshot()).data.notes[0].zIndex).toBe(1);
   });
 
@@ -181,9 +155,9 @@ describe('applyOps', () => {
     const deltas = [createNote('n1', { text: '<b onclick="x()">a</b>' })];
     const first = await apply(deltas, 'same');
     const again = await apply(deltas, 'same');
-    expect(first).toMatchObject({ ok: true, duplicate: false });
+    expect(first).toMatchObject({ ok: true, broadcast: true });
     expect(first).toMatchObject({ fixups: [{ after: { text: '<b>a</b>' } }] });
-    expect(again).toEqual({ ...first, duplicate: true });
+    expect(again).toEqual({ ...first, broadcast: false });
     expect((await stub.getSnapshot()).seq).toBe(1);
   });
 
@@ -236,7 +210,7 @@ describe('applyOps', () => {
       seq: 2,
       deltas: [del, { type: 'note:delete', note: note('n1') }],
       fixups: [del],
-      duplicate: false,
+      broadcast: true,
     });
     const snap = await stub.getSnapshot();
     expect(snap.data.notes.map((n) => n.id)).toEqual(['n2']);
@@ -252,7 +226,7 @@ describe('applyOps', () => {
       { type: 'edge:update', edgeId: 'gone', before: {}, after: { label: 'x' } },
       { type: 'edge:delete', edge: edge('gone', 'n1', 'n1') },
     ]);
-    expect(res).toEqual({ ok: true, seq: 1, deltas: [], fixups: [], duplicate: false });
+    expect(res).toEqual({ ok: true, seq: 1, deltas: [], fixups: [], broadcast: false });
   });
 
   it('接続線の更新では from / to を無視し、before にだけあるキーは未設定に戻す', async () => {

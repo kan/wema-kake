@@ -1,10 +1,29 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { BoardContent, HistoryDelta, Snapshot } from '../shared/delta';
+import type { OpsMsg, ServerMsg } from '../shared/protocol';
 import { applyDeltas, readBoard, type Sanitized, sanitizeDeltas } from './apply-ops';
 import { SanitizeError } from './sanitize';
 import { exceedsBytes, MAX_OP_BYTES, parseDeltas, parseId, RejectError } from './validate';
 
 const MAX_SUMMARY_LENGTH = 500;
+/** 受信メッセージの上限（文字数）。1 回の ops に入る text の合計の上限より少し大きくしている */
+const MAX_MESSAGE_LENGTH = 2_000_000;
+/** 再接続時に差分で返す ops の数の上限。これより離れていたらスナップショットを返す */
+const MAX_REPLAY_OPS = 500;
+/** 同じく、差分の合計の大きさ（文字数）の上限。大きな text の更新が続いた場合に効く */
+const MAX_REPLAY_LENGTH = 4_000_000;
+
+/** Worker が WebSocket の接続要求を DO へ転送するときに、認証済みの主体を入れるヘッダー */
+export const ACTOR_HEADER = 'X-Wema-Actor';
+
+/** 接続ごとに持つ情報。Hibernation から復帰しても残る */
+interface Attachment {
+  actor: string;
+  /** hello を受けるまで未設定。未設定の接続には配信しない */
+  clientId?: string;
+}
+
+type OpsHead = Omit<OpsMsg, 'deltas' | 'fixups'>;
 
 export interface ApplyInput {
   /** 'user:<email>' / 'agent:<client>'。呼び出し側（Worker）が認証結果から決める */
@@ -24,8 +43,11 @@ export type ApplyResult =
       deltas: HistoryDelta[];
       /** 送信元だけが追加で適用するデルタ（サニタイズで変わった text など） */
       fixups: HistoryDelta[];
-      /** 同じ opId の再送で、適用済みだった。送信元にだけ結果を返し、他へは配信しない */
-      duplicate: boolean;
+      /**
+       * 接続中のクライアントへ配信したか。配信しないのは、同じ opId の再送（適用済み）と、
+       * デルタをすべて捨てた場合。WebSocket の送信元には、このとき個別に確定を返す
+       */
+      broadcast: boolean;
     }
   | { ok: false; reason: string; current?: BoardContent };
 
@@ -91,6 +113,8 @@ export class PageDO extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // 接続維持の ping には DO を起こさずに応答する
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
     this.version = this.readVersion();
     // 書き込みのないページには何も保存しない（存在しないスラッグを開いただけで
     // ストレージが残らないようにする）。スキーマは最初の書き込みで作る
@@ -182,17 +206,19 @@ export class PageDO extends DurableObject<Env> {
         seq: done.seq as number,
         deltas: JSON.parse(done.body as string),
         fixups: done.fixups ? JSON.parse(done.fixups as string) : [],
-        duplicate: true,
+        broadcast: false,
       };
     }
 
+    const summary = input.summary?.slice(0, MAX_SUMMARY_LENGTH);
+    let deliver: (() => void) | undefined;
     try {
-      return this.ctx.storage.transactionSync(() => {
+      const result = this.ctx.storage.transactionSync((): ApplyResult => {
         const now = Date.now();
         const applied = applyDeltas(this.sql, deltas, input.actor, now, sanitized.cleanBefore);
         const fixups = [...sanitized.fixups, ...applied.fixups];
         if (applied.deltas.length === 0) {
-          return { ok: true, seq: this.getSeq(), deltas: [], fixups, duplicate: false };
+          return { ok: true, seq: this.getSeq(), deltas: [], fixups, broadcast: false };
         }
         const body = JSON.stringify(applied.deltas);
         const fixupsJson = fixups.length > 0 ? JSON.stringify(fixups) : null;
@@ -204,14 +230,169 @@ export class PageDO extends DurableObject<Env> {
         this.sql.exec(
           `INSERT INTO ops (seq, actor, client_id, op_id, body, fixups, summary, created_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          seq, input.actor, input.clientId, input.opId, body, fixupsJson,
-          input.summary?.slice(0, MAX_SUMMARY_LENGTH) ?? null, now,
+          seq, input.actor, input.clientId, input.opId, body, fixupsJson, summary ?? null, now,
         );
-        return { ok: true, seq, deltas: applied.deltas, fixups, duplicate: false };
+        const head: OpsHead = {
+          type: 'ops', seq, actor: input.actor, clientId: input.clientId, opId: input.opId, summary,
+        };
+        // fixups は送信元にだけ付ける
+        deliver = () =>
+          this.broadcast(opsJson(head, body, null), {
+            clientId: input.clientId,
+            toSender: opsJson(head, body, fixupsJson),
+          });
+        return { ok: true, seq, deltas: applied.deltas, fixups, broadcast: true };
       });
+      // トランザクションが確定してから配信する。保存と同じ同期の区間なので、順序は seq の順になる
+      deliver?.();
+      return result;
     } catch (e) {
       if (e instanceof RejectError) return { ok: false, reason: e.message, current: e.current };
       throw e;
     }
+  }
+
+  // --- WebSocket ---
+
+  /** Worker が認証を済ませ、主体を ACTOR_HEADER に入れて転送してくる */
+  async fetch(request: Request): Promise<Response> {
+    const actor = request.headers.get(ACTOR_HEADER);
+    if (!actor) return new Response('missing actor', { status: 400 });
+
+    const { 0: client, 1: server } = new WebSocketPair();
+    this.ctx.acceptWebSocket(server);
+    server.serializeAttachment({ actor } satisfies Attachment);
+    return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
+    if (typeof message !== 'string' || message.length > MAX_MESSAGE_LENGTH) {
+      ws.close(1009, 'message too large');
+      return;
+    }
+    let msg: Record<string, unknown>;
+    try {
+      msg = JSON.parse(message);
+    } catch {
+      ws.close(1007, 'invalid json');
+      return;
+    }
+    if (typeof msg !== 'object' || msg === null) return;
+
+    const attachment = ws.deserializeAttachment() as Attachment;
+    if (msg.type === 'hello') {
+      this.onHello(ws, attachment, msg);
+    } else if (msg.type === 'ops') {
+      await this.onOps(ws, attachment, msg);
+    }
+  }
+
+  /** 接続直後の同期。`lastSeq` 以降の ops が残っていれば差分を、なければスナップショットを返す */
+  private onHello(ws: WebSocket, attachment: Attachment, msg: Record<string, unknown>): void {
+    let clientId: string;
+    try {
+      clientId = parseId(msg.clientId, 'clientId');
+    } catch {
+      ws.close(1008, 'invalid clientId');
+      return;
+    }
+    // これ以降、この接続は配信の対象になる
+    ws.serializeAttachment({ ...attachment, clientId } satisfies Attachment);
+
+    const { lastSeq } = msg;
+    if (!this.canReplay(lastSeq)) {
+      send(ws, JSON.stringify({ type: 'snapshot', ...this.getSnapshot() } satisfies ServerMsg));
+      return;
+    }
+    const rows = this.sql.exec(
+      `SELECT seq, actor, client_id, op_id, body, fixups, summary FROM ops
+       WHERE seq > ? ORDER BY seq`,
+      lastSeq,
+    );
+    for (const row of rows) {
+      const head: OpsHead = {
+        type: 'ops',
+        seq: row.seq as number,
+        actor: row.actor as string,
+        clientId: row.client_id as string,
+        opId: row.op_id as string,
+        summary: (row.summary as string | null) ?? undefined,
+      };
+      // 自分の操作の確定を受け取る前に切断していた場合は、fixups も返す
+      const fixups = head.clientId === clientId ? (row.fixups as string | null) : null;
+      send(ws, opsJson(head, row.body as string, fixups));
+    }
+  }
+
+  /** `lastSeq` 以降の変更を、差分（ops の再送）で返せるか */
+  private canReplay(lastSeq: unknown): lastSeq is number {
+    const seq = this.version === 0 ? 0 : this.getSeq();
+    if (typeof lastSeq !== 'number' || !Number.isInteger(lastSeq) || lastSeq < 0 || lastSeq > seq) {
+      return false;
+    }
+    const missed = seq - lastSeq;
+    if (missed === 0) return true;
+    if (missed > MAX_REPLAY_OPS) return false;
+    const retained = this.sql
+      .exec(
+        `SELECT count(*) AS count, sum(length(body) + length(coalesce(fixups, ''))) AS size
+         FROM ops WHERE seq > ?`,
+        lastSeq,
+      )
+      .one();
+    return retained.count === missed && (retained.size as number) <= MAX_REPLAY_LENGTH;
+  }
+
+  private async onOps(ws: WebSocket, attachment: Attachment, msg: Record<string, unknown>): Promise<void> {
+    const { actor, clientId } = attachment;
+    if (!clientId) {
+      ws.close(1008, 'hello required');
+      return;
+    }
+    const opId = typeof msg.opId === 'string' ? msg.opId : '';
+    let result: ApplyResult;
+    try {
+      result = await this.applyOps({ actor, clientId, opId, deltas: msg.deltas });
+    } catch (e) {
+      // 想定外の失敗でも送信元に結果を返す（返さないと、その操作が未確定のまま残る）
+      console.error('applyOps failed', e);
+      result = { ok: false, reason: 'internal error' };
+    }
+    if (!result.ok) {
+      const { reason, current } = result;
+      send(ws, JSON.stringify({ type: 'reject', opId, reason, current } satisfies ServerMsg));
+    } else if (!result.broadcast) {
+      // 配信していない結果（再送、すべて捨てた操作）は、送信元にだけ確定を返す
+      const { seq, deltas, fixups } = result;
+      send(ws, JSON.stringify({ type: 'ops', seq, actor, clientId, opId, deltas, fixups } satisfies ServerMsg));
+    }
+  }
+
+  /**
+   * hello を済ませた全接続へ送る。`sender` を指定すると、その clientId の接続にだけ
+   * `toSender` を送る（null なら送らない）
+   */
+  private broadcast(json: string, sender?: { clientId: string; toSender: string | null }): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      const { clientId } = ws.deserializeAttachment() as Attachment;
+      if (!clientId) continue;
+      const out = clientId === sender?.clientId ? sender.toSender : json;
+      if (out !== null) send(ws, out);
+    }
+  }
+}
+
+/** 保存済みの JSON（deltas、fixups）を解析し直さずに ops メッセージを組み立てる */
+function opsJson(head: OpsHead, body: string, fixupsJson: string | null): string {
+  const fixups = fixupsJson ? `,"fixups":${fixupsJson}` : '';
+  return `${JSON.stringify(head).slice(0, -1)},"deltas":${body}${fixups}}`;
+}
+
+/** 閉じかけの接続への送信は失敗するが、相手は再接続時に差分を受け取るので無視してよい */
+function send(ws: WebSocket, json: string): void {
+  try {
+    ws.send(json);
+  } catch {
+    // 無視する
   }
 }

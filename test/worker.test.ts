@@ -14,7 +14,7 @@ describe('isValidSlug', () => {
 
 describe('GET /api/pages/:slug', () => {
   it('未作成のページは空のスナップショットを返し、ストレージに何も作らない', async () => {
-    const res = await SELF.fetch('https://example.com/api/pages/first-page');
+    const res = await SELF.fetch('http://localhost/api/pages/first-page');
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       slug: 'first-page',
@@ -29,7 +29,7 @@ describe('GET /api/pages/:slug', () => {
   });
 
   it('不正なスラッグは 400', async () => {
-    const res = await SELF.fetch('https://example.com/api/pages/Bad_Slug');
+    const res = await SELF.fetch('http://localhost/api/pages/Bad_Slug');
     expect(res.status).toBe(400);
   });
 });

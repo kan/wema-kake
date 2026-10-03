@@ -42,6 +42,11 @@ MCP クライアント ──/mcp──> MCP ┘          │
 - **MCP エンドポイント（`/mcp` と OAuth 用のパス）**: Access アプリケーションの保護対象から外し、Worker 自身が `@cloudflare/workers-oauth-provider` で OAuth 2.1 を処理する。ログインの実体は Access for SaaS（OIDC）に委ねるので、認証の仕組みは Access に一元化される
 - claude.ai / ChatGPT のコネクタはそれぞれのサーバーから接続してくるため、`/mcp` まで Access のログイン画面で塞ぐと接続できない。パスの切り分けを間違えないこと
 - 参考: Cloudflare 公式の「Secure MCP servers with Access for SaaS」とサンプル `cloudflare/ai/demos/remote-mcp-cf-access`
+- **Worker でも Access の JWT（`Cf-Access-Jwt-Assertion`）を検証する**（`src/worker/access.ts`）。Access の設定を誤っても未認証のリクエストを通さないためと、変更の主体（`user:<email>`）を得るため。Worker に届くリクエストすべてに掛けてある（`src/worker/index.ts` の `app.use(requireAccess)`）。**認証なしで公開するパス（`/mcp` と OAuth 用）を足すときは、このアプリの外に置くこと。このミドルウェアを外したり、パスを列挙する形に戻したりしない**
+  - 設定は `wrangler.jsonc` の `vars` の `ACCESS_TEAM_DOMAIN`（`https://<team>.cloudflareaccess.com`）と `ACCESS_AUD`（Access アプリケーションの AUD タグ）。両方が空なら 500 を返す
+  - ローカル開発は `.dev.vars` の `DEV_USER_EMAIL` を使う（`.dev.vars.example` を参照）。localhost へのリクエストでだけ有効で、Access の設定があれば無視される
+- WebSocket の接続要求は `Origin` を確かめ、他のオリジンからの接続を断る（WebSocket は同一オリジンの制約を受けず、Access の Cookie は他サイトからの接続にも付くため）
+- 主体はクライアントの自己申告を使わない。Worker が認証結果から決めて DO に渡す
 
 ## DO 内スキーマ（ページ単位）
 
@@ -164,7 +169,12 @@ type ServerMsg =
 
 ### 流れ
 
+- 接続先は `/ws/<slug>`
 - 接続時に `hello` を送る。`lastSeq` が `ops` に残っていれば差分の `ops` を、なければ `snapshot` を返す。クライアントは `snapshot.data` を `importData()` で読み込む
+  - `lastSeq` が最新なら何も返さない。差分が 500 件を超えるときは `snapshot` を返す
+  - 差分のうち自分の `clientId` の `ops` には `fixups` を付ける（確定を受け取る前に切断していた場合のため）
+  - `hello` を送るまでは配信の対象にならず、`ops` を送ると接続を閉じられる
+  - 再接続したクライアントは、確定を受け取っていない `ops` を同じ `opId` で送り直してよい（適用済みなら記録済みの結果が返る）
 - 確定した変更は送信元も含めた全員に `ops` として配信する。送信元は自分の `opId` が返ってきたことを確定（ack）とみなす
 - クライアントは wema の `history:commit` を `ops` として送り、受信した `ops` は `applyRemote()` で適用する（自分の `opId` のものは適用済みなのでスキップ）
 - 配信する `deltas` は、サーバーが実際に適用したもの。更新の `before` と削除対象の内容はサーバーの保存値で置き換えてある。サーバーが変えた分（サニタイズで変わった text、付箋の削除に伴ってサーバーが足した接続線の削除）は `fixups` に入れ、**送信元は自分の `opId` の `ops` を受けたとき `fixups` だけを `applyRemote()` する**

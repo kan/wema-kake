@@ -1,0 +1,4 @@
+# .dev.vars にコピーして使う（.dev.vars は git に入れない）。
+# ローカル開発では Access がないので、この email を変更の主体として使う。
+# localhost へのリクエストでだけ有効で、ACCESS_TEAM_DOMAIN と ACCESS_AUD が設定されていれば無視される。
+DEV_USER_EMAIL=dev@example.com
