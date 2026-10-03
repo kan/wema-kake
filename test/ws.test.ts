@@ -65,7 +65,11 @@ describe('WebSocket', () => {
       type: 'reject',
       opId: 'o2',
       reason: 'text conflict',
-      current: { notes: [note('n1', { text: 'v1' })], edges: [] },
+      // サーバーの現在値に合わせるためのデルタ。zIndex は含まない
+      fixups: [{
+        type: 'note:update', noteId: 'n1', before: {},
+        after: { x: 10, y: 20, width: 200, height: 150, text: 'v1', color: '#FFF9C4', autoSize: false },
+      }],
     });
     await a.expectSilent();
   });

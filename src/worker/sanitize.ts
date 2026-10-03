@@ -34,7 +34,8 @@ const ALLOWED_CSS_PROPS = new Set([
   'list-style-type', 'white-space',
 ]);
 
-const ALLOWED_SCHEMES = new Set(['http', 'https', 'mailto']);
+/** wema の SAFE_URL_SCHEMES と同じ */
+const ALLOWED_SCHEMES = new Set(['http', 'https', 'mailto', 'tel']);
 
 const MAX_PASSES = 4;
 
@@ -43,18 +44,18 @@ export class SanitizeError extends Error {}
 /**
  * スキームを許可リストで判定する。HTMLRewriter は属性値のエンティティを復号しないので、
  * スキームの位置にエンティティがある値（`&#106;avascript:` など）は拒否する。
+ *
+ * wema は画像などの `data:` URL を許可するが、ここでは受け付けない。画像は R2 に置き、
+ * text には URL だけを入れる（data URL は text の大きさの上限にすぐ達するため）。
  */
-function isSafeUrl(value: string, allowDataImage: boolean): boolean {
+function isSafeUrl(value: string): boolean {
   // ブラウザは URL 中の空白と制御文字を無視してスキームを解釈する
   const compact = value.replace(/[\u0000- ]/g, '');
   const head = compact.split(/[/?#]/, 1)[0];
   if (head.includes('&')) return false;
   const colon = head.indexOf(':');
   if (colon === -1) return true;
-  const scheme = head.slice(0, colon).toLowerCase();
-  if (ALLOWED_SCHEMES.has(scheme)) return true;
-  // 画像を R2 に置くようになったら（フェーズ 4）data URL は受け付けない
-  return allowDataImage && /^data:image\/(png|jpeg|gif|webp|avif|bmp)[;,]/i.test(compact);
+  return ALLOWED_SCHEMES.has(head.slice(0, colon).toLowerCase());
 }
 
 /** 許可した宣言だけを残す。何も除かなかったときは元の文字列をそのまま返す */
@@ -101,7 +102,7 @@ function sanitizeElement(el: Element): void {
       el.removeAttribute(rawName);
       continue;
     }
-    if (URL_ATTRIBUTES.has(name) && !isSafeUrl(value, tag === 'img' && name === 'src')) {
+    if (URL_ATTRIBUTES.has(name) && !isSafeUrl(value)) {
       el.removeAttribute(rawName);
     }
   }

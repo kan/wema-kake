@@ -1,9 +1,9 @@
 import { DurableObject } from 'cloudflare:workers';
-import type { BoardContent, HistoryDelta, Snapshot } from '../shared/delta';
-import type { OpsMsg, ServerMsg } from '../shared/protocol';
+import { type BoardContent, type HistoryDelta, invertDeltas, type Snapshot } from '../shared/delta';
+import { CLOSE_AUTH_EXPIRED, type OpsMsg, PING, PONG, type ServerMsg } from '../shared/protocol';
 import { applyDeltas, readBoard, type Sanitized, sanitizeDeltas } from './apply-ops';
 import { buildPageContent, contentHash, touchPage, writePage } from './indexer';
-import { applyRevert, invertDeltas, type Skipped } from './revert';
+import { applyRevert, type Skipped } from './revert';
 import { SanitizeError } from './sanitize';
 import {
   clampLimit,
@@ -34,9 +34,6 @@ const MAX_REPLAY_LENGTH = 4_000_000;
 export const ACTOR_HEADER = 'X-Wema-Actor';
 /** 同じく、認証の期限（UNIX 秒）を入れるヘッダー。期限がなければ付けない */
 export const AUTH_EXPIRES_HEADER = 'X-Wema-Auth-Expires';
-
-/** 認証の期限が切れた接続を閉じるときのコード。クライアントは再読み込みして認証し直す */
-const CLOSE_AUTH_EXPIRED = 4401;
 
 /** 接続ごとに持つ情報。Hibernation から復帰しても残る */
 interface Attachment {
@@ -195,7 +192,7 @@ export class PageDO extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // 接続維持の ping には DO を起こさずに応答する
-    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
+    ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PING, PONG));
     this.version = this.readVersion();
     // 書き込みのないページには何も保存しない（存在しないスラッグを開いただけで
     // ストレージが残らないようにする）。スキーマは最初の書き込みで作る
@@ -658,7 +655,8 @@ export class PageDO extends DurableObject<Env> {
     }
     if (!result.ok) {
       const { reason, current } = result;
-      send(ws, JSON.stringify({ type: 'reject', opId, reason, current } satisfies ServerMsg));
+      const fixups = current && contentToDeltas(current);
+      send(ws, JSON.stringify({ type: 'reject', opId, reason, fixups } satisfies ServerMsg));
     } else if (!result.broadcast) {
       // 配信していない結果（再送、すべて捨てた操作）は、送信元にだけ確定を返す
       const { seq, deltas, fixups } = result;
@@ -689,6 +687,21 @@ export class PageDO extends DurableObject<Env> {
       if (out !== null) send(ws, out);
     }
   }
+}
+
+/**
+ * 付箋と接続線を、その内容に合わせるための更新デルタにする（拒否した操作の送信元に、
+ * サーバーの現在値を伝えるのに使う）。同期しない zIndex と、変更できない from / to は含めない
+ */
+function contentToDeltas(content: BoardContent): HistoryDelta[] {
+  return [
+    ...content.notes.map(({ id, zIndex: _zIndex, ...after }): HistoryDelta => ({
+      type: 'note:update', noteId: id, before: {}, after: { autoSize: false, ...after },
+    })),
+    ...content.edges.map(({ id, from: _from, to: _to, ...after }): HistoryDelta => ({
+      type: 'edge:update', edgeId: id, before: {}, after,
+    })),
+  ];
 }
 
 /** 保存済みの JSON（deltas、fixups）を解析し直さずに ops メッセージを組み立てる */

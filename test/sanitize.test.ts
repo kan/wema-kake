@@ -9,7 +9,7 @@ describe('sanitizeHtml（wema の tests/sanitize.test.ts と同じケース）',
     '<a href="https://example.com" target="_blank">link</a>',
     '<ul><li>item1</li><li>item2</li></ul>',
     '<input type="checkbox" checked>',
-    '<img src="data:image/png;base64,abc" alt="test">',
+    '<img src="/img/00000000-0000-0000-0000-000000000000.png" alt="test">',
     '<iframe src="https://example.com" width="560" height="315"></iframe>',
     '<ul><li><b>bold item</b></li></ul>',
     'Hello world',
@@ -60,6 +60,10 @@ describe('sanitizeHtml（サーバー側で厳しくしている点）', () => {
     // 相対 URL と許可したスキームは残す
     ['<a href="/p/memo">x</a>', '<a href="/p/memo">x</a>'],
     ['<a href="mailto:a@example.com">x</a>', '<a href="mailto:a@example.com">x</a>'],
+    ['<a href="tel:+81-3-0000-0000">x</a>', '<a href="tel:+81-3-0000-0000">x</a>'],
+    // 画像は R2 に置く。data URL は受け付けない（wema は許可している）
+    ['<img src="data:image/png;base64,abc" alt="test">', '<img alt="test">'],
+    ['<video src="data:video/mp4;base64,abc"></video>', '<video></video>'],
     ['<a href="https://example.com/?a=1&amp;b=2">x</a>', '<a href="https://example.com/?a=1&amp;b=2">x</a>'],
   ])('%s → %s', async (html, expected) => {
     expect(await sanitizeHtml(html)).toBe(expected);

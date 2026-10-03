@@ -18,7 +18,7 @@
     "url": "git+https://github.com/kan/wema-kake.git"
   },
   "dependencies": {
-    "@kanf/wema": "^0.3.3",
+    "@kanf/wema": "^0.4.0",
     "hono": "^4.13.12",
     "jose": "^6.2.12"
   },

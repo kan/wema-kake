@@ -17,26 +17,6 @@ export interface Skipped {
   reason: 'modified' | 'connected' | 'deleted' | 'exists' | 'endpoint-missing';
 }
 
-/** 操作を打ち消すデルタ。逆順にし、作成と削除、before と after を入れ替える */
-export function invertDeltas(deltas: HistoryDelta[]): HistoryDelta[] {
-  return [...deltas].reverse().map((d): HistoryDelta => {
-    switch (d.type) {
-      case 'note:create':
-        return { type: 'note:delete', note: d.note };
-      case 'note:delete':
-        return { type: 'note:create', note: d.note };
-      case 'edge:create':
-        return { type: 'edge:delete', edge: d.edge };
-      case 'edge:delete':
-        return { type: 'edge:create', edge: d.edge };
-      case 'note:update':
-        return { type: d.type, noteId: d.noteId, before: d.after, after: d.before };
-      case 'edge:update':
-        return { type: d.type, edgeId: d.edgeId, before: d.after, after: d.before };
-    }
-  });
-}
-
 /**
  * 更新の取り消しのうち、現在値が「取り消す操作が書いた値」のままのキーだけを残す。
  * `expected` は取り消す操作が書いた値、`restore` は戻す値。キーがないことは未設定を表す。

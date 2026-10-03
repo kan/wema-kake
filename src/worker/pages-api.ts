@@ -28,6 +28,9 @@ export const validSlug = createMiddleware<AuthEnv>(async (c, next) => {
 
 export const pagesApi = new Hono<AuthEnv>();
 
+/** 認証が有効かを確かめるための、軽い問い合わせ先（切断中に認証が切れたかをブラウザが調べる） */
+pagesApi.get('/session', (c) => c.json({ actor: c.get('actor') }));
+
 /** ページ一覧。`updated_after`（ミリ秒）より後に更新されたものに絞れる */
 pagesApi.get('/pages', async (c) => {
   const limit = clampLimit(c.req.query('limit'), DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT);

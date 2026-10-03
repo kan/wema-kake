@@ -1,4 +1,5 @@
 import type { BoardData, HistoryDelta, WemaEdge, WemaNote } from '../shared/delta';
+import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import { sanitizeHtml } from './sanitize';
 import { type Obj, RejectError, REQUIRED_EDGE_FIELDS } from './validate';
 
@@ -178,7 +179,7 @@ export function applyDeltas(
           d.before.text !== cur.text &&
           cleanBefore?.get(d) !== cur.text
         ) {
-          throw new RejectError('text conflict', { notes: [readNote(sql, d.noteId)!], edges: [] });
+          throw new RejectError(REASON_TEXT_CONFLICT, { notes: [readNote(sql, d.noteId)!], edges: [] });
         }
         const changed = keys.filter((k) => next[k] !== cur[k]);
         if (changed.length === 0) break;

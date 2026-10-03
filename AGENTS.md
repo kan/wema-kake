@@ -152,6 +152,7 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 
 | メソッドとパス | 内容 |
 | --- | --- |
+| `GET /api/session` | 認証が有効かの確認用。`{ "actor": "user:<email>" }` を返す |
 | `GET /api/pages?limit=&updated_after=` | ページ一覧（D1）。更新の新しい順 |
 | `GET /api/search?q=` | 全文検索（D1）。3 文字以上は FTS、3 文字未満は LIKE |
 | `GET /api/pages/<slug>` | スナップショット（`seq`、`title`、付箋と接続線） |
@@ -204,7 +205,7 @@ type ServerMsg =
   | { type: 'ops'; seq: number; actor: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
       reverts?: number;           // 取り消しなら、取り消した対象の seq（「取り消し」の節を参照）
       fixups?: HistoryDelta[] }   // fixups は送信元にだけ付ける（後述）
-  | { type: 'reject'; opId: string; reason: string; current?: { notes: WemaNote[]; edges: WemaEdge[] } }
+  | { type: 'reject'; opId: string; reason: string; fixups?: HistoryDelta[] }   // fixups はサーバーの現在値に合わせるデルタ
   | { type: 'preview'; clientId: string; noteId: string; x?: number; y?: number; width?: number; height?: number }
   | { type: 'presence'; clientId: string; selection: string[]; editing?: string };
 ```
@@ -219,7 +220,12 @@ type ServerMsg =
   - `hello` を送るまでは配信の対象にならず、`ops` を送ると接続を閉じられる
   - 再接続したクライアントは、確定を受け取っていない `ops` を同じ `opId` で送り直してよい（適用済みなら記録済みの結果が返る）
 - 確定した変更は送信元も含めた全員に `ops` として配信する。送信元は自分の `opId` が返ってきたことを確定（ack）とみなす
-- クライアントは wema の `history:commit` を `ops` として送り、受信した `ops` は `applyRemote()` で適用する（自分の `opId` のものは適用済みなのでスキップ）
+- クライアントは wema の `history:commit` を `ops` として送り、受信した `ops` は `applyRemote()` で適用する（自分の `opId` のものは適用済みなのでスキップ）。実装は `src/web/sync.ts` の `BoardSync`。DOM に依存させず、ボードとソケットを引数で受け取る形にしてあり、`test/sync.test.ts` が実際の Worker と DO に接続して動かす
+- 切断中の操作は手元にためておき、再接続後に同じ `opId` で送る。スナップショットでボード全体を入れ替えた後に自分の操作の確定が届いたら、サーバーが適用した `deltas` を手元にも適用する（入れ替えで手元から消えているため）
+- `reject` を受けたら、手元に適用済みの変更を逆向きのデルタで巻き戻し、`fixups` を適用し、その上に後続の未確定の操作を適用し直す
+- サーバーで確定した変更を手元に適用するときは、同じ付箋や接続線への未確定の変更を、その上に適用し直す。未確定の操作はサーバーでは後から適用されて後勝ちで残るので、手元の表示もそれに合わせる
+- 接続に失敗したら `GET /api/session` で認証を確かめ、切れていれば再読み込みする（切断中に認証が切れた場合、接続の失敗からは理由が分からないため）
+- 定数（閉じるコード 4401、`ping` / `pong`、`reject` の理由 `text conflict`）は `src/shared/protocol.ts` に置き、サーバーとブラウザの両方から使う
 - 配信する `deltas` は、サーバーが実際に適用したもの。更新の `before` と削除対象の内容はサーバーの保存値で置き換えてある。サーバーが変えた分（サニタイズで変わった text、付箋の削除に伴ってサーバーが足した接続線の削除）は `fixups` に入れ、**送信元は自分の `opId` の `ops` を受けたとき `fixups` だけを `applyRemote()` する**
 - 更新の `after` にキーがなく `before` にあるものは「未設定に戻す」を表す（wema は `collapsed: undefined` で折り畳みを解くが、値が `undefined` のキーは JSON で消えるため）。**送受信の両側でこの規則を守ること**
 - 対象がすでにない更新と削除は、拒否せずにそのデルタだけ捨てる。全部捨てた場合 `seq` は進まない
@@ -237,7 +243,7 @@ wema はドラッグ・リサイズ中も pointermove ごとに `note:update` �
 DO で書き込みは直列化されるので、基本はフィールド単位の後勝ち。
 
 - `note:update` の `after` に `text` を含む場合のみ、サーバーの現在値が `before.text` と一致するか確認し、不一致なら `reject` する（MCP 経由でも同じ）
-- `reject` を受けたクライアントは `current` を `applyRemote()` で反映し、楽観的に適用した変更を戻す
+- `reject` を受けたクライアントは、楽観的に適用した変更を戻し、`fixups`（サーバーの現在値に合わせるデルタ）を `applyRemote()` で反映する
 - Undo 履歴はブラウザごとのローカルのもの。他人や agent の変更後に Undo しても、text なら同じ `before` チェックで `reject` されるだけなので特別扱いしない
 - `edge:update` の from/to は wema でも変更不可。サーバーでも無視する
 - `note:update` に zIndex が含まれていても保存しない
@@ -311,7 +317,7 @@ WebMCP 版はブラウザ内で wema の API を直接呼ぶので、LLM の変�
   - テキスト中のエンティティ（`&lt;` など）は復号も再エスケープもされず、入力のまま出力される
   - 要素の外にあるコメントは `on('*')` の `comments` では届かない。`onDocument` の `comments` で除去する
 - 複数人で使う段階では iframe の src を wema の埋め込み変換対象ドメイン（YouTube / Vimeo / Spotify / Google Slides / Google Maps / X / Bluesky）に限定する
-- 画像は `onImageUpload` で R2 に上げ、text には URL だけを入れる。data URL の画像は受け付けない（サイズ上限の問題があるため）
+- 画像は `onImageUpload` で R2 に上げ、text には URL だけを入れる。data URL の画像は受け付けない（サイズ上限の問題があるため）。wema のサニタイザは画像などの `data:` URL を許可するが、サーバーのサニタイザは除去する。URL のスキームの許可リスト（`http` / `https` / `mailto` / `tel`）は wema と同じにしてある
 - ボードの内容は LLM に渡る。付箋に書かれた指示文（プロンプトインジェクション）で agent が意図しない削除をする可能性があるため、取り消し機能を必ず用意し、削除系ツールの扱いは運用しながら見直す
 
 ## 未決定事項
@@ -332,7 +338,7 @@ WebMCP 版はブラウザ内で wema の API を直接呼ぶので、LLM の変�
 wema-kake の同期と LLM 連携は以下の wema の機能追加が前提。未実装なら wema（github.com/kan/wema）に issue を立ててから進めること。
 issue は下記を 1 つのまとめ issue として立て、各項目をチェックリストにする。autoSize のバグは性質が違うので別 issue にする。
 
-issue は 2026-10-03 に作成済み。**進捗と最新の内容は issue を正とする**（下の下書きは作成時点の写し）。
+issue は 2026-10-03 に作成済み。**どちらも wema v0.4.0 で対応済み**（wema-kake は `^0.4.0` を使う）。下の下書きは作成時点の写しで、実際の API は wema の README を正とする。
 
 - まとめ issue: https://github.com/kan/wema/issues/50
 - autoSize のバグ: https://github.com/kan/wema/issues/51
