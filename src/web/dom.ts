@@ -1,3 +1,5 @@
+import { internalUrl } from './links';
+
 type Child = Node | string | null | undefined | false;
 
 /** 要素を作る。`props` は要素のプロパティ（className、textContent、onclick など） */
@@ -20,9 +22,9 @@ export function el<K extends keyof HTMLElementTagNameMap>(
  */
 export function openInternalLink(url: string, event: MouseEvent): boolean {
   if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return false;
-  const target = new URL(url);
-  if (target.origin !== location.origin) return false;
-  location.assign(target.pathname + target.search + target.hash);
+  const target = internalUrl(url, location.origin);
+  if (target === null) return false;
+  location.assign(target);
   return true;
 }
 
