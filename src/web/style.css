@@ -35,6 +35,5 @@ body { font-family: system-ui, sans-serif; font-size: 14px; }
 
 .new-page { display: flex; align-items: center; gap: 4px; font-size: 12px; }
 .index-search { width: 16em; }
-/* 仮の対処（index-view.ts の fitCanvasToNotes）: ボードを置く要素を外側でスクロールさせる */
-.index-scroll { flex: 1; min-height: 0; overflow: auto; }
+.index-canvas { flex: 1; min-height: 0; }
 .index-canvas .empty { padding: 12px; }

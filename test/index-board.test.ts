@@ -87,7 +87,8 @@ describe('buildIndexBoard', () => {
   });
 
   it('相互リンクだけでつながったページ群にも位置を付け、重ねない', () => {
-    // a → b は起点（a）がある。c ⇄ d は起点がなく、自動レイアウトが位置を返さない
+    // a → b は起点（a）がある。c ⇄ d は起点がない（wema 0.5.0 は、この組み合わせで c と d の
+    // 位置を返さなかった。0.6.0 では返る）
     const pages = ['a', 'b', 'c', 'd'].map((name) => page(name));
     const { data } = build(pages, [link('a', 'b'), link('c', 'd'), link('d', 'c')]);
     const positions = data.notes.map((n) => `${n.x},${n.y}`);

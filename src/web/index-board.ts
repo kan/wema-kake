@@ -91,9 +91,8 @@ export function buildIndexBoard(
     bottom += GAP;
   }
 
-  // 残りのページを、その下に並べる。つながりのないページのほか、自動レイアウトが位置を
-  // 返さなかったページも含む（相互リンクだけでつながったページ群は、起点になるページが
-  // 他にあると位置が返らない）
+  // 残りのページ（つながりのないページ）を、その下に並べる。自動レイアウトが位置を
+  // 返さなかったページがあっても、ここで置くので重ならない
   const columns = Math.max(1, Math.floor((viewportWidth - MARGIN * 2 + GAP) / (NOTE_WIDTH + GAP)));
   const top = bottom;
   let index = 0;

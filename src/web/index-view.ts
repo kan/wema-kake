@@ -1,6 +1,6 @@
 // 一覧の画面（/）。ページの一覧を wema のボードで表す（docs/plan.md の 3.7 節）。
 // ページ 1 つが付箋 1 枚、ページ間のリンクが接続線。検索は、一致するページの付箋だけを残す。
-import { WemaBoard, type WemaNote } from '@kanf/wema';
+import { WemaBoard } from '@kanf/wema';
 import { MAX_QUERY_LENGTH, MAX_TITLE_LENGTH } from '../shared/api';
 import { isValidSlug } from '../shared/slug';
 import * as api from './api';
@@ -60,23 +60,6 @@ function newPageForm(): HTMLFormElement {
   return form;
 }
 
-/** fitCanvasToNotes で、付箋の外側に空ける余白 */
-const CANVAS_MARGIN = 40;
-
-/**
- * 仮の対処。wema にはまだスクロールもパンもなく、ボードは置いた要素の大きさに固定される。
- * 表示領域からはみ出した付箋に届くよう、ボードを置く要素を付箋の範囲と同じ大きさにして、
- * 外側の要素（.index-scroll）をスクロールさせる。
- *
- * wema にパンが入ったら（kan/wema#52）、この関数と .index-scroll の入れ子、対応する CSS を外す。
- */
-function fitCanvasToNotes(canvas: HTMLElement, scroller: HTMLElement, notes: WemaNote[]): void {
-  const right = Math.max(0, ...notes.map((n) => n.x + n.width)) + CANVAS_MARGIN;
-  const bottom = Math.max(0, ...notes.map((n) => n.y + n.height)) + CANVAS_MARGIN;
-  canvas.style.width = `${Math.max(right, scroller.clientWidth)}px`;
-  canvas.style.height = `${Math.max(bottom, scroller.clientHeight)}px`;
-}
-
 export function openIndex(app: HTMLElement): void {
   document.title = 'wema-kake';
 
@@ -88,9 +71,8 @@ export function openIndex(app: HTMLElement): void {
     value: new URLSearchParams(location.search).get('q') ?? '',
   });
   const count = el('span', { className: 'sync-status' });
-  // 仮の対処（fitCanvasToNotes を参照）のために、ボードを置く要素をスクロールする要素で包む
+  // ボードを置く要素。大きさは表示領域に固定し、はみ出した付箋へは wema のパンで移動する
   const canvas = el('div', { className: 'index-canvas' });
-  const scroller = el('div', { className: 'index-scroll' }, canvas);
   app.append(
     el(
       'header',
@@ -101,7 +83,7 @@ export function openIndex(app: HTMLElement): void {
       el('span', { className: 'spacer' }),
       newPageForm(),
     ),
-    scroller,
+    canvas,
   );
 
   let board: WemaBoard | undefined;
@@ -122,12 +104,19 @@ export function openIndex(app: HTMLElement): void {
     const total = index.data.notes.length;
     if (q === '') {
       board.setNoteFilter(null);
+      // 開いたときと同じ表示位置へ戻す（配置は、この位置で幅に収まるように組んである）
+      board.setViewport({ x: 0, y: 0 });
       count.textContent = `${total} ページ`;
       return;
     }
-    const show = (matched: Set<string>, note = '') => {
-      board?.setNoteFilter([...matched]);
+    const showCount = (matched: Set<string>, note = '') => {
       count.textContent = `${matched.size} / ${total} ページ${note}`;
+    };
+    const show = (matched: Set<string>) => {
+      board?.setNoteFilter([...matched]);
+      // 付箋の位置は変えず、残った付箋が見える位置へ表示を寄せる
+      board?.centerContent();
+      showCount(matched);
     };
     // 表示名とスラッグは手元で照合し、すぐに反映する
     // （未作成のページは検索の索引にないので、これだけで判定する）
@@ -141,10 +130,12 @@ export function openIndex(app: HTMLElement): void {
       const names = await api.searchPages(q);
       // 待っている間に検索語が変わっていたら、古い結果は使わない
       if (request !== latest) return;
+      const before = matched.size;
       for (const name of names) if (index.searchText.has(name)) matched.add(name);
-      show(matched);
+      // 一致が増えたときだけ、絞り込みと表示位置をやり直す（待つ間に動かした表示位置を戻さない）
+      if (matched.size !== before) show(matched);
     } catch (e) {
-      if (request === latest) show(matched, `（本文の検索に失敗しました: ${errorMessage(e)}）`);
+      if (request === latest) showCount(matched, `（本文の検索に失敗しました: ${errorMessage(e)}）`);
     }
   };
 
@@ -161,9 +152,9 @@ export function openIndex(app: HTMLElement): void {
         canvas.append(el('p', { className: 'empty', textContent: 'まだページがありません' }));
         return;
       }
-      index = buildIndexBoard(pages, links, scroller.clientWidth, formatDate);
-      fitCanvasToNotes(canvas, scroller, index.data.notes);
-      // 参照モード: 編集の UI は出ず、付箋はドラッグできるが、保存はしない
+      index = buildIndexBoard(pages, links, canvas.clientWidth, formatDate);
+      // 参照モード: 編集の UI は出ず、付箋はドラッグできるが、保存はしない。
+      // 空いている場所のドラッグとホイールで、表示位置を動かせる
       board = new WemaBoard({
         container: canvas,
         data: index.data,
