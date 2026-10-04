@@ -80,6 +80,31 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
    これがないと、ヘッダーのパネルや通知の上に出る */
 .board { flex: 1; min-width: 0; isolation: isolate; }
 
+/* パンくず（ルートから親までの道筋） */
+.crumbs { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #999; min-width: 0; flex: 0 1 auto; overflow: hidden; }
+.crumbs:empty { display: none; }
+.crumbs a { color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 12em; }
+
+/* 子ページの付箋（child-notes.ts）。本文の代わりに、子ページの概要を出す */
+/* wema の .wema-note-custom の指定（display: block）より優先させるため、付箋の要素から書く */
+.wema-note .child-note {
+  display: flex; flex-direction: column; gap: 4px; box-sizing: border-box;
+  padding: 6px 12px 12px; overflow: hidden;
+}
+.child-title { font-weight: bold; color: #1d4ed8; overflow-wrap: anywhere; flex: none; }
+.child-meta { font-size: 11px; color: #666; flex: none; }
+/* 子ページの付箋の配置の、簡易な再現 */
+.child-layout {
+  flex: 1; min-height: 0; width: 100%; border-radius: 4px;
+  background: rgb(255 255 255 / 0.6); border: 1px solid rgb(0 0 0 / 0.12);
+}
+.child-layout rect { stroke: rgb(0 0 0 / 0.25); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+
+/* 子ページを置くための入力欄 */
+.child-form { display: flex; flex-direction: column; }
+.child-form .new-page + .new-page { border-top: 1px solid #e5e5e5; }
+.child-form .form-error { padding: 0 8px 8px; font-size: 12px; }
+
 /* 一時的な通知。ボードの上に重ねて出す */
 .toast {
   position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 900;

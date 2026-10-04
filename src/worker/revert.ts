@@ -1,7 +1,7 @@
 // 記録済みの操作の取り消し。逆向きのデルタを作り、取り消してよいものだけを適用する。
 import type { Skipped } from '../shared/api';
 import type { HistoryDelta } from '../shared/delta';
-import { applyDeltas, exists, readEdge, readNote, readNoteFields } from './apply-ops';
+import { applyDeltas, exists, readEdge, readNote, readNoteFields, sameNoteValue } from './apply-ops';
 import type { Obj } from './validate';
 
 /**
@@ -27,10 +27,6 @@ function unchangedKeys(
   }
   return { before, after, conflicted };
 }
-
-/** autoSize は「未設定」と false が同じ意味 */
-const sameNoteValue = (key: string, a: unknown, b: unknown) =>
-  key === 'autoSize' ? (a === true) === (b === true) : a === b;
 
 const sameEdgeValue = (_key: string, a: unknown, b: unknown) => a === b;
 

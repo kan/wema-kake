@@ -28,6 +28,12 @@ export function openInternalLink(url: string, event: MouseEvent): boolean {
   return true;
 }
 
+/** スラッグの初期値。短い乱数（小文字の英数字） */
+export function randomSlug(): string {
+  const bytes = crypto.getRandomValues(new Uint8Array(6));
+  return [...bytes].map((b) => (b % 36).toString(36)).join('');
+}
+
 /** ページの削除を確かめる（ページの画面と一覧の画面で、同じ文言を出す） */
 export function confirmDeletePage(name: string): boolean {
   return confirm(`ページ「${name}」を削除します。付箋と履歴がすべて消え、取り消しはできません。`);

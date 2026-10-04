@@ -11,13 +11,32 @@ import {
 } from '../shared/protocol';
 import type { BoardState } from '../shared/tools';
 import {
+  type ChildRejectCode,
+  childPageOf,
+  childRejection,
+  MAX_DEPTH,
+  placedPages,
+  touchesChildren,
+} from '../shared/hierarchy';
+import {
   applyDeltas,
+  childPages,
   readBoard,
   readBoardWithAuthors,
+  readNotes,
   type Sanitized,
   sanitizeDeltas,
 } from './apply-ops';
-import { buildPageContent, contentHash, removePage, touchPage, writePage } from './indexer';
+import {
+  buildLayout,
+  buildPageContent,
+  contentHash,
+  indexedChildren,
+  type PageRow,
+  removePage,
+  touchPage,
+  writePage,
+} from './indexer';
 import { applyRevert } from './revert';
 import { SanitizeError } from './sanitize';
 import {
@@ -188,6 +207,9 @@ export class PageDO extends DurableObject<Env> {
   /** 実行中、または順番を待っている削除の数 */
   private deleting = 0;
 
+  /** 今まさに子にしようとしているページ（adoptChildren の実行中）。互いを同時に子にするのを断る */
+  private adopting = new Set<string>();
+
   /** 処理中の applyOps。次の呼び出しはこれが終わってから始める */
   private applyQueue: Promise<unknown> = Promise.resolve();
 
@@ -299,6 +321,211 @@ export class PageDO extends DurableObject<Env> {
     return { ok: true, title };
   }
 
+  // --- 階層（src/shared/hierarchy.ts） ---
+  //
+  // 子ページの付箋は親ページの DO にあり、「親は誰か」は子ページの DO にある（meta の parent）。
+  // 正とするのは、子ページの側。親ページの DO は、子ページの付箋を作るデルタを適用する前に、
+  // 子ページの DO へ setParent を呼ぶ。断られたら、デルタを拒否する。
+  //
+  // setParent / clearParent / getPageRef は、書き込みの順番待ちに入れない。親ページの DO が
+  // 順番待ちの中から呼ぶので、入れると、互いを待って止まることがある。
+
+  /**
+   * 親をたどるための情報と、付箋の数。ページがなければ null。
+   * 索引（D1）への反映を待たずに読めるので、作ったばかりのページの概要にも使う
+   */
+  getPageRef(): { title: string | null; parent: string | null; noteCount: number } | null {
+    if (this.version === 0) return null;
+    const noteCount = this.sql.exec(`SELECT count(*) AS n FROM notes`).one().n as number;
+    return { title: this.getMeta('title'), parent: this.getMeta('parent'), noteCount };
+  }
+
+  /** このページを `parent` の子にする。すでに別の親があるか、輪になるなら、理由を返す。置けたら null */
+  setParent(parent: string): ChildRejectCode | null {
+    if (this.version === 0 || this.deleting > 0) return 'not-found';
+    const current = this.getMeta('parent');
+    if (current !== null && current !== parent) return 'other-parent';
+    // 相手を自分の子にしている（または、今まさに子にしようとしている）なら、輪になる
+    if (this.adopting.has(parent) || childPages(this.sql).has(parent)) return 'ancestor';
+    if (current === null) {
+      this.setMeta('parent', parent);
+      this.scheduleIndexing();
+    }
+    return null;
+  }
+
+  /** `parent` の子であれば、ルートへ戻す */
+  clearParent(parent: string): void {
+    if (this.version === 0 || this.getMeta('parent') !== parent) return;
+    this.setMeta('parent', null);
+    this.scheduleIndexing();
+  }
+
+  /** このページのスラッグ */
+  private slug(): string {
+    const slug = (this.version > 0 ? this.getMeta('slug') : null) ?? this.ctx.id.name;
+    if (!slug) throw new Error('page slug is not available in the Durable Object');
+    return slug;
+  }
+
+  /** 先祖のページ（親、その親、…の順）。上限を超えてたどらない。パンくずと、輪の検査に使う */
+  async ancestors(): Promise<{ name: string; title: string | null }[]> {
+    if (this.version === 0) return [];
+    const found: { name: string; title: string | null }[] = [];
+    for (let name = this.getMeta('parent'); name !== null && found.length < MAX_DEPTH; ) {
+      const ref = await this.env.PAGE.getByName(name).getPageRef();
+      found.push({ name, title: ref?.title ?? null });
+      name = ref?.parent ?? null;
+    }
+    return found;
+  }
+
+  /**
+   * `wanted`（新しく置こうとしている子ページ）を、このページの子にする。
+   * 置けないものが 1 つでもあれば、すべて取りやめて、理由を返す。置けたら null を返す
+   */
+  private async adoptChildren(wanted: string[]): Promise<string | null> {
+    const slug = this.slug();
+    if (wanted.includes(slug)) return childRejection('self', slug);
+    /** 先祖の中に、置こうとしているページがあれば、輪になる */
+    const loop = (ancestors: { name: string }[]) => {
+      const page = wanted.find((name) => ancestors.some((ancestor) => ancestor.name === name));
+      return page === undefined ? null : childRejection('ancestor', page);
+    };
+    let done = false;
+    wanted.forEach((page) => this.adopting.add(page));
+    try {
+      const ancestors = await this.ancestors();
+      const looped = loop(ancestors);
+      if (looped !== null) return looped;
+      for (const page of wanted) {
+        // 置いた後の最も深い段が、上限を超えないこと。置かれる側に、残りの段数に収まるかを聞く
+        const fits = await this.env.PAGE.getByName(page).fitsWithin(MAX_DEPTH - ancestors.length - 1);
+        if (!fits) return childRejection('too-deep', page);
+      }
+      for (const page of wanted) {
+        const code = await this.env.PAGE.getByName(page).setParent(slug);
+        if (code !== null) return childRejection(code, page);
+      }
+      // 子にした後で、先祖をたどり直す。上の検査の後に、他のページで同時に置く操作があると、
+      // 3 ページ以上の輪ができることがある（相手も同じ検査をするので、少なくとも片方は取りやめる）
+      const loopedNow = loop(await this.ancestors());
+      if (loopedNow !== null) return loopedNow;
+      done = true;
+      return null;
+    } finally {
+      wanted.forEach((page) => this.adopting.delete(page));
+      if (!done) {
+        // 取りやめたら、すべて戻す。setParent が済んだのに応答が届かなかった分も含める
+        // （clearParent は、親がこのページのときだけ消すので、済んでいない分に呼んでも害はない）
+        await this.releaseOrphans(wanted);
+        // 戻しきれなかった分は、次の索引の更新で直す
+        this.scheduleIndexing();
+      }
+    }
+  }
+
+  /**
+   * このページを根とする部分木が、`levels` 段に収まるか。子ページの DO を順にたどるので、
+   * 直前の変更も反映される（D1 の索引は、変更の数秒後にしか反映されない）
+   */
+  async fitsWithin(levels: number): Promise<boolean> {
+    if (levels < 1) return false;
+    if (this.version === 0) return true;
+    for (const child of childPages(this.sql)) {
+      if (!(await this.env.PAGE.getByName(child).fitsWithin(levels - 1))) return false;
+    }
+    return true;
+  }
+
+  /**
+   * `candidates` のうち、子ページの付箋がもうないページを、ルートへ戻す。
+   * 失敗しても、書き込みは取り消さない。食い違いは、次の索引の更新（reconcileChildren）で直す
+   */
+  private async releaseOrphans(candidates: Iterable<string>): Promise<void> {
+    if (this.version === 0) return;
+    const placed = childPages(this.sql);
+    const slug = this.slug();
+    for (const page of new Set(candidates)) {
+      if (placed.has(page)) continue;
+      try {
+        await this.env.PAGE.getByName(page).clearParent(slug);
+      } catch (e) {
+        console.error('failed to release a child page', page, e);
+      }
+    }
+  }
+
+  /**
+   * 子ページの付箋の増減を伴う書き込みを行う。`run` の前に、新しく置く子ページを子にし、
+   * 後に、付箋がなくなった子ページをルートへ戻す。置けなければ、`run` を呼ばずに `rejected` を返す
+   */
+  private async withChildren<T>(
+    deltas: HistoryDelta[],
+    run: () => T,
+    rejected: (reason: string) => T,
+  ): Promise<T> {
+    // 付箋の移動、本文の編集、接続線の操作では、子ページの集合は変わらない。何も調べずに進める
+    if (!touchesChildren(deltas)) return run();
+    const before = childPages(this.sql);
+    const wanted = placedPages(deltas).filter((page) => !before.has(page));
+    const reason = wanted.length > 0 ? await this.adoptChildren(wanted) : null;
+    if (reason !== null) return rejected(reason);
+    try {
+      return run();
+    } finally {
+      await this.releaseOrphans([...before, ...wanted]);
+    }
+  }
+
+  /**
+   * ページを削除する前に、階層から外す。親ページにある自分の付箋を消し、子ページはルートへ戻す
+   * （子孫ごとの削除はしない）。失敗しても削除は続ける。残った食い違いは、付箋の側が
+   * 「削除済み」と表示され、親ページの索引の更新（reconcileChildren）でも直る
+   */
+  private async detachFromHierarchy(slug: string, actor: string): Promise<void> {
+    const parent = this.getMeta('parent');
+    // 1 つの失敗で、残りを飛ばさない。子ページの側は、親がなくなっていれば、次の索引の更新で
+    // 自分でルートへ戻る（healParent）
+    const attempt = async (what: string, run: () => Promise<unknown>) => {
+      try {
+        await run();
+      } catch (e) {
+        console.error(`failed to detach a deleted page from the hierarchy (${what})`, slug, e);
+      }
+    };
+    if (parent !== null) {
+      await attempt(`parent ${parent}`, () => this.env.PAGE.getByName(parent).removeChildNotes(slug, actor));
+    }
+    for (const child of childPages(this.sql)) {
+      await attempt(`child ${child}`, async () => {
+        const stub = this.env.PAGE.getByName(child);
+        await stub.clearParent(slug);
+      });
+    }
+  }
+
+  /**
+   * 子ページ `page` の付箋を、このページから消す（子ページが削除されたとき）。
+   * 付箋の削除として記録するので、開いているブラウザにも届く
+   */
+  removeChildNotes(page: string, actor: string): Promise<void> {
+    // 付箋を読むのは、順番待ちに入ってから。置いている途中の付箋（setParent は済んだが、
+    // まだ書き込んでいない）を取りこぼさないため
+    return this.write(async () => {
+      if (this.version === 0) return;
+      const notes = readBoard(this.sql).notes.filter((note) => childPageOf(note) === page);
+      if (notes.length === 0) return;
+      await this.applyOpsInOrder({
+        actor,
+        clientId: 'system',
+        opId: crypto.randomUUID(),
+        deltas: notes.map((note): HistoryDelta => ({ type: 'note:delete', note })),
+        summary: `子ページ ${page} の削除`,
+      });
+    }, undefined);
+  }
+
   /**
    * ページを新しく作る。すでにあれば何もしない（既存のページの表示名を書き換えない）。
    * 付箋を書き込めばページはできるので、これは表示名だけのページを先に作るためのもの。
@@ -317,16 +544,16 @@ export class PageDO extends DurableObject<Env> {
    * ページを削除する。付箋、接続線、履歴、表示名と、D1 の索引を消す。取り消しはできない。
    * 貼った画像は R2 に残る（どのページの画像かを記録していない）。
    */
-  deletePage(): Promise<void> {
+  deletePage(actor = 'system'): Promise<void> {
     // 順番を待っている書き込みと、削除の途中で届く書き込みは、削除の後に実行させない
     // （実行すると、消したページが作り直されてしまう）
     this.deleting++;
     return this.inOrder(async () => {
       try {
-        const slug = (this.version > 0 ? this.getMeta('slug') : null) ?? this.ctx.id.name;
-        if (!slug) throw new Error('page slug is not available in the Durable Object');
+        const slug = this.slug();
         // 索引を先に消す。ここで失敗したら、ページの内容は残っているので、やり直せる
         await removePage(this.env.DB, slug);
+        if (this.version > 0) await this.detachFromHierarchy(slug, actor);
         await this.ctx.storage.deleteAlarm();
         await this.ctx.storage.deleteAll();
         this.version = 0;
@@ -387,22 +614,48 @@ export class PageDO extends DurableObject<Env> {
   }
 
   private async reindex(now: number): Promise<void> {
-    const slug = this.getMeta('slug');
-    if (!slug) throw new Error('page slug is not saved in the Durable Object');
+    const slug = this.slug();
     const title = this.getMeta('title');
-    const texts = this.sql
-      .exec(`SELECT text FROM notes ORDER BY rowid`)
-      .toArray()
-      .map((row) => row.text as string);
+    const notes = readNotes(this.sql);
+    const row: PageRow = {
+      title,
+      parent: this.getMeta('parent'),
+      layout: buildLayout(notes),
+      noteCount: notes.length,
+      now,
+    };
 
-    const content = await buildPageContent(slug, texts, this.env.SITE_ORIGIN);
+    const content = await buildPageContent(slug, notes.map((note) => note.text), this.env.SITE_ORIGIN);
     const hash = await contentHash(title, content);
     // 付箋の移動や色の変更では、検索とリンクに関わる内容は変わらない。そのときは全文検索と
     // リンクの索引を書き直さない（ページの行が D1 にないときは作り直す）
     const unchanged = hash === this.getMeta('index_hash');
-    if (unchanged && (await touchPage(this.env.DB, slug, texts.length, now))) return;
-    await writePage(this.env.DB, slug, title, content, texts.length, now);
-    this.setMeta('index_hash', hash);
+    if (!unchanged || !(await touchPage(this.env.DB, slug, row))) {
+      await writePage(this.env.DB, slug, content, row);
+      this.setMeta('index_hash', hash);
+    }
+    const placed = new Set(notes.map(childPageOf).filter((page) => page !== undefined));
+    await this.reconcileChildren(slug, placed);
+    await this.healParent(row.parent);
+  }
+
+  /**
+   * 親ページがもうなければ、ルートへ戻る。親ページの削除のときに、clearParent が届かなかった場合に
+   * 効く（そのままだと、存在しない親を指したままで、一覧に出ない）。次の索引の更新で、D1 にも反映する
+   */
+  private async healParent(parent: string | null): Promise<void> {
+    if (parent === null || (await this.env.PAGE.getByName(parent).getPageRef()) !== null) return;
+    this.setMeta('parent', null);
+    this.scheduleIndexing();
+  }
+
+  /**
+   * 索引の上ではこのページの子なのに、子ページの付箋がないページを、ルートへ戻す。
+   * 付箋を消した後の clearParent が失敗した場合の、食い違いを直す
+   */
+  private async reconcileChildren(slug: string, placed: Set<string>): Promise<void> {
+    const stale = (await indexedChildren(this.env.DB, slug)).filter((page) => !placed.has(page));
+    for (const page of stale) await this.env.PAGE.getByName(page).clearParent(slug);
   }
 
   /**
@@ -508,26 +761,29 @@ export class PageDO extends DurableObject<Env> {
       };
     }
 
-    let deliver: (() => void) | undefined;
-    try {
-      const result = this.ctx.storage.transactionSync((): ApplyResult => {
-        const now = Date.now();
-        const applied = applyDeltas(this.sql, deltas, input.actor, now, sanitized.cleanBefore);
-        const fixups = [...sanitized.fixups, ...applied.fixups];
-        if (applied.deltas.length === 0) {
-          return { ok: true, seq: this.getSeq(), deltas: [], fixups, broadcast: false };
-        }
-        const recorded = this.recordOp(input, applied.deltas, fixups, now);
-        deliver = recorded.deliver;
-        return { ok: true, seq: recorded.seq, deltas: applied.deltas, fixups, broadcast: true };
-      });
-      // トランザクションが確定してから配信する。保存と同じ同期の区間なので、順序は seq の順になる
-      deliver?.();
-      return result;
-    } catch (e) {
-      if (e instanceof RejectError) return { ok: false, reason: e.message, current: e.current };
-      throw e;
-    }
+    const apply = (): ApplyResult => {
+      let deliver: (() => void) | undefined;
+      try {
+        const result = this.ctx.storage.transactionSync((): ApplyResult => {
+          const now = Date.now();
+          const applied = applyDeltas(this.sql, deltas, input.actor, now, sanitized.cleanBefore);
+          const fixups = [...sanitized.fixups, ...applied.fixups];
+          if (applied.deltas.length === 0) {
+            return { ok: true, seq: this.getSeq(), deltas: [], fixups, broadcast: false };
+          }
+          const recorded = this.recordOp(input, applied.deltas, fixups, now);
+          deliver = recorded.deliver;
+          return { ok: true, seq: recorded.seq, deltas: applied.deltas, fixups, broadcast: true };
+        });
+        // トランザクションが確定してから配信する。保存と同じ同期の区間なので、順序は seq の順になる
+        deliver?.();
+        return result;
+      } catch (e) {
+        if (e instanceof RejectError) return { ok: false, reason: e.message, current: e.current };
+        throw e;
+      }
+    };
+    return this.withChildren(deltas, apply, (reason) => ({ ok: false, reason }));
   }
 
   // --- 取り消しと履歴 ---
@@ -595,28 +851,32 @@ export class PageDO extends DurableObject<Env> {
       // 戻す text も、今のサニタイズの規則を通す
       await sanitizeDeltas(inverse, { cleanBefore: false });
 
-      let deliver: (() => void) | undefined;
-      const result = this.ctx.storage.transactionSync((): RevertResult => {
-        // 対象の状態は、サニタイズを待った後のここで確かめる
-        const op = this.sql.exec(`SELECT actor, reverted_by FROM ops WHERE seq = ?`, target).toArray()[0];
-        if (!op) return notFound();
-        if (op.reverted_by !== null) return fail('conflict', 'already reverted');
-        if (input.ownOnly && op.actor !== actor) return fail('forbidden', 'not your operation');
+      const apply = (): RevertResult => {
+        let deliver: (() => void) | undefined;
+        const result = this.ctx.storage.transactionSync((): RevertResult => {
+          // 対象の状態は、サニタイズを待った後のここで確かめる
+          const op = this.sql.exec(`SELECT actor, reverted_by FROM ops WHERE seq = ?`, target).toArray()[0];
+          if (!op) return notFound();
+          if (op.reverted_by !== null) return fail('conflict', 'already reverted');
+          if (input.ownOnly && op.actor !== actor) return fail('forbidden', 'not your operation');
 
-        const now = Date.now();
-        const { deltas, skipped } = applyRevert(this.sql, inverse, actor, now);
-        if (deltas.length === 0) return { ok: true, seq: null, applied: 0, skipped };
+          const now = Date.now();
+          const { deltas, skipped } = applyRevert(this.sql, inverse, actor, now);
+          if (deltas.length === 0) return { ok: true, seq: null, applied: 0, skipped };
 
-        const summary = input.summary ?? `revert #${target}`;
-        const recorded = this.recordOp({ actor, clientId, opId, summary, reverts: target }, deltas, [], now);
-        // 取り消しを取り消した場合は、元の操作の内容が戻るので、元の操作をもう一度取り消せるようにする
-        this.sql.exec(`UPDATE ops SET reverted_by = NULL WHERE reverted_by = ?`, target);
-        this.sql.exec(`UPDATE ops SET reverted_by = ? WHERE seq = ?`, recorded.seq, target);
-        deliver = recorded.deliver;
-        return { ok: true, seq: recorded.seq, applied: deltas.length, skipped };
-      });
-      deliver?.();
-      return result;
+          const summary = input.summary ?? `revert #${target}`;
+          const recorded = this.recordOp({ actor, clientId, opId, summary, reverts: target }, deltas, [], now);
+          // 取り消しを取り消した場合は、元の操作の内容が戻るので、元の操作をもう一度取り消せるようにする
+          this.sql.exec(`UPDATE ops SET reverted_by = NULL WHERE reverted_by = ?`, target);
+          this.sql.exec(`UPDATE ops SET reverted_by = ? WHERE seq = ?`, recorded.seq, target);
+          deliver = recorded.deliver;
+          return { ok: true, seq: recorded.seq, applied: deltas.length, skipped };
+        });
+        deliver?.();
+        return result;
+      };
+      // 取り消しで子ページの付箋が戻るなら、もう一度子にする。置けなければ、取り消しを断る
+      return await this.withChildren(inverse, apply, (reason) => fail('conflict', reason));
     } catch (e) {
       if (e instanceof RejectError || e instanceof SanitizeError) return fail('invalid', e.message);
       throw e;

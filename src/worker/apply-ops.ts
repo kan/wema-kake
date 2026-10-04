@@ -1,4 +1,5 @@
 import type { BoardData, HistoryDelta, WemaEdge, WemaNote } from '../shared/delta';
+import { CHILD_PAGE_KEY, childPageOf, childRejection } from '../shared/hierarchy';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import type { BoardState } from '../shared/tools';
 import { sanitizeHtml } from './sanitize';
@@ -13,7 +14,38 @@ const NOTE_COLUMNS: Record<string, string> = {
   text: 'text',
   color: 'color',
   autoSize: 'auto_size',
+  // meta は JSON の文字列で保存する。空なら NULL
+  meta: 'extra',
 };
+
+/** meta を、保存する形（JSON の文字列。空なら null）にする。キーは検証のときに並べ替えてある */
+function metaJson(meta: unknown): string | null {
+  return meta && Object.keys(meta).length > 0 ? JSON.stringify(meta) : null;
+}
+
+/**
+ * 付箋のフィールドの値が同じか。autoSize は「未設定」と false が同じ意味。
+ * meta は全体を比べる（キーがないことと、空は同じ）
+ */
+export function sameNoteValue(key: string, a: unknown, b: unknown): boolean {
+  if (key === 'autoSize') return (a === true) === (b === true);
+  if (key === 'meta') return metaJson(a) === metaJson(b);
+  return a === b;
+}
+
+/** 保存した列の値を、付箋のフィールドの値にする */
+function fromColumn(key: string, value: unknown): unknown {
+  if (key === 'autoSize') return Boolean(value);
+  if (key === 'meta') return value === null ? undefined : JSON.parse(value as string);
+  return value;
+}
+
+/** 付箋のフィールドの値を、保存する列の値にする */
+function toColumn(key: string, value: unknown): unknown {
+  if (key === 'autoSize') return value === true ? 1 : 0;
+  if (key === 'meta') return metaJson(value);
+  return value;
+}
 
 function rowToNote(row: Obj): WemaNote {
   const note: WemaNote = {
@@ -27,7 +59,36 @@ function rowToNote(row: Obj): WemaNote {
     zIndex: row.z_index as number,
   };
   if (row.auto_size) note.autoSize = true;
+  if (row.extra !== null) note.meta = JSON.parse(row.extra as string);
   return note;
+}
+
+/** このページに置いてある子ページ（子ページの付箋が指すページ） */
+export function childPages(sql: SqlStorage): Set<string> {
+  const rows = sql
+    .exec(`SELECT json_extract(extra, '$.${CHILD_PAGE_KEY}') AS page FROM notes WHERE extra IS NOT NULL`)
+    .toArray();
+  return new Set(rows.map((row) => row.page).filter((page): page is string => typeof page === 'string'));
+}
+
+/** `page` を指す子ページの付箋が、`exceptId` 以外にあるか */
+function hasChildNote(sql: SqlStorage, page: string, exceptId: string): boolean {
+  return (
+    sql
+      .exec(
+        `SELECT 1 FROM notes WHERE json_extract(extra, '$.${CHILD_PAGE_KEY}') = ? AND id <> ? LIMIT 1`,
+        page, exceptId,
+      )
+      .toArray().length > 0
+  );
+}
+
+/** 同じ子ページを、1 つのページに 2 つ置くことはできない */
+function assertNotPlaced(sql: SqlStorage, note: Pick<WemaNote, 'meta'>, noteId: string): void {
+  const page = childPageOf(note);
+  if (page !== undefined && hasChildNote(sql, page, noteId)) {
+    throw new RejectError(childRejection('duplicate', page));
+  }
 }
 
 function rowToEdge(row: Obj): WemaEdge {
@@ -64,7 +125,9 @@ export function readNoteFields(sql: SqlStorage, id: string, keys: string[]): Obj
   if (!row) return undefined;
   const out: Obj = {};
   for (const k of fields) {
-    out[k] = k === 'autoSize' ? Boolean(row[NOTE_COLUMNS[k]]) : row[NOTE_COLUMNS[k]];
+    // 未設定のフィールド（meta）は、キーごと入れない
+    const value = fromColumn(k, row[NOTE_COLUMNS[k]]);
+    if (value !== undefined) out[k] = value;
   }
   return out;
 }
@@ -75,6 +138,8 @@ export function readEdge(sql: SqlStorage, id: string): WemaEdge | undefined {
 }
 
 const noteRows = (sql: SqlStorage) => sql.exec(`SELECT * FROM notes ORDER BY rowid`).toArray();
+/** 付箋だけを読む（接続線は読まない） */
+export const readNotes = (sql: SqlStorage) => noteRows(sql).map(rowToNote);
 const readEdges = (sql: SqlStorage) => sql.exec(`SELECT * FROM edges ORDER BY rowid`).toArray().map(rowToEdge);
 
 /** 付箋（作成者つき）と接続線。agent に渡す */
@@ -163,12 +228,13 @@ export function applyDeltas(
       case 'note:create': {
         const n = d.note;
         if (exists(sql, 'notes', n.id)) throw new RejectError(`note already exists: ${n.id}`);
+        assertNotPlaced(sql, n, n.id);
         sql.exec(
-          `INSERT INTO notes (id, x, y, width, height, text, color, z_index, auto_size,
+          `INSERT INTO notes (id, x, y, width, height, text, color, z_index, auto_size, extra,
                               created_by, updated_at, updated_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           n.id, n.x, n.y, n.width, n.height, n.text, n.color, n.zIndex, n.autoSize ? 1 : 0,
-          actor, now, actor,
+          metaJson(n.meta), actor, now, actor,
         );
         applied.push(d);
         break;
@@ -178,6 +244,8 @@ export function applyDeltas(
         const next: Obj = { ...d.after };
         // autoSize は「未設定」と false が同じ意味
         if ('autoSize' in d.before || 'autoSize' in next) next.autoSize = next.autoSize === true;
+        // meta は全体を置き換える。after になく before にあれば、取り除く（空の meta にする）
+        if (!('meta' in next) && 'meta' in d.before) next.meta = {};
         const keys = Object.keys(NOTE_COLUMNS).filter((k) => next[k] !== undefined);
         if (keys.length === 0) break;
         const cur = readNoteFields(sql, d.noteId, keys);
@@ -189,21 +257,20 @@ export function applyDeltas(
         ) {
           throw new RejectError(REASON_TEXT_CONFLICT, { notes: [readNote(sql, d.noteId)!], edges: [] });
         }
-        const changed = keys.filter((k) => next[k] !== cur[k]);
+        const changed = keys.filter((k) => !sameNoteValue(k, next[k], cur[k]));
         if (changed.length === 0) break;
+        if (changed.includes('meta')) assertNotPlaced(sql, next as Pick<WemaNote, 'meta'>, d.noteId);
         sql.exec(
           `UPDATE notes SET ${changed.map((k) => `${NOTE_COLUMNS[k]} = ?`).join(', ')},
                             updated_at = ?, updated_by = ?
            WHERE id = ?`,
-          ...changed.map((k) => (k === 'autoSize' ? Number(next[k]) : next[k])),
+          ...changed.map((k) => toColumn(k, next[k])),
           now, actor, d.noteId,
         );
-        applied.push({
-          type: 'note:update',
-          noteId: d.noteId,
-          before: Object.fromEntries(changed.map((k) => [k, cur[k]])),
-          after: Object.fromEntries(changed.map((k) => [k, next[k]])),
-        });
+        // 未設定の値（取り除いた meta、もともとなかった meta）は、キーごと入れない
+        const fieldsOf = (values: Obj) =>
+          Object.fromEntries(changed.filter((k) => toColumn(k, values[k]) !== null).map((k) => [k, values[k]]));
+        applied.push({ type: 'note:update', noteId: d.noteId, before: fieldsOf(cur), after: fieldsOf(next) });
         break;
       }
 

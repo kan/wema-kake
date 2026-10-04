@@ -89,6 +89,14 @@ describe('書き込みのツール', () => {
     expect(board?.notes.find((n) => n.id === first.id)?.createdBy).toBe(AGENT);
   });
 
+  it('ページへのリンクを [[slug]] で書け、read_board で同じ書式で読める', async () => {
+    const { page, notesOf } = await newPage([createNote('n1', { text: '<a href="/p/design">設計メモ</a>' })]);
+    await call('add_notes', { page, notes: [{ text: '関連: [[design]]' }] });
+    expect((await notesOf()).map((n) => n.text)).toContain('関連: <a href="/p/design">design</a>');
+    const board = await call('read_board', { page });
+    expect(board.notes.map((n: any) => n.text)).toEqual(['設計メモ [[design]]', '関連: [[design]]']);
+  });
+
   it('add_notes は、位置を省略すると既存の付箋と重ならないように置く', async () => {
     const { page, notesOf } = await newPage([createNote('n1', { x: 40, y: 40 })]);
     await call('add_notes', {

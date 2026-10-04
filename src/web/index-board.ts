@@ -8,10 +8,13 @@ export interface IndexBoard {
   data: WemaBoardData;
   /** 付箋の id（= スラッグ）→ 絞り込みで照合する文字列（小文字にした表示名とスラッグ） */
   searchText: Map<string, string>;
+  /** 付箋の id → 付箋の本文（絞り込みで一致の数を足す前の、元の本文） */
+  texts: Map<string, string>;
 }
 
 const NOTE_WIDTH = 220;
-const NOTE_HEIGHT = 130;
+/** 表示名、本文の冒頭（60 文字まで）、更新日時と付箋の数と子ページの数の行が、切れずに入る高さ */
+const NOTE_HEIGHT = 160;
 const GAP = 40;
 const MARGIN = 40;
 const PAGE_COLOR = '#FFF9C4';
@@ -35,12 +38,23 @@ const META_STYLE = 'font-size: 11px; color: #666';
 
 function pageHtml(page: IndexPage, formatDate: (ms: number) => string): string {
   const title = escapeHtml(page.title ?? page.name);
-  const meta = `${formatDate(page.updated_at)}・付箋 ${page.note_count} 枚`;
+  // 子ページは一覧に出ないので、中に何枚のボードがあるかを、ルートの付箋に出す
+  const children = page.child_count > 0 ? `・子ページ ${page.child_count}` : '';
+  const meta = `${formatDate(page.updated_at)}・付箋 ${page.note_count} 枚${children}`;
   return (
     `<a href="/p/${page.name}"><b>${title}</b></a>` +
     `<div>${escapeHtml(page.excerpt)}</div>` +
     `<div><span style="${META_STYLE}">${escapeHtml(meta)}</span></div>`
   );
+}
+
+/**
+ * 絞り込みで、子孫のページが一致したルートの付箋に足す表示。一致がなければ空文字
+ * （付箋の本文の後ろに付ける。付箋の本文は index.texts）
+ */
+export function descendantHitsHtml(count: number): string {
+  if (count === 0) return '';
+  return `<div><span style="font-size: 11px; color: #1d4ed8"><b>子ページに ${count} 件の一致</b></span></div>`;
 }
 
 function missingHtml(slug: string): string {
@@ -226,5 +240,6 @@ export function buildIndexBoard(
     edge.toAnchor = dy > 0 ? 'top' : 'bottom';
   }
 
-  return { data: { version: 1, notes: [...notes.values()], edges }, searchText };
+  const texts = new Map([...notes.values()].map((note) => [note.id, note.text]));
+  return { data: { version: 1, notes: [...notes.values()], edges }, searchText, texts };
 }

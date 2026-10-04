@@ -1,12 +1,15 @@
 // ページの画面（/p/<slug>）。wema のボードと、見出し（表示名、バックリンク、操作の履歴、削除）。
 import { WemaBoard } from '@kanf/wema';
 import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type SkipReason } from '../shared/api';
+import { CHILD_PAGE_KEY } from '../shared/hierarchy';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import * as api from './api';
+import { CHILD_NOTE_SIZE, ChildNotes, childPageForm } from './child-notes';
 import { confirmDeletePage, el, errorMessage, formatDate, openInternalLink } from './dom';
 import type { IconName } from './icons';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
 import { header, iconButton, menuItem, popover, separator, settings, toast, zoomControls } from './toolbar';
+import { rememberViewport } from './viewport-store';
 
 const NOTICE_MS = 8000;
 
@@ -69,6 +72,8 @@ export function openPage(app: HTMLElement, slug: string): void {
   const container = el('div', { className: 'board' });
   const historyPanel = el('aside', { className: 'history-panel', hidden: true });
   const body = el('div', { className: 'page-body' }, container, historyPanel);
+  // 子ページの付箋は、本文の代わりに子ページの概要を出す。表示名を押すと、子ページへ入る
+  const childNotes = new ChildNotes(slug);
   const board = new WemaBoard({
     container,
     readOnly: true,
@@ -76,7 +81,12 @@ export function openPage(app: HTMLElement, slug: string): void {
     onImageUpload: api.uploadImage,
     // 他のページへのリンク（Wiki リンク）は、同じタブで開く
     onLinkClick: openInternalLink,
+    renderNote: childNotes.render,
   });
+  childNotes.attach(board);
+
+  // 表示位置と倍率は、ページごとにブラウザへ保存する（次に開いたときと、子ページから戻ったときに使う）
+  const restoreViewport = rememberViewport(board, slug);
 
   // 一時的な通知は、ボードの上に重ねて出す
   const notify = toast(body, NOTICE_MS);
@@ -86,6 +96,7 @@ export function openPage(app: HTMLElement, slug: string): void {
   const title = el('h1', { className: 'page-title', title: `/p/${slug}（クリックして表示名を変える）` });
   // 同期の状態。同期済みのときは何も出さない。文言は title に入れ、文字で出すのはオフラインのときだけ
   const status = el('span', { className: 'sync-status' });
+  const crumbs = el('span', { className: 'crumbs' });
 
   const showTitle = (value: string | null) => {
     currentTitle = value;
@@ -97,15 +108,23 @@ export function openPage(app: HTMLElement, slug: string): void {
   // --- ヘッダーの中央: 付箋の操作 ---
   const undoButton = iconButton('undo', '元に戻す (Ctrl+Z)', () => board.undo());
   const redoButton = iconButton('redo', 'やり直す (Ctrl+Shift+Z)', () => board.redo());
-  const addButton = iconButton('add', '付箋を追加', () => {
-    // 見えている範囲の左上の近くに置く。続けて押しても重ならないよう、少しずつずらす
+  /** 新しい付箋を置く位置。見えている範囲の左上の近くで、続けて置いても重ならないよう、少しずつずらす */
+  const nextNotePosition = () => {
     const offset = (board.getNotes().length % 10) * 20;
     const viewport = board.getViewport();
-    board.addNote({
-      x: (120 + offset - viewport.x) / viewport.zoom,
-      y: (80 + offset - viewport.y) / viewport.zoom,
-    });
+    return { x: (120 + offset - viewport.x) / viewport.zoom, y: (80 + offset - viewport.y) / viewport.zoom };
+  };
+  const addButton = iconButton('add', '付箋を追加', () => board.addNote(nextNotePosition()));
+
+  // 子ページを置く。新しく作るか、既存のルートのページを選ぶ
+  const childForm = childPageForm(slug, (child) => {
+    // 本文は持たせない。置けるかどうか（親は 1 つだけ、輪にならない、深さ）は、サーバーが確かめる。
+    // 断られたら、同期が付箋を取り消して、理由を通知する
+    board.addNote({ ...nextNotePosition(), ...CHILD_NOTE_SIZE, text: '', meta: { [CHILD_PAGE_KEY]: child } });
+    childPopover.close();
   });
+  const childButton = iconButton('childPage', '子ページを置く');
+  const childPopover = popover(childButton, childForm.root, { onOpen: childForm.opened });
 
   const layoutPanel = el('div', { className: 'layout-panel' });
   const layout = popover(iconButton('layout', '整列と配置'), layoutPanel);
@@ -132,6 +151,7 @@ export function openPage(app: HTMLElement, slug: string): void {
     undoButton.disabled = locked || !board.canUndo();
     redoButton.disabled = locked || !board.canRedo();
     addButton.disabled = locked;
+    childButton.disabled = locked;
     const selected = board.getSelection().length;
     for (const [button, needs] of layoutButtons) button.disabled = locked || selected < needs;
   };
@@ -162,11 +182,11 @@ export function openPage(app: HTMLElement, slug: string): void {
 
   app.append(
     header(
-      [el('a', { href: '/', textContent: '一覧' }), title, status],
+      [el('a', { href: '/', textContent: '一覧' }), crumbs, title, status],
       [
         el('span', { className: 'tool-group' }, undoButton, redoButton),
         separator(),
-        addButton,
+        el('span', { className: 'tool-group' }, addButton, childPopover.root),
         separator(),
         el('span', { className: 'tool-group optional' }, layout.root, separator(), zoomControls(board, container)),
       ],
@@ -175,12 +195,25 @@ export function openPage(app: HTMLElement, slug: string): void {
     body,
   );
 
+  // --- パンくず（ルートから親までの道筋。URL を直接開いたときも出る） ---
+  api
+    .getAncestors(slug)
+    .then(({ ancestors }) => {
+      for (const page of ancestors) {
+        crumbs.append(el('a', { href: `/p/${page.name}`, textContent: page.title ?? page.name }), '›');
+      }
+    })
+    .catch(fail('親ページの取得'));
+
   // --- 同期 ---
   const sync = new BoardSync(board, () => connect(slug), {
+    // 最初の同期が済んだときに、1 回だけ呼ばれる
     onReady() {
       board.setReadOnly(false);
       // 参照モードは、サーバーの内容を読み込んだ後に入る（入った時点の位置を wema が覚えるため）
       if (settings.get(VIEW_ONLY_KEY) === '1') board.setViewOnly(true);
+      // 前に見ていた場所があればそこへ、なければ全体が収まる倍率にする
+      restoreViewport();
     },
     onStatus(state, pending) {
       const text = state === 'synced' && pending > 0 ? '保存中…' : STATUS_TEXT[state];
@@ -205,7 +238,7 @@ export function openPage(app: HTMLElement, slug: string): void {
       notify(
         reason === REASON_TEXT_CONFLICT
           ? '他の人が同じ付箋を編集していたため、変更を取り消しました'
-          : `変更を保存できなかったため、取り消しました（${reason}）`,
+          : (childForm.rejectionMessage(reason) ?? `変更を保存できなかったため、取り消しました（${reason}）`),
       );
     },
   });

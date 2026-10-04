@@ -4,7 +4,7 @@ import { buildIndexBoard } from '../src/web/index-board';
 import { sanitizeHtml } from '../src/worker/sanitize';
 
 const page = (name: string, over: Partial<IndexPage> = {}): IndexPage => ({
-  name, title: null, note_count: 1, updated_at: 0, excerpt: '', ...over,
+  name, title: null, note_count: 1, updated_at: 0, excerpt: '', child_count: 0, ...over,
 });
 const link = (from_page: string, to_page: string, missing = 0): IndexLink => ({ from_page, to_page, missing });
 const build = (pages: IndexPage[], links: IndexLink[] = [], width = 1000, height = 600) =>
@@ -26,7 +26,7 @@ describe('buildIndexBoard', () => {
   it('ページ 1 つを付箋 1 枚にし、表示名のリンク、本文の冒頭、更新日を出す', () => {
     const { data } = build([page('memo', { title: 'メモ <b>', excerpt: '本文 & 冒頭', note_count: 3 })]);
     expect(data.notes).toHaveLength(1);
-    expect(data.notes[0]).toMatchObject({ id: 'memo', width: 220, height: 130 });
+    expect(data.notes[0]).toMatchObject({ id: 'memo', width: 220, height: 160 });
     expect(data.notes[0].text).toBe(
       '<a href="/p/memo"><b>メモ &lt;b&gt;</b></a>' +
         '<div>本文 &amp; 冒頭</div>' +
@@ -113,7 +113,7 @@ describe('buildIndexBoard', () => {
 
   it('リンクでつながったまとまりが複数あれば、横に並べ、入らなければ次の行へ送る', () => {
     const names = ['a1', 'a2', 'b1', 'b2', 'c1', 'c2'];
-    const { data } = build(names.map((name) => page(name)), [link('a1', 'a2'), link('b1', 'b2'), link('c1', 'c2')], 700);
+    const { data } = build(names.map((name) => page(name)), [link('a1', 'a2'), link('b1', 'b2'), link('c1', 'c2')], 700, 800);
     const at = Object.fromEntries(data.notes.map((n) => [n.id, n]));
     // 幅 700 には 2 列。まとまり a と b が横に並び、c は次の行
     expect(at.b1.y).toBe(at.a1.y);
@@ -123,10 +123,10 @@ describe('buildIndexBoard', () => {
   });
 
   it('等倍で表示領域に収まる数なら、幅を広げない', () => {
-    // 幅 1000 に 3 列、高さ 600 に 3 行。9 ページは収まる
-    const { data } = build(Array.from({ length: 9 }, (_, i) => page(`p${i}`)), [], 1000, 600);
+    // 幅 1000 に 3 列、高さ 700 に 3 行。9 ページは収まる
+    const { data } = build(Array.from({ length: 9 }, (_, i) => page(`p${i}`)), [], 1000, 700);
     expect(extent(data.notes).width).toBeLessThanOrEqual(1000);
-    expect(extent(data.notes).height).toBeLessThanOrEqual(600);
+    expect(extent(data.notes).height).toBeLessThanOrEqual(700);
     // まとまりも、表示領域の幅からはみ出さない
     const pairs = ['a', 'b', 'c', 'd'];
     const linked = build(

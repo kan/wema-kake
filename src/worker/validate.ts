@@ -1,5 +1,7 @@
 import type { Anchor, ArrowHead, EdgeRouting, EdgeStyle, LineStyle } from '@kanf/wema';
 import type { BoardContent, HistoryDelta, WemaEdge, WemaNote } from '../shared/delta';
+import { CHILD_PAGE_KEY } from '../shared/hierarchy';
+import { isValidSlug } from '../shared/slug';
 
 const MAX_DELTAS = 2000;
 /**
@@ -96,6 +98,30 @@ function label(v: unknown): string {
   return v;
 }
 
+const META_KEY_RE = /^[\w-]{1,32}$/;
+const MAX_META_KEYS = 8;
+const MAX_META_VALUE_LENGTH = 256;
+
+/**
+ * 付箋の meta（利用側のデータ。wema は中身を解釈しない）。値は文字列だけ。
+ * wema は大きさと形を制限しないので、ここで制限する。キーは並べ替えて返す（保存した値を、
+ * 文字列にして比べられるようにするため）。
+ *
+ * `page` は、子ページの付箋が指す子ページのスラッグ（src/shared/hierarchy.ts）
+ */
+function meta(v: unknown): Record<string, string> {
+  const entries = Object.entries(obj(v, 'meta')).sort(([a], [b]) => (a < b ? -1 : 1));
+  if (entries.length > MAX_META_KEYS) throw new RejectError('invalid meta');
+  for (const [key, value] of entries) {
+    if (!META_KEY_RE.test(key) || typeof value !== 'string' || value.length > MAX_META_VALUE_LENGTH) {
+      throw new RejectError('invalid meta');
+    }
+  }
+  const out = Object.fromEntries(entries) as Record<string, string>;
+  if (CHILD_PAGE_KEY in out && !isValidSlug(out[CHILD_PAGE_KEY])) throw new RejectError('invalid meta');
+  return out;
+}
+
 /** 付箋の、id と zIndex 以外のフィールド。zIndex は同期しないので更新では捨てる */
 const NOTE_FIELDS = {
   x: (v: unknown) => num(v, 'x'),
@@ -105,6 +131,7 @@ const NOTE_FIELDS = {
   text,
   color,
   autoSize: (v: unknown) => bool(v, 'autoSize'),
+  meta,
 } satisfies { [K in keyof WemaNote]?: (v: unknown) => WemaNote[K] };
 
 /** 接続線の、id / from / to 以外のフィールド。from / to は変更できないので更新では捨てる */

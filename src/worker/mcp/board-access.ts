@@ -28,7 +28,7 @@ export class ServerBoardAccess implements BoardAccess {
   async searchPages(query: string) {
     const hits = await searchPages(this.env.DB, query);
     if (hits === null) throw new ToolError('invalid query');
-    return hits.map(({ name, title, snippet }) => ({ name, title: title ?? null, snippet }));
+    return hits.map(({ name, title, parent, snippet }) => ({ name, title, parent, snippet }));
   }
 
   async readBoard(slug: string): Promise<BoardState | null> {
@@ -36,7 +36,8 @@ export class ServerBoardAccess implements BoardAccess {
   }
 
   async plainText(html: string): Promise<string> {
-    return (await extractContent(html)).text;
+    // ページへのリンクは、書くときと同じ書式（[[slug]]）で残す
+    return (await extractContent(html, { siteOrigin: this.env.SITE_ORIGIN })).text;
   }
 
   async apply(slug: string, deltas: HistoryDelta[], summary: string): Promise<ApplyOutcome> {

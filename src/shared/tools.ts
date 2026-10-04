@@ -7,6 +7,7 @@ import { computeAutoLayout } from '@kanf/wema';
 import { z } from 'zod';
 import { MAX_LIST_LIMIT, MAX_QUERY_LENGTH, type OpSummary, type RevertOutcome } from './api';
 import type { HistoryDelta, WemaEdge, WemaNote } from './delta';
+import { childPageOf } from './hierarchy';
 import { textToHtml } from './note-text';
 import { SLUG_RE } from './slug';
 
@@ -18,6 +19,8 @@ export interface PageInfo {
   title: string | null;
   note_count: number;
   updated_at: number;
+  /** 親ページのスラッグ。ルートのページ（どのページの子でもない）なら null */
+  parent: string | null;
 }
 
 type AuthoredNote = WemaNote & { createdBy: string | null };
@@ -34,7 +37,9 @@ export type ApplyOutcome =
 
 export interface BoardAccess {
   listPages(options: { updatedAfter?: number; limit?: number }): Promise<PageInfo[]>;
-  searchPages(query: string): Promise<{ name: string; title: string | null; snippet?: string }[]>;
+  searchPages(
+    query: string,
+  ): Promise<{ name: string; title: string | null; parent: string | null; snippet?: string }[]>;
   /** ページがまだ作られていなければ null */
   readBoard(page: string): Promise<BoardState | null>;
   /** 付箋の text（HTML）をプレーンテキストにする */
@@ -69,7 +74,7 @@ const noteText = z
   .string()
   .max(20_000)
   .describe(
-    '付箋の本文（プレーンテキスト）。改行できる。"- " で始まる行は箇条書き、"- [ ] " / "- [x] " で始まる行はチェックリストになる。HTML は書けない',
+    '付箋の本文（プレーンテキスト）。改行できる。"- " で始まる行は箇条書き、"- [ ] " / "- [x] " で始まる行はチェックリストになる。[[スラッグ]] と書くと、そのページへのリンクになる（read_board の本文にも、ページへのリンクは同じ書式で出る）。HTML と外部の URL へのリンクは書けない',
   );
 const color = z
   .string()
@@ -159,7 +164,8 @@ const ARROW = { fromAnchor: 'auto', toAnchor: 'auto', style: 'arrow' } as const;
 export const TOOLS: Tool[] = [
   tool({
     name: 'list_pages',
-    description: 'ページの一覧（名前、表示名、付箋の数、更新日時）を、更新の新しい順に返す。',
+    description:
+      'ページの一覧（名前、表示名、付箋の数、更新日時、親ページ）を、更新の新しい順に返す。ページは階層になっていて、parent は親ページの名前（ルートのページなら null）。',
     readOnly: true,
     input: z.object({
       updated_after: z
@@ -173,7 +179,7 @@ export const TOOLS: Tool[] = [
 
   tool({
     name: 'search_pages',
-    description: 'ページを全文検索する（表示名と付箋の本文）。',
+    description: 'ページを全文検索する（表示名と付箋の本文）。parent は親ページの名前（ルートのページなら null）。',
     readOnly: true,
     input: z.object({ query: z.string().min(1).max(MAX_QUERY_LENGTH) }),
     run: (access, input) => access.searchPages(input.query),
@@ -182,7 +188,7 @@ export const TOOLS: Tool[] = [
   tool({
     name: 'read_board',
     description:
-      '1 ページの付箋（id、本文、座標、大きさ、色、作成者）と接続線（id、from、to、label）を返す。座標は左上が原点で、単位はピクセル。',
+      '1 ページの付箋（id、本文、座標、大きさ、色、作成者）と接続線（id、from、to、label）を返す。座標は左上が原点で、単位はピクセル。child_page のある付箋は、子ページを表す付箋で、値は子ページの名前（中身は、その名前で read_board を呼ぶと読める）。',
     readOnly: true,
     input: z.object({ page }),
     async run(access, input) {
@@ -199,6 +205,8 @@ export const TOOLS: Tool[] = [
             height: n.height,
             color: n.color,
             created_by: n.createdBy,
+            // 子ページの付箋だけに付ける
+            child_page: childPageOf(n),
           })),
         ),
         edges: board.edges.map((e) => ({ id: e.id, from: e.from, to: e.to, label: e.label })),

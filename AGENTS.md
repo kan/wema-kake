@@ -63,7 +63,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 ```sql
 CREATE TABLE meta (
-  key   TEXT PRIMARY KEY,   -- 'slug', 'title', 'seq', 'version', 'epoch', 'index_hash'
+  key   TEXT PRIMARY KEY,   -- 'slug', 'title', 'seq', 'version', 'epoch', 'index_hash', 'parent'（親ページのスラッグ）
   value TEXT NOT NULL
 );
 
@@ -75,7 +75,7 @@ CREATE TABLE notes (
   color      TEXT NOT NULL,
   z_index    INTEGER NOT NULL,       -- 作成時の値のみ。以降の変更は同期しない（後述）
   auto_size  INTEGER NOT NULL DEFAULT 0,
-  extra      TEXT,                   -- 将来 WemaNote に増えるフィールド用の JSON
+  extra      TEXT,                   -- 付箋の meta（利用側のデータ）の JSON。なければ NULL
   created_by TEXT,                   -- 'user:<id>' / 'agent:<client>'
   updated_at INTEGER NOT NULL,
   updated_by TEXT
@@ -124,10 +124,13 @@ CREATE TABLE pages (
   title      TEXT,                -- 表示名。未設定ならスラッグを表示する
   plain_text TEXT,                -- 全付箋のテキストをタグ除去して連結したもの
   note_count INTEGER NOT NULL DEFAULT 0,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  parent     TEXT,                -- 親ページのスラッグ。ルートのページなら NULL（正は、子ページの DO の meta）
+  layout     TEXT                 -- 付箋の配置（[[x, y, 幅, 高さ, 色], ...] の JSON）。子ページの付箋の表示に使う
 );
 
 CREATE INDEX pages_updated_at ON pages (updated_at);
+CREATE INDEX pages_parent ON pages (parent);
 
 CREATE TABLE links (
   from_page TEXT NOT NULL,
@@ -162,11 +165,13 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | メソッドとパス | 内容 |
 | --- | --- |
 | `GET /api/session` | 認証が有効かの確認用。`{ "actor": "user:<email>" }` を返す |
-| `GET /api/index` | 一覧のボード用。ページ（表示名、本文の冒頭、更新日時）と、ページ間のリンクをまとめて返す。新しい順に 500 ページまで |
+| `GET /api/index` | 一覧のボード用。ルートのページ（表示名、本文の冒頭、更新日時、子ページの数）と、ルート同士のリンクをまとめて返す。新しい順に 500 ページまで。子ページと孫ページは返さない |
+| `POST /api/pages-info` | ページの概要（表示名、付箋の数、親、付箋の配置）をまとめて返す（本文は `{ "names": [...] }`、200 件まで）。子ページの付箋の表示に使う。まだ索引にないページ（作ったばかり）は DO から補い、付箋の配置は null で返す。存在しないページは結果に入らない |
+| `GET /api/pages/<slug>/ancestors` | 先祖のページを、ルートから順に返す（パンくず用） |
 | `GET /api/pages?limit=&updated_after=` | ページ一覧（D1）。更新の新しい順 |
 | `POST /api/pages/<slug>` | ページの新規作成（本文は `{ "title": "..." }`。表示名は省略できる）。すでにあれば 409 を返し、何も変えない |
 | `DELETE /api/pages/<slug>` | ページの削除。取り消しはできない |
-| `GET /api/search?q=` | 全文検索（D1）。3 文字以上は FTS、3 文字未満は LIKE。`names=1` を付けると、一致したページのスラッグだけを返す（一覧の絞り込み用） |
+| `GET /api/search?q=` | 全文検索（D1）。3 文字以上は FTS、3 文字未満は LIKE。`roots=1` を付けると、一致したページのスラッグと、そのルートのスラッグだけを返す（一覧の絞り込み用。スラッグも照合する） |
 | `GET /api/pages/<slug>` | スナップショット（`seq`、`title`、付箋と接続線） |
 | `GET /api/pages/<slug>/backlinks` | このページへリンクしているページ（D1） |
 | `PUT /api/pages/<slug>/title` | 表示名の変更（本文は `{ "title": "..." }`）。空文字で未設定に戻す。書き込みのないページに対して呼ぶとページが作られる。本文に `"mustExist": true` を付けると、作らずに 404 を返す（一覧の画面が使う。古い一覧に残った削除済みのページを作り直さないため） |
@@ -181,6 +186,26 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 - URL は `/p/<slug>`。スラッグは `^[a-z0-9][a-z0-9-]{0,63}$` で、作成時に決めて後から変えない
 - DO は `idFromName(slug)` で引く
 - 表示名（タイトル）はスラッグとは別に DO の `meta` に持ち、D1 の `pages.title` に反映する。タイトルの変更は `applyOps` とは別の DO メソッドで行う
+
+## ページの階層
+
+設計と経緯は `docs/plan.md` のフェーズ 6.6。定数と判定は `src/shared/hierarchy.ts`。
+
+- **ページを、別のページのボードの上に「子ページの付箋」として置くと、そのページの子になる。** 子ページの付箋は、`meta` に子ページのスラッグを持つ付箋（`meta.page`）。wema の `renderNote` で、本文の代わりに子ページの概要を出す（`src/web/child-notes.ts`）
+- **本文のリンク（Wiki リンク）は、階層に関与しない。階層を、付箋の本文の形から決めないこと**（説明を 1 行足しただけで階層が変わり、付箋の編集のたびにページが一覧に出たり消えたりする）
+- **親は 1 つだけ。** 階層は木になる。深さは 5 段まで（ルートが 1 段目）。同じ子ページを、1 つのページに 2 つ置くこともできない
+- 子ページの付箋を削除すると、子ページはルートへ戻る。Undo や取り消しで付箋が戻ると、もう一度子になる
+- 子ページを削除すると、親ページにある子ページの付箋も消える。親ページを削除すると、子ページはルートへ戻る（子孫ごとの削除はしない）
+- 一覧に出すのは、ルートのページだけ。絞り込みは子孫も対象にし、子孫が一致したら、そのルートの付箋を残して数を出す。子孫のページが関わるリンクは、一覧の線にしない
+
+階層の記録は 2 つの DO にまたがる。**次の決まりを崩さないこと。**
+
+- 正は、子ページの DO の `meta` の `parent`。D1 の `pages.parent` は索引で、変更の数秒後に反映される
+- 親ページの DO は、子ページの付箋を作るデルタを適用する**前に**、子ページの DO の `setParent` を呼ぶ（`adoptChildren`）。断られたら、デルタ全体を拒否する。`reason` は `child page: <理由>: <スラッグ>` の形で、理由は `ChildRejectCode`（`not-found` / `self` / `other-parent` / `duplicate` / `ancestor` / `too-deep`）。**この文字列は `childRejection()` で作り、`parseChildRejection()` で読むこと。画面で、文言の一部が含まれるかで判定しない**付箋がなくなったら、適用した**後に** `clearParent` を呼ぶ（`releaseOrphans`）。`applyOps` と `revert` の両方が `withChildren` を通る
+- **`setParent` / `clearParent` / `getPageRef` / `fitsWithin` を、書き込みの順番待ち（`write` / `inOrder`）に入れないこと。** 親ページの DO が順番待ちの中から呼ぶので、入れると、互いを待って止まることがある
+- 輪の検査は 2 回行う。置く前と、`setParent` が済んだ後（他のページで同時に置く操作があると、前の検査だけでは 3 ページ以上の輪を見逃す）。子ページの側でも、相手が自分の子でないことを確かめる
+- 深さは、D1 ではなく DO をたどって数える（`fitsWithin`）。D1 は反映が遅れるので、置いた直後の検査に使えない
+- 2 つの DO の書き込みは、まとめて行えない。食い違いは、索引の更新（alarm）で直す。親ページの側は、付箋のない子をルートへ戻す（`reconcileChildren`）。子ページの側は、親がなくなっていればルートへ戻る（`healParent`）
 
 ## 変更の単位：HistoryDelta
 
@@ -292,9 +317,9 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 
 | ツール | 内容 |
 | --- | --- |
-| `list_pages` | D1 からページ一覧（名前・タイトル・更新日時・付箋数）を返す。更新日時で絞り込める |
-| `search_pages` | D1 の全文検索 |
-| `read_board` | 1 ページの付箋（id・タグ除去したテキスト・座標・サイズ・色・作成者）と接続線（from/to/label）を返す |
+| `list_pages` | D1 からページ一覧（名前・タイトル・更新日時・付箋数・親ページ）を返す。更新日時で絞り込める。子ページも含めて全ページを返す |
+| `search_pages` | D1 の全文検索。親ページも返す |
+| `read_board` | 1 ページの付箋（id・タグ除去したテキスト・座標・サイズ・色・作成者）と接続線（from/to/label）を返す。子ページの付箋には `child_page`（子ページの名前）が付く |
 | `add_notes` | 付箋を複数追加する。位置を省略した場合は関連付け先の付箋の近くに自動配置 |
 | `update_notes` | テキスト・色・位置・サイズを複数更新する |
 | `delete_notes` | 付箋を削除する（接続線も合わせて削除） |
@@ -303,6 +328,8 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 | `revert_operation` | agent 自身の直前の操作を取り消す（後述の取り消し機能を使う） |
 
 - `add_notes` / `update_notes` のテキストはプレーンテキスト。改行は `<br>` にし、`- ` の箇条書きと `- [ ]` / `- [x]` のチェックリストだけを HTML に変換する。それ以外はエスケープするので、LLM は HTML を書けない。変換後も必ずサーバーのサニタイズを通す
+- ページへのリンクは `[[スラッグ]]` と書ける（`src/shared/note-text.ts`）。`read_board` の本文にも、ページへのリンクは同じ書式で出る（`src/worker/plain-text.ts`。リンクの文字がスラッグと違えば、文字の後ろに付く）。外部の URL へのリンクは書けない
+- **ページの作成と、子ページとして置く操作は、ツールにしていない**（LLM との連携を実際に使ってから決める）。`delete_notes` で子ページの付箋を消すと、子ページはルートへ戻る
 - ページの作成・削除・改名のツールは当面提供しない。**書き込み系のツールは、存在しないページには適用しない**（`applyOps` の `mustExist`。読んでから適用するまでの間に削除されたページも作り直さない）
 - 書き込み系のツールは、記録した操作の番号（`operation`）を返す。LLM はこれを `revert_operation` に渡せる。**何も変わらなかった操作は番号を返さずにエラーにする**（`applyOps` は seq を進めないので、返すと別の操作の番号になる）
 - `revert_operation` が取り消せるのは、同じ主体（`agent:<client>`）の操作だけ。`operation` を省略すると、取り消しでない直近の自分の操作が対象になる

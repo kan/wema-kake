@@ -1,12 +1,12 @@
 // 一覧の画面（/）。ページの一覧を wema のボードで表す（docs/plan.md の 3.7 節）。
 // ページ 1 つが付箋 1 枚、ページ間のリンクが接続線。検索は、一致するページの付箋だけを残す。
 import { WemaBoard } from '@kanf/wema';
-import { type IndexLink, type IndexPage, MAX_QUERY_LENGTH, MAX_TITLE_LENGTH } from '../shared/api';
-import { isValidSlug } from '../shared/slug';
+import { type IndexLink, type IndexPage, MAX_QUERY_LENGTH } from '../shared/api';
 import * as api from './api';
 import { confirmDeletePage, el, errorMessage, formatDate, openInternalLink } from './dom';
 import { attachNoteActions } from './index-actions';
-import { buildIndexBoard, type IndexBoard } from './index-board';
+import { buildIndexBoard, descendantHitsHtml, type IndexBoard } from './index-board';
+import { checkedSlug, pageFields } from './page-form';
 import { header, popover, separator, toast, zoomControls } from './toolbar';
 
 /** 入力が止まってから検索するまでの時間 */
@@ -14,34 +14,23 @@ const SEARCH_DELAY_MS = 200;
 /** 通知を出しておく時間 */
 const NOTICE_MS = 8000;
 
-/** スラッグの初期値。短い乱数（小文字の英数字） */
-function randomSlug(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(6));
-  return [...bytes].map((b) => (b % 36).toString(36)).join('');
-}
-
 /** 新規ページの入力欄 */
 function newPageForm(): HTMLFormElement {
-  const titleInput = el('input', { placeholder: '省略できます', maxLength: MAX_TITLE_LENGTH });
-  const slugInput = el('input', { value: randomSlug(), title: 'URL に使う名前。小文字の英数字とハイフン' });
+  const fields = pageFields();
   const message = el('div', { className: 'form-error' });
   const form = el(
     'form',
     { className: 'new-page' },
-    el('label', {}, '表示名', titleInput),
-    el('label', {}, 'URL', el('span', { className: 'slug-field' }, '/p/', slugInput)),
+    ...fields.labels,
     el('button', { type: 'submit', textContent: '作成' }),
     message,
   );
 
   const create = async () => {
-    const slug = slugInput.value.trim();
-    if (!isValidSlug(slug)) {
-      message.textContent = 'スラッグは小文字の英数字とハイフンで、64 文字までです';
-      return;
-    }
+    const slug = checkedSlug(fields.slug, message);
+    if (slug === undefined) return;
     try {
-      await api.createPage(slug, titleInput.value);
+      await api.createPage(slug, fields.title.value);
     } catch (e) {
       if (e instanceof api.ApiError && e.status === 409) {
         message.replaceChildren(
@@ -123,14 +112,26 @@ export function openIndex(app: HTMLElement): void {
   /** 最後に絞り込んだ検索語。同じ語でもう一度検索しない */
   let applied: string | undefined;
 
-  /** いま絞り込みで残しているページ。絞り込んでいなければ null */
-  let matched: Set<string> | null = null;
+  /**
+   * いま絞り込みで残している付箋 → 一致した子孫のページの数。絞り込んでいなければ null。
+   * 一覧にはルートのページしか出ないので、子孫が一致したときは、ルートの付箋を残して、数を付箋に出す。
+   * そのページ自身だけが一致したなら、数は 0
+   */
+  let matched: Map<string, number> | null = null;
+  /** 一致の数を出している付箋（絞り込みが変わったときに、元の本文へ戻す） */
+  let badged = new Set<string>();
 
-  /** `matched` をボードと件数の表示に反映する。表示位置は変えない */
+  /** `matched` を、ボードと件数の表示に反映する。表示位置は変えない */
   const showMatched = (note = '') => {
     if (!board || !index) return;
     const total = index.data.notes.length;
-    board.setNoteFilter(matched && [...matched]);
+    const hits = new Map([...(matched ?? [])].filter(([, descendants]) => descendants > 0));
+    for (const id of new Set([...badged, ...hits.keys()])) {
+      const text = index.texts.get(id);
+      if (text !== undefined) board.updateNote(id, { text: text + descendantHitsHtml(hits.get(id) ?? 0) });
+    }
+    badged = new Set(hits.keys());
+    board.setNoteFilter(matched && [...matched.keys()]);
     count.textContent = matched ? `${matched.size} / ${total} ページ${note}` : `${total} ページ`;
   };
 
@@ -156,18 +157,25 @@ export function openIndex(app: HTMLElement): void {
     // 表示名とスラッグは手元で照合し、すぐに反映する
     // （未作成のページは検索の索引にないので、これだけで判定する）
     const needle = q.toLowerCase();
-    const found = new Set([...index.searchText].filter(([, text]) => text.includes(needle)).map(([id]) => id));
+    const found = new Map(
+      [...index.searchText].filter(([, text]) => text.includes(needle)).map(([id]): [string, number] => [id, 0]),
+    );
     matched = found;
     show();
-    // 本文は、サーバーの検索で照合し、届いたら足す
+    // 本文と、子孫のページは、サーバーの検索で照合し、届いたら足す
     try {
-      const names = await api.searchPages(q);
+      const hits = await api.searchRoots(q);
       // 待っている間に検索語が変わっていたら、古い結果は使わない
       if (request !== latest) return;
       const before = found.size;
-      for (const name of names) if (index.searchText.has(name)) found.add(name);
-      // 一致が増えたときだけ、絞り込みと表示位置をやり直す（待つ間に動かした表示位置を戻さない）
+      for (const { name, root } of hits) {
+        if (!index.searchText.has(root)) continue;
+        // 子孫のページが一致したら、そのルートの付箋に数を出す
+        found.set(root, (found.get(root) ?? 0) + (name === root ? 0 : 1));
+      }
+      // 一致が増えたときだけ、表示位置をやり直す（待つ間に動かした表示位置を戻さない）
       if (found.size !== before) show();
+      else showMatched();
     } catch (e) {
       if (request === latest) showMatched(`（本文の検索に失敗しました: ${errorMessage(e)}）`);
     }
@@ -194,15 +202,19 @@ export function openIndex(app: HTMLElement): void {
     hideActions();
     index = build();
     board.importData(index.data);
-    // importData で絞り込みが解除されるので、同じ結果で掛け直す（検索はやり直さない）。
-    // なくなった付箋は外す
-    if (matched) matched = new Set([...matched].filter((id) => index?.searchText.has(id)));
+    // importData で、絞り込みと、付箋に足した一致の数の表示がなくなる。同じ結果で掛け直す
+    // （検索はやり直さない）。なくなった付箋は外す
+    badged = new Set();
+    // 作り直さず、中身を減らす。検索の応答を待っている処理が、同じものへ結果を足すため
+    for (const id of [...(matched?.keys() ?? [])]) if (!index.searchText.has(id)) matched?.delete(id);
     showMatched();
   };
 
   /** 手元の一覧から、ページを外す。そのページへのリンクは、未作成のページへのリンクになる */
   const dropPage = (slug: string) => {
     pages = pages.filter((p) => p.name !== slug);
+    // 削除したページは、リンクされていれば「未作成」の付箋として残る。子孫の一致の数は出さない
+    if (matched?.has(slug)) matched.set(slug, 0);
     links = links
       .filter((l) => l.from_page !== slug)
       .map((l) => (l.to_page === slug ? { ...l, missing: 1 } : l));

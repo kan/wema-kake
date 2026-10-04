@@ -1,5 +1,5 @@
 // サーバーの HTTP API の呼び出し。形は AGENTS.md の「HTTP API」を参照。
-import type { IndexLink, IndexPage, OpSummary, RevertOutcome } from '../shared/api';
+import type { IndexLink, IndexPage, OpSummary, PageSummary, RevertOutcome, RootHit } from '../shared/api';
 
 /** API がエラーを返した。`status` は HTTP のステータス */
 export class ApiError extends Error {
@@ -27,14 +27,24 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 /** 一覧のボード用。ページ（本文の冒頭つき）と、ページ間のリンク */
 export const getIndex = () => request<{ pages: IndexPage[]; links: IndexLink[] }>('GET', '/api/index');
 
-/** 表示名か本文が検索語に一致するページのスラッグ */
-export async function searchPages(q: string): Promise<string[]> {
-  const { pages } = await request<{ pages: { name: string }[] }>(
-    'GET',
-    `/api/search?names=1&q=${encodeURIComponent(q)}`,
-  );
-  return pages.map((p) => p.name);
+/**
+ * 表示名、本文、スラッグが検索語に一致するページと、そのルート。
+ * 一覧にはルートのページしか出ないので、子孫のページが一致したときは、ルートで知らせる
+ */
+export async function searchRoots(q: string): Promise<RootHit[]> {
+  const { pages } = await request<{ pages: RootHit[] }>('GET', `/api/search?roots=1&q=${encodeURIComponent(q)}`);
+  return pages;
 }
+
+/** ページの概要（子ページの付箋の表示に使う）。索引にないページは、結果に入らない */
+export async function getPagesInfo(names: string[]): Promise<PageSummary[]> {
+  if (names.length === 0) return [];
+  return (await request<{ pages: PageSummary[] }>('POST', '/api/pages-info', { names })).pages;
+}
+
+/** 先祖のページ。ルートから順 */
+export const getAncestors = (slug: string) =>
+  request<{ ancestors: { name: string; title: string | null }[] }>('GET', `/api/pages/${slug}/ancestors`);
 
 /** ページを新しく作る。すでにあれば ApiError（status 409） */
 export const createPage = (slug: string, title: string) =>

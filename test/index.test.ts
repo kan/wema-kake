@@ -265,9 +265,9 @@ describe('一覧のボード用の API', () => {
     const b = body.pages.find((p) => p.name === 'board-b');
     expect((b!.excerpt as string).length).toBe(60);
 
-    // names=1 なら、スラッグだけを返す（一覧の絞り込み用）
-    const names = await api(`/api/search?names=1&q=${encodeURIComponent('A の本文')}`);
-    expect(await names.json()).toEqual({ pages: [{ name: 'board-a' }] });
+    // roots=1 なら、一致したページのスラッグと、そのルートだけを返す（一覧の絞り込み用）
+    const roots = await api(`/api/search?roots=1&q=${encodeURIComponent('A の本文')}`);
+    expect(await roots.json()).toEqual({ pages: [{ name: 'board-a', root: 'board-a' }] });
 
     expect(body.links.filter((l) => l.from_page === 'board-a')).toEqual(
       expect.arrayContaining([

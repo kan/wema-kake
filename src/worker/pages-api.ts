@@ -1,11 +1,11 @@
 // ページの一覧、検索、バックリンクは D1 の索引から返す。ページの中身と表示名は DO から返す。
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
-import { INDEX_EXCERPT_LENGTH, MAX_LIST_LIMIT } from '../shared/api';
+import { INDEX_EXCERPT_LENGTH, MAX_LIST_LIMIT, type PageSummary } from '../shared/api';
 import { isValidSlug } from '../shared/slug';
 import type { AuthEnv } from './access';
 import type { RevertFailure } from './page-do';
-import { listPages, searchPages } from './page-queries';
+import { listPages, searchPages, searchRoots } from './page-queries';
 
 const REVERT_STATUS = {
   'not-found': 404,
@@ -26,27 +26,68 @@ export const pagesApi = new Hono<AuthEnv>();
 pagesApi.get('/session', (c) => c.json({ actor: c.get('actor') }));
 
 /**
- * 一覧のボード用。新しい順のページと、そのページからのリンクをまとめて返す。
- * リンク先が存在しないページ（未作成）なら `missing` が 1 になる。
+ * 一覧のボード用。ルートのページ（親のないページ）を新しい順に返す。子ページと孫ページは、
+ * 親ページの中からたどるので、ここには出さない。`child_count` は、直接の子ページの数。
+ *
+ * リンクは、ルートのページから出ているもののうち、リンク先がルートのページか、存在しない
+ * ページ（未作成。`missing` が 1）のものだけを返す。子孫のページが関わるリンクは、線にしない。
  */
 pagesApi.get('/index', async (c) => {
   const db = c.env.DB;
+  const roots = `SELECT name FROM pages WHERE parent IS NULL ORDER BY updated_at DESC LIMIT ?`;
   const [pages, links] = await db.batch([
     db
       .prepare(
-        `SELECT name, title, note_count, updated_at, substr(plain_text, 1, ?) AS excerpt
-         FROM pages ORDER BY updated_at DESC LIMIT ?`,
+        `SELECT name, title, note_count, updated_at, substr(plain_text, 1, ?) AS excerpt,
+                (SELECT count(*) FROM pages c WHERE c.parent = pages.name) AS child_count
+         FROM pages WHERE parent IS NULL ORDER BY updated_at DESC LIMIT ?`,
       )
       .bind(INDEX_EXCERPT_LENGTH, MAX_LIST_LIMIT),
     db
       .prepare(
         `SELECT l.from_page, l.to_page, p.name IS NULL AS missing
          FROM links l LEFT JOIN pages p ON p.name = l.to_page
-         WHERE l.from_page IN (SELECT name FROM pages ORDER BY updated_at DESC LIMIT ?)`,
+         WHERE l.from_page IN (${roots}) AND p.parent IS NULL`,
       )
       .bind(MAX_LIST_LIMIT),
   ]);
   return c.json({ pages: pages.results, links: links.results });
+});
+
+/** 一度に問い合わせられるページの数 */
+const MAX_INFO_NAMES = 200;
+
+/**
+ * ページの概要をまとめて返す（本文は `{ "names": ["..."] }`）。子ページの付箋の表示に使う。
+ * 索引にないページ（未作成、削除済み）は、結果に入らない。
+ */
+pagesApi.post('/pages-info', async (c) => {
+  const body = await c.req.json<{ names?: unknown }>().catch(() => null);
+  const names = Array.isArray(body?.names) ? body.names.filter((n): n is string => typeof n === 'string') : [];
+  if (names.length === 0 || names.length > MAX_INFO_NAMES || !names.every(isValidSlug)) {
+    return c.json({ error: 'invalid names' }, 400);
+  }
+  const { results } = await c.env.DB.prepare(
+    `SELECT name, title, note_count, parent, layout FROM pages WHERE name IN (SELECT value FROM json_each(?))`,
+  )
+    .bind(JSON.stringify(names))
+    .all<PageSummary>();
+  // 索引への反映は、変更の数秒後。作ったばかりのページは、まだ索引にないので、DO から補う
+  // （付箋の配置は、索引ができるまで出さない）
+  const indexed = new Set(results.map((page) => page.name));
+  for (const name of new Set(names)) {
+    if (indexed.has(name)) continue;
+    const ref = await c.env.PAGE.getByName(name).getPageRef();
+    if (ref) results.push({ name, title: ref.title, note_count: ref.noteCount, parent: ref.parent, layout: null });
+  }
+  return c.json({ pages: results });
+});
+
+/** 先祖のページを、ルートから順に返す（パンくず用）。DO をたどるので、直前の変更も反映される */
+pagesApi.get('/pages/:slug/ancestors', validSlug, async (c) => {
+  // DO は、親に近い順で返す
+  const ancestors = await c.env.PAGE.getByName(c.req.param('slug')).ancestors();
+  return c.json({ ancestors: ancestors.reverse() });
 });
 
 /** ページ一覧。`updated_after`（ミリ秒）より後に更新されたものに絞れる */
@@ -58,9 +99,13 @@ pagesApi.get('/pages', async (c) => {
   return c.json({ pages });
 });
 
-/** 全文検索。`names=1` なら、一致したページのスラッグだけを返す（一覧の絞り込み用） */
+/**
+ * 全文検索。`roots=1` なら、一致したページのスラッグと、そのルートのスラッグだけを返す
+ * （一覧の絞り込み用。一覧にはルートのページしか出ない）
+ */
 pagesApi.get('/search', async (c) => {
-  const pages = await searchPages(c.env.DB, c.req.query('q') ?? '', c.req.query('names') === '1');
+  const q = c.req.query('q') ?? '';
+  const pages = c.req.query('roots') === '1' ? await searchRoots(c.env.DB, q) : await searchPages(c.env.DB, q);
   return pages ? c.json({ pages }) : c.json({ error: 'invalid query' }, 400);
 });
 
@@ -79,7 +124,7 @@ pagesApi.post('/pages/:slug', validSlug, async (c) => {
 
 /** ページの削除。取り消しはできない */
 pagesApi.delete('/pages/:slug', validSlug, async (c) => {
-  await c.env.PAGE.getByName(c.req.param('slug')).deletePage();
+  await c.env.PAGE.getByName(c.req.param('slug')).deletePage(c.get('actor'));
   return c.json({ ok: true });
 });
 

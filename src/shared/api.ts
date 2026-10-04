@@ -23,6 +23,27 @@ export interface IndexPage {
   updated_at: number;
   /** 本文の冒頭（INDEX_EXCERPT_LENGTH 文字まで） */
   excerpt: string;
+  /** 直接の子ページの数 */
+  child_count: number;
+}
+
+/** `POST /api/pages-info` が返す、ページの概要（子ページの付箋の表示に使う） */
+export interface PageSummary {
+  name: string;
+  title: string | null;
+  note_count: number;
+  /** 親ページのスラッグ。ルートのページなら null */
+  parent: string | null;
+  /** 付箋の配置（`[[x, y, 幅, 高さ, 色], ...]` の JSON）。索引がまだなら null */
+  layout: string | null;
+}
+
+/** `GET /api/search?roots=1` が返す、一致したページと、そのルート */
+export interface RootHit {
+  /** 一致したページ */
+  name: string;
+  /** そのページのルート。ルートのページ自身が一致したなら、`name` と同じ */
+  root: string;
 }
 
 /** `GET /api/index` が返すリンク */
