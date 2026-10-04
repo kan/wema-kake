@@ -42,8 +42,15 @@ describe('extractContent: ページへのリンクを書式で残す（LLM に�
     ['<a href="/p/design"></a>', '[[design]]'],
     // サイトの絶対 URL も、ページへのリンクとして扱う
     ['<a href="https://wiki.example.com/p/design">メモ</a>', 'メモ [[design]]'],
-    // 外部のリンクと、ページでないパスは、文字だけを残す
-    ['<a href="https://other.example/p/design">外部</a> <a href="/img/x.png">画像</a>', '外部 画像'],
+    // 外部へのリンクは、URL を残す。文字が URL と違えば、山かっこで後ろに付ける
+    ['<a href="https://other.example/p/design">外部</a>', '外部 <https://other.example/p/design>'],
+    ['<a href="https://other.example/?a=1&amp;b=2">https://other.example/?a=1&amp;b=2</a>', 'https://other.example/?a=1&b=2'],
+    ['<a href="https://other.example/?a=1&amp;b=2">A &amp; B</a>', 'A & B <https://other.example/?a=1&b=2>'],
+    // 文字が、解釈する前の URL と同じなら、URL だけにする
+    ['<a href="https://other.example">https://other.example</a>', 'https://other.example/'],
+    ['<a href="https://other.example/"></a>', 'https://other.example/'],
+    // ページでないパスと、http / https 以外は、文字だけを残す
+    ['<a href="/img/x.png">画像</a> <a href="mailto:a@example.com">連絡先</a>', '画像 連絡先'],
     // リンクの中の装飾は、文字として集める
     ['<a href="/p/design"><b>太字</b>の文字</a>', '太字の文字 [[design]]'],
     ['<ul><li><a href="/p/a">a</a></li><li><a href="/p/b">b</a></li></ul>', '[[a]]\n[[b]]'],
@@ -53,6 +60,31 @@ describe('extractContent: ページへのリンクを書式で残す（LLM に�
 
   it('指定しなければ、リンクの文字だけが残る（検索の索引）', async () => {
     expect((await extractContent('<a href="/p/design">設計メモ</a>')).text).toBe('設計メモ');
+  });
+
+  it('書いた URL は、読むと同じ URL に戻る', async () => {
+    const text = '出典: https://example.com/news?a=1&b=2 と [[design]]\nhttps://other.example/a_(b)';
+    expect((await extractContent(textToHtml(text), links)).text).toBe(text);
+  });
+
+  // 人が貼ったリンクを読んで、書き戻しても、同じリンク先になる（書く側がリンクにしない文字は、エンコードして返す）
+  it.each([
+    ['https://other.example/x', 'https://other.example/x'],
+    ['https://ja.wikipedia.org/wiki/日本', 'https://ja.wikipedia.org/wiki/%E6%97%A5%E6%9C%AC'],
+    ["https://other.example/a'b[c]|d e", 'https://other.example/a%27b%5Bc%5D%7Cd%20e'],
+    ['HTTPS://Other.Example/A', 'https://other.example/A'],
+    // 末尾の句読点と、対にならないかっこ
+    ['https://other.example/a.', 'https://other.example/a%2E'],
+    ['https://other.example/a(b', 'https://other.example/a%28b'],
+    ['https://other.example/a)', 'https://other.example/a%29'],
+    ['https://other.example/wiki/A_(b)', 'https://other.example/wiki/A_(b)'],
+    ['https://other.example/search?', 'https://other.example/search?'],
+  ])('href %s は、%s として読める', async (href, url) => {
+    const html = `<a href="${href.replace(/&/g, '&amp;')}">資料</a>`;
+    const read = (await extractContent(html, links)).text;
+    expect(read).toBe(`資料 <${url}>`);
+    // 書き戻すと、同じ URL へのリンクになる（空のクエリの ? だけは外れる）
+    expect(textToHtml(read)).toContain(`<a href="${url.replace(/\?$/, '')}" `);
   });
 
   it('書いた書式は、読むと同じ書式に戻る', async () => {

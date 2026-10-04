@@ -51,7 +51,20 @@ describe('読み取りのツール', () => {
     const { page, stub } = await newPage([createNote('n1', { text: 'MCP からしか探せない語 絵馬掛所' })]);
     await runDurableObjectAlarm(stub);
     const pages = await call('list_pages', { limit: 500 });
-    expect(pages.find((p: any) => p.name === page)).toMatchObject({ title: 'MCP のテスト', note_count: 1 });
+    const listed = pages.find((p: any) => p.name === page);
+    expect(listed).toMatchObject({ title: 'MCP のテスト', note_count: 1 });
+    // 更新日時は ISO 8601 の文字列で返し、同じ書式で絞り込める
+    expect(listed.updated_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    const before = new Date(Date.parse(listed.updated_at) - 1000).toISOString();
+    const after = new Date(Date.parse(listed.updated_at) + 1000).toISOString();
+    const names = async (updated_after: string) =>
+      (await call('list_pages', { limit: 500, updated_after })).map((p: any) => p.name);
+    expect(await names(before)).toContain(page);
+    expect(await names(after)).not.toContain(page);
+    // 日付だけでも受ける。ISO 8601 でない書式と、数値は断る
+    expect(await names(before.slice(0, 10))).toContain(page);
+    await expect(call('list_pages', { updated_after: 'yesterday' })).rejects.toThrow();
+    await expect(call('list_pages', { updated_after: Date.now() })).rejects.toThrow();
     const hits = await call('search_pages', { query: '絵馬掛所' });
     expect(hits.map((h: any) => h.name)).toContain(page);
   });
@@ -95,6 +108,29 @@ describe('書き込みのツール', () => {
     expect((await notesOf()).map((n) => n.text)).toContain('関連: <a href="/p/design">design</a>');
     const board = await call('read_board', { page });
     expect(board.notes.map((n: any) => n.text)).toEqual(['設計メモ [[design]]', '関連: [[design]]']);
+  });
+
+  it('add_notes は、大きさを指定でき、省略すると高さを本文の量と幅から決める', async () => {
+    const { page, notesOf } = await newPage([]);
+    const long = 'あ'.repeat(260);
+    await call('add_notes', {
+      page,
+      notes: [
+        { text: '短い' },
+        { text: long },
+        { text: long, width: 400 },
+        { text: '指定', width: 320, height: 90 },
+      ],
+    });
+    const [short, tall, wide, fixed] = await notesOf();
+    expect(short).toMatchObject({ width: 200, height: 150 });
+    expect(tall!.width).toBe(200);
+    expect(tall!.height).toBeGreaterThan(150);
+    // 幅を広げると、同じ本文でも低くなる
+    expect(wide!.width).toBe(400);
+    expect(wide!.height).toBeLessThan(tall!.height);
+    expect(fixed).toMatchObject({ width: 320, height: 90 });
+    await expect(call('add_notes', { page, notes: [{ text: 'x', width: 5 }] })).rejects.toThrow();
   });
 
   it('add_notes は、位置を省略すると既存の付箋と重ならないように置く', async () => {

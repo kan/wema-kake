@@ -74,12 +74,15 @@ const noteText = z
   .string()
   .max(20_000)
   .describe(
-    '付箋の本文（プレーンテキスト）。改行できる。"- " で始まる行は箇条書き、"- [ ] " / "- [x] " で始まる行はチェックリストになる。[[スラッグ]] と書くと、そのページへのリンクになる（read_board の本文にも、ページへのリンクは同じ書式で出る）。HTML と外部の URL へのリンクは書けない',
+    '付箋の本文（プレーンテキスト）。改行できる。"- " で始まる行は箇条書き、"- [ ] " / "- [x] " で始まる行はチェックリストになる。[[スラッグ]] と書くと、そのページへのリンクになる（read_board の本文にも、ページへのリンクは同じ書式で出る）。外部のページへは、URL（http:// か https://）をそのまま書くと、その URL を文字にしたリンクになる。リンクの文字は変えられないので、何のリンクかは URL の前後に文で書く。URL の直後の句読点（. , ; : ! ?）は、URL に含めない。HTML と Markdown のリンク（[文字](URL)）は書けない',
   );
 const color = z
   .string()
   .regex(/^#[0-9a-fA-F]{6}$/)
   .describe('付箋の色（#RRGGBB）。分類に使う');
+
+/** 付箋の幅と高さ */
+const noteSize = z.number().min(40).max(2000);
 
 type Rect = { x: number; y: number; width: number; height: number };
 
@@ -90,8 +93,10 @@ const overlaps = (a: Rect, b: Rect) =>
   b.y < a.y + a.height + GAP / 2;
 
 /** 本文の量から、付箋の高さを見積もる（サーバーでは実際の描画の大きさを測れない） */
-function estimateHeight(text: string): number {
-  const lines = text.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / 13)), 0);
+function estimateHeight(text: string, width: number): number {
+  // 1 行に入る文字数は、幅に比例する（幅 200 で、全角 13 文字ほど）
+  const perLine = Math.max(1, Math.floor((13 * width) / NOTE_WIDTH));
+  const lines = text.split('\n').reduce((sum, line) => sum + Math.max(1, Math.ceil(line.length / perLine)), 0);
   return Math.min(Math.max(NOTE_HEIGHT, 40 + lines * 22), 500);
 }
 
@@ -165,16 +170,23 @@ export const TOOLS: Tool[] = [
   tool({
     name: 'list_pages',
     description:
-      'ページの一覧（名前、表示名、付箋の数、更新日時、親ページ）を、更新の新しい順に返す。ページは階層になっていて、parent は親ページの名前（ルートのページなら null）。',
+      'ページの一覧（名前、表示名、付箋の数、更新日時、親ページ）を、更新の新しい順に返す。updated_at は ISO 8601（UTC）の日時。ページは階層になっていて、parent は親ページの名前（ルートのページなら null）。',
     readOnly: true,
     input: z.object({
       updated_after: z
-        .number()
+        .union([z.iso.datetime({ offset: true }), z.iso.date()])
         .optional()
-        .describe('この時刻（UNIX ミリ秒）より後に更新されたページだけを返す'),
+        .describe(
+          'この日時より後に更新されたページだけを返す。ISO 8601 の日時（updated_at と同じ書式）か、日付だけ（その日の UTC の 0 時）',
+        ),
       limit: z.number().int().min(1).max(MAX_LIST_LIMIT).optional(),
     }),
-    run: (access, input) => access.listPages({ updatedAfter: input.updated_after, limit: input.limit }),
+    async run(access, input) {
+      const updatedAfter = input.updated_after === undefined ? undefined : Date.parse(input.updated_after);
+      const pages = await access.listPages({ updatedAfter, limit: input.limit });
+      // 日時は、数値（UNIX ミリ秒）のままだと読み違えやすいので、文字列にして返す
+      return pages.map((p) => ({ ...p, updated_at: new Date(p.updated_at).toISOString() }));
+    },
   }),
 
   tool({
@@ -217,7 +229,7 @@ export const TOOLS: Tool[] = [
   tool({
     name: 'add_notes',
     description:
-      '付箋を追加する。位置を省略すると、near で指定した付箋の右（なければ既存の付箋の下）に、重ならないように置く。connect_from を指定すると、その付箋から新しい付箋へ接続線を引く。',
+      `付箋を追加する。位置を省略すると、near で指定した付箋の右（なければ既存の付箋の下）に、重ならないように置く。大きさを省略すると、幅は ${NOTE_WIDTH}、高さは本文の量に合わせて自動で決まる（長い本文でも、ふつうは指定しなくてよい）。connect_from を指定すると、その付箋から新しい付箋へ接続線を引く。`,
     readOnly: false,
     input: z.object({
       page,
@@ -228,6 +240,10 @@ export const TOOLS: Tool[] = [
             x: z.number().optional(),
             y: z.number().optional(),
             color: color.optional(),
+            width: noteSize.optional().describe(`付箋の幅。省略すると ${NOTE_WIDTH}`),
+            height: noteSize
+              .optional()
+              .describe('付箋の高さ。省略すると、本文の量と幅に合わせて自動で決まる'),
             near: z.string().optional().describe('この id の付箋の近くに置く'),
             connect_from: z.string().optional().describe('この id の付箋から、新しい付箋へ接続線を引く'),
           }),
@@ -244,7 +260,8 @@ export const TOOLS: Tool[] = [
       for (const spec of input.notes) {
         const anchor = spec.near ?? spec.connect_from;
         const near = anchor === undefined ? undefined : findNote(board, anchor);
-        const size = { width: NOTE_WIDTH, height: estimateHeight(spec.text) };
+        const noteWidth = spec.width ?? NOTE_WIDTH;
+        const size = { width: noteWidth, height: spec.height ?? estimateHeight(spec.text, noteWidth) };
         if ((spec.x === undefined) !== (spec.y === undefined)) {
           throw new ToolError('x and y must be given together (or both omitted for automatic placement)');
         }
@@ -286,8 +303,8 @@ export const TOOLS: Tool[] = [
             color: color.optional(),
             x: z.number().optional(),
             y: z.number().optional(),
-            width: z.number().min(40).max(2000).optional(),
-            height: z.number().min(40).max(2000).optional(),
+            width: noteSize.optional(),
+            height: noteSize.optional(),
           }),
         )
         .min(1)
