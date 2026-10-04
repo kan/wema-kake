@@ -384,7 +384,7 @@ WebMCP 版はブラウザ内で wema の API を直接呼ぶので、LLM の変�
 wema-kake の同期と LLM 連携は以下の wema の機能追加が前提。未実装なら wema（github.com/kan/wema）に issue を立ててから進めること。
 issue は下記を 1 つのまとめ issue として立て、各項目をチェックリストにする。autoSize のバグは性質が違うので別 issue にする。
 
-issue は 2026-10-03 に作成済み。**どちらも wema v0.4.0 で対応済み**（wema-kake は、ズームと参照モードの修正が入った `^0.7.1` を使う）。下の下書きは作成時点の写しで、実際の API は wema の README を正とする。
+issue は 2026-10-03 に作成済み。**どちらも wema v0.4.0 で対応済み**（wema-kake は、付箋の `meta` と `renderNote` が入った `^0.8.1` を使う。**0.8.0 は使わないこと**。付箋の本文に `class="wema-note-custom"` の要素があると、`renderNote` の表示が壊れる）。下の下書きは作成時点の写しで、実際の API は wema の README を正とする。
 
 - まとめ issue: https://github.com/kan/wema/issues/50
 - autoSize のバグ: https://github.com/kan/wema/issues/51

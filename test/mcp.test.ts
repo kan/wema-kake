@@ -137,9 +137,12 @@ describe('書き込みのツール', () => {
       { type: 'edge:create', edge: edge('e1', 'n1', 'n2') },
     ]);
     const res = await call('auto_layout', { page });
-    expect(res.moved).toBe(2);
+    // 配置後の左上は、付箋が今占めている範囲の左上に合う（wema 0.8.0 以降）。重なっていた 2 枚の
+    // うち、起点の n1 はその場に残り、n2 だけが下の段へ動く
+    expect(res.moved).toBe(1);
     const at = Object.fromEntries((await notesOf()).map((n) => [n.id, n]));
-    expect(at.n2.y).toBeGreaterThan(at.n1.y);
+    expect(at.n1).toMatchObject({ x: 500, y: 500 });
+    expect(at.n2.y).toBeGreaterThanOrEqual(at.n1.y + at.n1.height);
   });
 
   it('存在しない付箋や、ページのないスラッグへの書き込みは断り、ページを作らない', async () => {
