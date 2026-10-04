@@ -3,7 +3,7 @@
 import { WemaBoard } from '@kanf/wema';
 import { type IndexLink, type IndexPage, MAX_QUERY_LENGTH } from '../shared/api';
 import * as api from './api';
-import { confirmDeletePage, el, errorMessage, formatDate, openInternalLink } from './dom';
+import { confirmDeletePage, el, errorMessage, formatDate, openInternalLink, textInput } from './dom';
 import { attachNoteActions } from './index-actions';
 import { buildIndexBoard, descendantHitsHtml, type IndexBoard } from './index-board';
 import { checkedSlug, pageFields } from './page-form';
@@ -83,7 +83,7 @@ function highlightLinksOnHover(canvas: HTMLElement): void {
 export function openIndex(app: HTMLElement): void {
   document.title = 'wema-kake';
 
-  const search = el('input', {
+  const search = textInput({
     type: 'search',
     className: 'index-search',
     placeholder: 'ページを絞り込む',

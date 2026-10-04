@@ -2,7 +2,7 @@
 // 「子ページを置く」で共有する。作成の後の動作と、作成に失敗したときの表示は、それぞれで違う。
 import { MAX_TITLE_LENGTH } from '../shared/api';
 import { isValidSlug } from '../shared/slug';
-import { el, randomSlug } from './dom';
+import { el, randomSlug, textInput } from './dom';
 
 /** 表示名とスラッグの入力欄。`labels` を、そのままフォームに入れる */
 export function pageFields(): {
@@ -12,8 +12,8 @@ export function pageFields(): {
   /** 入力欄を開いたときの状態にする（表示名は空、スラッグは新しい乱数）。表示名にフォーカスを置く */
   reset: () => void;
 } {
-  const title = el('input', { placeholder: '省略できます', maxLength: MAX_TITLE_LENGTH });
-  const slug = el('input', { value: randomSlug(), title: 'URL に使う名前。小文字の英数字とハイフン' });
+  const title = textInput({ placeholder: '省略できます', maxLength: MAX_TITLE_LENGTH });
+  const slug = textInput({ value: randomSlug(), title: 'URL に使う名前。小文字の英数字とハイフン' });
   return {
     title,
     slug,

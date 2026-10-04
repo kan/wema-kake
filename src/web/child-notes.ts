@@ -6,7 +6,7 @@ import type { WemaBoard, WemaNote } from '@kanf/wema';
 import type { PageSummary } from '../shared/api';
 import { type ChildRejectCode, childPageOf, MAX_DEPTH, parseChildRejection } from '../shared/hierarchy';
 import * as api from './api';
-import { el, errorMessage } from './dom';
+import { el, errorMessage, textInput } from './dom';
 import { checkedSlug, pageFields } from './page-form';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -173,7 +173,7 @@ export function childPageForm(
   );
 
   const roots = el('datalist', { id: 'child-page-roots' });
-  const existingInput = el('input', { placeholder: 'ページの名前（スラッグ）' });
+  const existingInput = textInput({ placeholder: 'ページの名前（スラッグ）' });
   existingInput.setAttribute('list', roots.id);
   const existingForm = el(
     'form',

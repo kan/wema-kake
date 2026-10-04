@@ -28,6 +28,26 @@ export function openInternalLink(url: string, event: MouseEvent): boolean {
   return true;
 }
 
+/**
+ * パスワードマネージャーに、入力の候補を出させないための属性。この画面の入力欄は、ページの
+ * 表示名、スラッグ、検索語で、氏名やログイン情報ではない。「表示名」や「URL」というラベルから、
+ * 候補を出すものがある（1Password など）。標準の属性はないので、製品ごとの属性を付ける
+ */
+const NO_AUTOFILL: Record<string, string> = {
+  autocomplete: 'off',
+  'data-1p-ignore': '', // 1Password
+  'data-lpignore': 'true', // LastPass
+  'data-bwignore': '', // Bitwarden
+  'data-form-type': 'other', // Dashlane
+};
+
+/** 文字を入力する欄。画面の入力欄は、すべてこれで作る（パスワードマネージャーの候補を出さない） */
+export function textInput(props: Partial<HTMLInputElement> = {}): HTMLInputElement {
+  const input = el('input', props);
+  for (const [name, value] of Object.entries(NO_AUTOFILL)) input.setAttribute(name, value);
+  return input;
+}
+
 /** スラッグの初期値。短い乱数（小文字の英数字） */
 export function randomSlug(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(6));

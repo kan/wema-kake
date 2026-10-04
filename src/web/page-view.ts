@@ -5,7 +5,7 @@ import { CHILD_PAGE_KEY } from '../shared/hierarchy';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import * as api from './api';
 import { CHILD_NOTE_SIZE, ChildNotes, childPageForm } from './child-notes';
-import { confirmDeletePage, el, errorMessage, formatDate, openInternalLink } from './dom';
+import { confirmDeletePage, el, errorMessage, formatDate, openInternalLink, textInput } from './dom';
 import type { IconName } from './icons';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
 import { header, iconButton, menuItem, popover, separator, settings, toast, zoomControls } from './toolbar';
@@ -246,7 +246,7 @@ export function openPage(app: HTMLElement, slug: string): void {
 
   // --- 表示名の編集 ---
   title.addEventListener('click', () => {
-    const input = el('input', {
+    const input = textInput({
       className: 'title-input',
       value: currentTitle ?? '',
       placeholder: slug,

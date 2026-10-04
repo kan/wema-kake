@@ -3,7 +3,7 @@
 // 付箋の中身は wema がサニタイズして描くので、ボタンを付箋の HTML には入れられない。
 // ポインタを載せた付箋の右上に、小さなボタンの列を重ねて出す。
 import { MAX_TITLE_LENGTH } from '../shared/api';
-import { el } from './dom';
+import { el, textInput } from './dom';
 import { iconButton, onPressOutside } from './toolbar';
 
 /** これより小さく表示されている付箋には、ボタンを出さない（縮小して全体を見ているとき） */
@@ -29,7 +29,7 @@ export function attachNoteActions(canvas: HTMLElement, handlers: NoteActionHandl
   const removeButton = iconButton('trash', 'ページを削除');
   const buttons = el('div', { className: 'note-actions', hidden: true }, renameButton, removeButton);
 
-  const input = el('input', { maxLength: MAX_TITLE_LENGTH, ariaLabel: '表示名' });
+  const input = textInput({ maxLength: MAX_TITLE_LENGTH, ariaLabel: '表示名' });
   const form = el(
     'form',
     { className: 'note-rename', hidden: true },
