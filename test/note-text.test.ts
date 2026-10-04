@@ -20,6 +20,11 @@ describe('textToHtml', () => {
       '見出し<ul><li>項目</li></ul><ul class="wema-checklist"><li><input type="checkbox">やること</li></ul>結び',
     ],
     ['-ハイフンだけでは箇条書きにしない', '-ハイフンだけでは箇条書きにしない'],
+    // ページへのリンク。スラッグの形でないものは、文字のまま
+    ['[[design]] を参照', '<a href="/p/design">design</a> を参照'],
+    ['- [ ] [[todo-1]] を見る', '<ul class="wema-checklist"><li><input type="checkbox"><a href="/p/todo-1">todo-1</a> を見る</li></ul>'],
+    ['[[Bad_Slug]] [[]] [[a b]] [[https://x.example]]', '[[Bad_Slug]] [[]] [[a b]] [[https://x.example]]'],
+    ['[[<b>]] と [[a]]<script>', '[[&lt;b&gt;]] と <a href="/p/a">a</a>&lt;script&gt;'],
     ['- <script>alert(1)</script>', '<ul><li>&lt;script&gt;alert(1)&lt;/script&gt;</li></ul>'],
   ])('%j → %s', (text, html) => {
     expect(textToHtml(text)).toBe(html);

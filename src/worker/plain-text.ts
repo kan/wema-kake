@@ -1,3 +1,4 @@
+import { pageLink } from '../shared/note-text';
 import { isValidSlug } from '../shared/slug';
 
 const NAMED_ENTITIES: Record<string, string> = {
@@ -26,8 +27,17 @@ export interface NoteContent {
   hrefs: string[];
 }
 
-/** 付箋の text（サニタイズ済みの HTML）から、テキストとリンク先を取り出す */
-export async function extractContent(html: string): Promise<NoteContent> {
+/**
+ * 付箋の text（サニタイズ済みの HTML）から、テキストとリンク先を取り出す。
+ *
+ * `pageLinks` を渡すと、ページへのリンクを `[[slug]]` の書式でテキストに残す（LLM に渡すとき。
+ * 書くときの書式は src/shared/note-text.ts）。リンクの文字がスラッグと違えば、文字の後ろに付ける。
+ * 渡さなければ、リンクの文字だけが残る（検索の索引を作るとき）
+ */
+export async function extractContent(
+  html: string,
+  pageLinks?: { siteOrigin: string | undefined },
+): Promise<NoteContent> {
   if (!html.includes('<')) return { text: decodeEntities(html).trim(), hrefs: [] };
 
   const parts: string[] = [];
@@ -35,7 +45,18 @@ export async function extractContent(html: string): Promise<NoteContent> {
   const rewritten = new HTMLRewriter()
     .on('a[href]', {
       element(el) {
-        hrefs.push(decodeEntities(el.getAttribute('href') ?? ''));
+        const href = decodeEntities(el.getAttribute('href') ?? '');
+        hrefs.push(href);
+        const slug = pageLinks && linkedSlug(href, pageLinks.siteOrigin);
+        if (!slug) return;
+        // リンクの文字を集めておき、閉じタグで、書式に直して置き換える
+        const start = parts.length;
+        el.onEndTag(() => {
+          // 文字は復号しないまま戻す（最後に、全体をまとめて復号する。ここで復号すると 2 回になる）
+          const raw = parts.splice(start).join('').trim();
+          const label = decodeEntities(raw);
+          parts.push(label === '' || label === slug ? pageLink(slug) : `${raw} ${pageLink(slug)}`);
+        });
       },
     })
     .on('br, div, p, li, ul, ol', {
