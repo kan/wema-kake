@@ -217,6 +217,20 @@ describe('ページの API', () => {
     browser.close();
   });
 
+  it('mustExist を付けた表示名の変更は、ページがなければ作らずに断る', async () => {
+    const slug = 'title-must-exist';
+    const put = () =>
+      api(`/api/pages/${slug}/title`, { method: 'PUT', body: JSON.stringify({ title: '改名', mustExist: true }) });
+    // まだないページ（一覧に残っていた削除済みのページ）は、作り直さない
+    const missing = await put();
+    expect(missing.status).toBe(404);
+    expect(await missing.json()).toEqual({ error: 'page not found' });
+    expect(await (await api(`/api/pages/${slug}`)).json()).toMatchObject({ epoch: null });
+
+    await env.PAGE.getByName(slug).createPage('元の名前');
+    expect(await (await put()).json()).toEqual({ ok: true, title: '改名' });
+  });
+
   it.each([
     ['文字列でない', 123],
     ['長すぎる', 'a'.repeat(201)],

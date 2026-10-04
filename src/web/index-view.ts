@@ -1,14 +1,18 @@
 // 一覧の画面（/）。ページの一覧を wema のボードで表す（docs/plan.md の 3.7 節）。
 // ページ 1 つが付箋 1 枚、ページ間のリンクが接続線。検索は、一致するページの付箋だけを残す。
 import { WemaBoard } from '@kanf/wema';
-import { MAX_QUERY_LENGTH, MAX_TITLE_LENGTH } from '../shared/api';
+import { type IndexLink, type IndexPage, MAX_QUERY_LENGTH, MAX_TITLE_LENGTH } from '../shared/api';
 import { isValidSlug } from '../shared/slug';
 import * as api from './api';
-import { el, errorMessage, formatDate, openInternalLink } from './dom';
+import { confirmDeletePage, el, errorMessage, formatDate, openInternalLink } from './dom';
+import { attachNoteActions } from './index-actions';
 import { buildIndexBoard, type IndexBoard } from './index-board';
+import { header, popover, separator, toast, zoomControls } from './toolbar';
 
 /** 入力が止まってから検索するまでの時間 */
 const SEARCH_DELAY_MS = 200;
+/** 通知を出しておく時間 */
+const NOTICE_MS = 8000;
 
 /** スラッグの初期値。短い乱数（小文字の英数字） */
 function randomSlug(): string {
@@ -18,16 +22,15 @@ function randomSlug(): string {
 
 /** 新規ページの入力欄 */
 function newPageForm(): HTMLFormElement {
-  const titleInput = el('input', { placeholder: '表示名（省略できます）', maxLength: MAX_TITLE_LENGTH });
+  const titleInput = el('input', { placeholder: '省略できます', maxLength: MAX_TITLE_LENGTH });
   const slugInput = el('input', { value: randomSlug(), title: 'URL に使う名前。小文字の英数字とハイフン' });
-  const message = el('span', { className: 'sync-notice' });
+  const message = el('div', { className: 'form-error' });
   const form = el(
     'form',
     { className: 'new-page' },
-    titleInput,
-    el('span', { textContent: '/p/' }),
-    slugInput,
-    el('button', { type: 'submit', textContent: '新規ページ' }),
+    el('label', {}, '表示名', titleInput),
+    el('label', {}, 'URL', el('span', { className: 'slug-field' }, '/p/', slugInput)),
+    el('button', { type: 'submit', textContent: '作成' }),
     message,
   );
 
@@ -60,6 +63,34 @@ function newPageForm(): HTMLFormElement {
   return form;
 }
 
+/**
+ * 一覧で縮小できる下限。上限の 500 ページを格子に並べた大きさでも、全体が収まる。
+ * リンクが 50 段以上つながる鎖は縦に伸びるので、この倍率でも収まらない
+ */
+const INDEX_MIN_ZOOM = 0.05;
+
+/**
+ * 付箋にポインタを載せている間、そのページにつながる線だけを目立たせる（他の線は薄くする）。
+ * リンクの多い一覧では線が重なるので、見たいページの線をたどれるようにする。
+ * 線の id は「リンク元>リンク先」（index-board.ts）で、スラッグに `>` は入らない。
+ */
+function highlightLinksOnHover(canvas: HTMLElement): void {
+  let current: string | undefined;
+  const show = (slug: string | undefined) => {
+    if (slug === current) return;
+    current = slug;
+    canvas.classList.toggle('index-focus', slug !== undefined);
+    for (const group of canvas.querySelectorAll<SVGElement>('.wema-edge-group')) {
+      const [from, to] = (group.dataset.edgeId ?? '').split('>');
+      group.classList.toggle('index-linked', slug !== undefined && (from === slug || to === slug));
+    }
+  };
+  canvas.addEventListener('pointerover', (e) => {
+    show((e.target as Element).closest<HTMLElement>('.wema-note')?.dataset.noteId);
+  });
+  canvas.addEventListener('pointerleave', () => show(undefined));
+}
+
 export function openIndex(app: HTMLElement): void {
   document.title = 'wema-kake';
 
@@ -70,21 +101,19 @@ export function openIndex(app: HTMLElement): void {
     maxLength: MAX_QUERY_LENGTH,
     value: new URLSearchParams(location.search).get('q') ?? '',
   });
-  const count = el('span', { className: 'sync-status' });
+  const count = el('span', { className: 'index-count' });
+  // ズームのボタンは、ボードができてから入れる
+  const zoomSlot = el('span', { className: 'tool-group optional' });
+  // 新規ページの入力欄は常には出さず、ボタンを押したときに開く
+  const form = newPageForm();
+  const newPage = popover(
+    el('button', { type: 'button', className: 'text-button primary', textContent: '＋ 新規ページ' }),
+    form,
+    { align: 'right', onOpen: () => form.querySelector('input')?.focus() },
+  );
   // ボードを置く要素。大きさは表示領域に固定し、はみ出した付箋へは wema のパンで移動する
   const canvas = el('div', { className: 'index-canvas' });
-  app.append(
-    el(
-      'header',
-      { className: 'page-header' },
-      el('h1', { textContent: 'wema-kake' }),
-      search,
-      count,
-      el('span', { className: 'spacer' }),
-      newPageForm(),
-    ),
-    canvas,
-  );
+  app.append(header([el('h1', { textContent: 'wema-kake' })], [search, count, zoomSlot], [newPage.root]), canvas);
 
   let board: WemaBoard | undefined;
   let index: IndexBoard | undefined;
@@ -94,6 +123,17 @@ export function openIndex(app: HTMLElement): void {
   /** 最後に絞り込んだ検索語。同じ語でもう一度検索しない */
   let applied: string | undefined;
 
+  /** いま絞り込みで残しているページ。絞り込んでいなければ null */
+  let matched: Set<string> | null = null;
+
+  /** `matched` をボードと件数の表示に反映する。表示位置は変えない */
+  const showMatched = (note = '') => {
+    if (!board || !index) return;
+    const total = index.data.notes.length;
+    board.setNoteFilter(matched && [...matched]);
+    count.textContent = matched ? `${matched.size} / ${total} ページ${note}` : `${total} ページ`;
+  };
+
   const applyFilter = async () => {
     if (!board || !index) return;
     const q = search.value.trim();
@@ -101,41 +141,35 @@ export function openIndex(app: HTMLElement): void {
     applied = q;
     history.replaceState(null, '', q ? `/?q=${encodeURIComponent(q)}` : '/');
     const request = ++latest;
-    const total = index.data.notes.length;
     if (q === '') {
-      board.setNoteFilter(null);
+      matched = null;
+      showMatched();
       // 開いたときと同じ表示位置と倍率へ戻す（配置は、この位置で幅に収まるように組んである）
       board.setViewport({ x: 0, y: 0, zoom: 1 });
-      count.textContent = `${total} ページ`;
       return;
     }
-    const showCount = (matched: Set<string>, note = '') => {
-      count.textContent = `${matched.size} / ${total} ページ${note}`;
-    };
-    const show = (matched: Set<string>) => {
-      board?.setNoteFilter([...matched]);
+    const show = () => {
+      showMatched();
       // 付箋の位置は変えず、残った付箋がすべて見える位置と倍率にする（等倍より大きくはしない）
       board?.fitToContent();
-      showCount(matched);
     };
     // 表示名とスラッグは手元で照合し、すぐに反映する
     // （未作成のページは検索の索引にないので、これだけで判定する）
     const needle = q.toLowerCase();
-    const matched = new Set(
-      [...index.searchText].filter(([, text]) => text.includes(needle)).map(([id]) => id),
-    );
-    show(matched);
+    const found = new Set([...index.searchText].filter(([, text]) => text.includes(needle)).map(([id]) => id));
+    matched = found;
+    show();
     // 本文は、サーバーの検索で照合し、届いたら足す
     try {
       const names = await api.searchPages(q);
       // 待っている間に検索語が変わっていたら、古い結果は使わない
       if (request !== latest) return;
-      const before = matched.size;
-      for (const name of names) if (index.searchText.has(name)) matched.add(name);
+      const before = found.size;
+      for (const name of names) if (index.searchText.has(name)) found.add(name);
       // 一致が増えたときだけ、絞り込みと表示位置をやり直す（待つ間に動かした表示位置を戻さない）
-      if (matched.size !== before) show(matched);
+      if (found.size !== before) show();
     } catch (e) {
-      if (request === latest) showCount(matched, `（本文の検索に失敗しました: ${errorMessage(e)}）`);
+      if (request === latest) showMatched(`（本文の検索に失敗しました: ${errorMessage(e)}）`);
     }
   };
 
@@ -145,22 +179,95 @@ export function openIndex(app: HTMLElement): void {
     timer = setTimeout(() => void applyFilter(), SEARCH_DELAY_MS);
   });
 
+  // --- 付箋の上での操作（表示名の変更、ページの削除） ---
+  let pages: IndexPage[] = [];
+  let links: IndexLink[] = [];
+  const build = () =>
+    buildIndexBoard(pages, links, { width: canvas.clientWidth, height: canvas.clientHeight }, formatDate);
+  const notify = toast(canvas, NOTICE_MS);
+
+  /** 手元の一覧を書き換えた後に、ボードを作り直す。見ている場所と絞り込みは変えない */
+  const rebuild = () => {
+    if (!board) return;
+    // 最後の 1 ページを消したときは、読み込み直して「まだページがありません」を出す
+    if (pages.length === 0) return location.reload();
+    hideActions();
+    index = build();
+    board.importData(index.data);
+    // importData で絞り込みが解除されるので、同じ結果で掛け直す（検索はやり直さない）。
+    // なくなった付箋は外す
+    if (matched) matched = new Set([...matched].filter((id) => index?.searchText.has(id)));
+    showMatched();
+  };
+
+  /** 手元の一覧から、ページを外す。そのページへのリンクは、未作成のページへのリンクになる */
+  const dropPage = (slug: string) => {
+    pages = pages.filter((p) => p.name !== slug);
+    links = links
+      .filter((l) => l.from_page !== slug)
+      .map((l) => (l.to_page === slug ? { ...l, missing: 1 } : l));
+    rebuild();
+  };
+
+  /** 削除を送っている途中のページ。付箋は残っているが、操作はさせない */
+  const deleting = new Set<string>();
+
+  const hideActions = attachNoteActions(canvas, {
+    // 未作成のページ（リンクだけがある）は、一覧に含まれないので操作できない
+    titleOf: (slug) => (deleting.has(slug) ? undefined : pages.find((p) => p.name === slug)?.title),
+    rename(slug, title) {
+      api
+        // 一覧が古くて、すでに削除されているページは、作り直さずに失敗させる
+        .setTitle(slug, title, true)
+        .then((result) => {
+          pages = pages.map((p) => (p.name === slug ? { ...p, title: result.title } : p));
+          rebuild();
+        })
+        .catch((e: unknown) => {
+          if (e instanceof api.ApiError && e.status === 404) {
+            notify('このページは、すでに削除されています');
+            dropPage(slug);
+          } else {
+            notify(`表示名の変更に失敗しました（${errorMessage(e)}）`);
+          }
+        });
+    },
+    remove(slug) {
+      const page = pages.find((p) => p.name === slug);
+      if (!page) return;
+      if (!confirmDeletePage(page.title ?? slug)) return;
+      deleting.add(slug);
+      api
+        .deletePage(slug)
+        .then(() => dropPage(slug))
+        .catch((e: unknown) => notify(`削除に失敗しました（${errorMessage(e)}）`))
+        .finally(() => deleting.delete(slug));
+    },
+  });
+
   api
     .getIndex()
-    .then(({ pages, links }) => {
+    .then((result) => {
+      ({ pages, links } = result);
       if (pages.length === 0) {
         canvas.append(el('p', { className: 'empty', textContent: 'まだページがありません' }));
         return;
       }
-      index = buildIndexBoard(pages, links, canvas.clientWidth, formatDate);
+      index = build();
       // 参照モード: 編集の UI は出ず、付箋はドラッグできるが、保存はしない。
       // 空いている場所のドラッグとホイールで、表示位置を動かせる
       board = new WemaBoard({
         container: canvas,
         data: index.data,
         viewOnly: true,
+        // ページが多くても、全体が収まる倍率まで縮小できるようにする
+        minZoom: INDEX_MIN_ZOOM,
         onLinkClick: openInternalLink,
       });
+      zoomSlot.append(separator(), zoomControls(board, canvas));
+      highlightLinksOnHover(canvas);
+      // 表示位置や倍率が動いたら、付箋の上のボタンは位置がずれるので隠す
+      board.on('viewport:change', hideActions);
       return applyFilter();
     })
     .catch((e: unknown) => {

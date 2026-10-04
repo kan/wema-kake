@@ -1,6 +1,6 @@
 import { internalUrl } from './links';
 
-type Child = Node | string | null | undefined | false;
+export type Child =Node | string | null | undefined | false;
 
 /** 要素を作る。`props` は要素のプロパティ（className、textContent、onclick など） */
 export function el<K extends keyof HTMLElementTagNameMap>(
@@ -26,6 +26,11 @@ export function openInternalLink(url: string, event: MouseEvent): boolean {
   if (target === null) return false;
   location.assign(target);
   return true;
+}
+
+/** ページの削除を確かめる（ページの画面と一覧の画面で、同じ文言を出す） */
+export function confirmDeletePage(name: string): boolean {
+  return confirm(`ページ「${name}」を削除します。付箋と履歴がすべて消え、取り消しはできません。`);
 }
 
 export function errorMessage(e: unknown): string {

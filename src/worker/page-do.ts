@@ -281,10 +281,17 @@ export class PageDO extends DurableObject<Env> {
   /**
    * 表示名を変える。空文字なら未設定に戻す（表示はスラッグになる）。
    * 付箋のデルタではないので ops には記録しない。
+   *
+   * まだ作られていないページに呼ぶと、ページができる。`mustExist` なら、作らずに断る
+   * （一覧の画面からの変更。古い一覧に残っている削除済みのページを、作り直さないため）
    */
-  setTitle(input: unknown): { ok: true; title: string | null } | { ok: false; reason: string } {
+  setTitle(
+    input: unknown,
+    options: { mustExist?: boolean } = {},
+  ): { ok: true; title: string | null } | { ok: false; reason: 'invalid title' | 'page not found' } {
     const title = parseTitle(input);
     if (title === undefined) return { ok: false, reason: 'invalid title' };
+    if (options.mustExist && this.version === 0) return { ok: false, reason: 'page not found' };
     this.migrate();
     this.setMeta('title', title);
     this.broadcast(this.metaJson());

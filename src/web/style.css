@@ -1,25 +1,91 @@
 html, body { height: 100%; margin: 0; }
-body { font-family: system-ui, sans-serif; font-size: 14px; }
+body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 #app { height: 100%; display: flex; flex-direction: column; }
 
+/* --- ヘッダー（1 行。左: 場所、中央: 付箋の操作、右: Wiki の機能） --- */
 .page-header {
   display: flex; align-items: center; gap: 12px;
-  padding: 6px 12px; border-bottom: 1px solid #ddd;
+  height: 40px; padding: 0 12px; box-sizing: border-box; flex: none;
+  border-bottom: 1px solid #ddd; background: #fafafa;
 }
-.page-header h1 { font-size: 16px; margin: 0; }
-.page-header .spacer { flex: 1; }
-.page-header button { font-size: 12px; }
-.page-header button.danger { color: #b91c1c; }
+.zone { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 左と右を同じ伸び方にして、中央の区画を中央に置く */
+.zone-left, .zone-right { flex: 1 1 0; }
+.zone-right { justify-content: flex-end; }
+.zone-tools { flex: none; gap: 4px; }
+.zone-left > a { font-size: 12px; color: #555; flex: none; }
+.page-header h1 {
+  font-size: 15px; margin: 0; min-width: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .page-title { cursor: text; }
-.title-input { font-size: 16px; font-weight: bold; width: 20em; }
+.title-input { font-size: 15px; font-weight: bold; width: 20em; min-width: 0; }
 
-.sync-status { font-size: 12px; color: #666; }
-.sync-status[data-state='offline'] { color: #b45309; }
-.sync-notice { font-size: 12px; color: #b91c1c; }
-.backlinks { font-size: 12px; color: #666; }
+.tool-group { display: inline-flex; align-items: center; gap: 2px; }
+.separator { width: 1px; height: 18px; background: #ddd; margin: 0 4px; flex: none; }
 
-.page-body { flex: 1; min-height: 0; display: flex; }
-.board { flex: 1; min-width: 0; }
+/* ボタンは無彩色。色を使うのは、オフラインの印と削除だけ */
+.icon-button, .zoom-level, .text-button {
+  border: 1px solid transparent; border-radius: 4px; background: none; color: #444;
+  font: inherit; font-size: 12px; cursor: pointer; flex: none;
+}
+.icon-button { width: 28px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.icon { display: inline-flex; }
+.zoom-level { min-width: 44px; height: 28px; padding: 0 4px; font-variant-numeric: tabular-nums; }
+.text-button { height: 28px; padding: 0 8px; white-space: nowrap; }
+.text-button.primary { border-color: #ccc; background: #fff; }
+.icon-button:hover:not(:disabled), .zoom-level:hover, .text-button:hover,
+.icon-button[aria-expanded='true'], .text-button[aria-expanded='true'] { background: #eaeaea; }
+.icon-button:disabled { color: #bbb; cursor: default; }
+
+/* 同期の状態。同期済みのときは何も出さない */
+.sync-status { font-size: 12px; color: #b45309; white-space: nowrap; flex: none; }
+.sync-status::before {
+  content: ''; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  background: #aaa; margin-right: 4px;
+}
+.sync-status[title='']::before { display: none; }
+.sync-status[data-state='offline']::before { background: #d97706; }
+
+/* --- 押すと開くパネル（メニュー、整列、リンク元、新規ページ） --- */
+.popover { position: relative; display: inline-flex; }
+.popover-panel {
+  position: absolute; top: calc(100% + 6px); z-index: 1000;
+  background: #fff; border: 1px solid #ccc; border-radius: 6px;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.12); padding: 4px;
+}
+.popover-panel[hidden] { display: none; }
+.popover-left { left: 0; }
+.popover-right { right: 0; }
+
+.layout-panel { display: grid; grid-template-columns: repeat(3, 28px); gap: 2px; }
+.menu { display: flex; flex-direction: column; min-width: 180px; }
+.menu-item {
+  border: none; background: none; text-align: left; font: inherit; font-size: 13px;
+  padding: 6px 10px; border-radius: 4px; cursor: pointer; color: #222; white-space: nowrap;
+}
+.menu-item:hover { background: #eee; }
+.menu-item.danger { color: #b91c1c; }
+.menu hr { border: none; border-top: 1px solid #e5e5e5; margin: 4px 0; width: 100%; }
+.link-list { display: flex; flex-direction: column; min-width: 180px; max-width: 320px; max-height: 60vh; overflow-y: auto; }
+.link-list a {
+  flex: none; padding: 6px 10px; border-radius: 4px; font-size: 13px; color: #222; text-decoration: none;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.link-list a:hover { background: #eee; }
+
+/* --- ページの画面 --- */
+.page-body { flex: 1; min-height: 0; display: flex; position: relative; }
+/* isolation: wema のポップアップ（z-index が 10000 台）を、ボードの中に閉じ込める。
+   これがないと、ヘッダーのパネルや通知の上に出る */
+.board { flex: 1; min-width: 0; isolation: isolate; }
+
+/* 一時的な通知。ボードの上に重ねて出す */
+.toast {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 900;
+  max-width: min(90%, 560px); padding: 8px 14px; border-radius: 6px;
+  background: #333; color: #fff; font-size: 13px; box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
+}
 
 .history-panel {
   width: 300px; border-left: 1px solid #ddd; overflow-y: auto;
@@ -33,7 +99,50 @@ body { font-family: system-ui, sans-serif; font-size: 14px; }
 .op-meta { color: #666; }
 .op-summary { margin: 2px 0 4px; overflow-wrap: anywhere; }
 
-.new-page { display: flex; align-items: center; gap: 4px; font-size: 12px; }
-.index-search { width: 16em; }
-.index-canvas { flex: 1; min-height: 0; }
+.help { border: 1px solid #ccc; border-radius: 8px; padding: 16px 20px; max-width: 520px; font-size: 13px; }
+.help::backdrop { background: rgb(0 0 0 / 0.3); }
+.help h2 { font-size: 16px; margin: 0 0 8px; }
+.help h3 { font-size: 13px; margin: 12px 0 4px; }
+.help ul { margin: 0; padding-left: 1.4em; }
+.help form { margin-top: 16px; text-align: right; }
+
+/* --- 一覧の画面 --- */
+.index-search { width: 16em; min-width: 6em; height: 26px; box-sizing: border-box; font: inherit; font-size: 13px; }
+.index-count { font-size: 12px; color: #666; white-space: nowrap; }
+.index-canvas { flex: 1; min-height: 0; isolation: isolate; position: relative; overflow: hidden; }
+/* 付箋の上に重ねて出す操作（index-actions.ts）。wema のポップアップより前に出す */
+.note-actions, .note-rename {
+  position: absolute; z-index: 20000; display: flex; align-items: center; gap: 2px;
+  background: #fff; border: 1px solid #ccc; border-radius: 6px; padding: 2px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.15);
+}
+.note-actions[hidden], .note-rename[hidden] { display: none; }
+.note-actions .icon-button { width: 24px; height: 24px; }
+.note-rename { box-sizing: border-box; gap: 4px; padding: 4px; }
+.note-rename input { flex: 1; min-width: 0; font: inherit; font-size: 13px; }
+.note-rename button { font: inherit; font-size: 12px; flex: none; }
 .index-canvas .empty { padding: 12px; }
+/* リンクの線は本数が多いので、薄い色にする。付箋にポインタを載せている間は、
+   そのページにつながる線だけを目立たせる（index-view.ts の highlightLinksOnHover） */
+.index-canvas .wema-board { --wema-edge-color: #8b95a1; }
+/* 線は付箋の後ろを通す（付箋の上を横切らせない）。付箋の zIndex は 1（index-board.ts） */
+.index-canvas .wema-edges { z-index: 0 !important; }
+/* 矢印は全部の線で共有されていて、線ごとには色を変えられない。そこで、載せている間は線の色を
+   全体で変え、つながらない線は薄くする */
+.index-canvas.index-focus .wema-board { --wema-edge-color: #2563eb; }
+.index-canvas.index-focus .wema-edge-group { opacity: 0.15; }
+.index-canvas.index-focus .wema-edge-group.index-linked { opacity: 1; }
+.index-canvas .index-linked .wema-edge-path { stroke-width: 2px !important; }
+.new-page { display: flex; flex-direction: column; gap: 8px; padding: 8px; width: 260px; font-size: 12px; }
+.new-page label { display: flex; flex-direction: column; gap: 2px; color: #555; }
+.new-page input { font: inherit; font-size: 13px; min-width: 0; }
+.slug-field { display: flex; align-items: center; gap: 2px; color: #888; }
+.slug-field input { flex: 1; }
+.form-error { color: #b91c1c; }
+.form-error:empty { display: none; }
+
+/* 幅が狭いときは、整列とズームのボタンを隠す（ズームは Ctrl + ホイールでできる） */
+@media (max-width: 760px) {
+  .optional { display: none; }
+  .index-search { width: 9em; }
+}

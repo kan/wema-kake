@@ -119,9 +119,15 @@ pagesApi.post('/pages/:slug/ops/:seq/revert', validSlug, async (c) => {
   return c.json({ error: result.reason }, REVERT_STATUS[result.code]);
 });
 
-/** 表示名の変更。まだ書き込みのないページに対して呼ぶと、ページが作られる */
+/**
+ * 表示名の変更。まだ書き込みのないページに対して呼ぶと、ページが作られる。
+ * 本文に `"mustExist": true` があれば、作らずに 404 を返す
+ */
 pagesApi.put('/pages/:slug/title', validSlug, async (c) => {
-  const body = await c.req.json<{ title?: unknown }>().catch(() => null);
-  const result = await c.env.PAGE.getByName(c.req.param('slug')).setTitle(body?.title);
-  return result.ok ? c.json(result) : c.json({ error: result.reason }, 400);
+  const body = await c.req.json<{ title?: unknown; mustExist?: unknown }>().catch(() => null);
+  const result = await c.env.PAGE.getByName(c.req.param('slug')).setTitle(body?.title, {
+    mustExist: body?.mustExist === true,
+  });
+  if (result.ok) return c.json(result);
+  return c.json({ error: result.reason }, result.reason === 'page not found' ? 404 : 400);
 });

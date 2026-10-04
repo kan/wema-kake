@@ -43,8 +43,9 @@ export const createPage = (slug: string, title: string) =>
 export const getBacklinks = (slug: string) =>
   request<{ pages: { name: string; title: string | null }[] }>('GET', `/api/pages/${slug}/backlinks`);
 
-export const setTitle = (slug: string, title: string) =>
-  request<{ title: string | null }>('PUT', `/api/pages/${slug}/title`, { title });
+/** `mustExist` なら、ページがないときに作らず、404 で失敗する */
+export const setTitle = (slug: string, title: string, mustExist = false) =>
+  request<{ title: string | null }>('PUT', `/api/pages/${slug}/title`, { title, mustExist });
 
 export const deletePage = (slug: string) => request<{ ok: true }>('DELETE', `/api/pages/${slug}`);
 
