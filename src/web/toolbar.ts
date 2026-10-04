@@ -5,6 +5,7 @@
 import type { WemaBoard } from '@kanf/wema';
 import { type Child, el } from './dom';
 import { type IconName, icon } from './icons';
+import { viewSignal } from './navigation';
 
 /** 3 つの区画を持つヘッダー */
 export function header(left: Child[], tools: Child[], right: Child[]): HTMLElement {
@@ -37,7 +38,8 @@ export function onPressOutside(panel: HTMLElement, root: HTMLElement, close: () 
     (e) => {
       if (!panel.hidden && !root.contains(e.target as Node)) close();
     },
-    true,
+    // 画面が切り替わったら外す
+    { capture: true, signal: viewSignal() },
   );
 }
 
@@ -65,9 +67,13 @@ export function popover(
     options.onOpen?.();
   });
   onPressOutside(panel, root, close);
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !panel.hidden) close();
-  });
+  document.addEventListener(
+    'keydown',
+    (e) => {
+      if (e.key === 'Escape' && !panel.hidden) close();
+    },
+    { signal: viewSignal() },
+  );
   return { root, close };
 }
 

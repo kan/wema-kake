@@ -1,17 +1,21 @@
 // ページの画面（/p/<slug>）。wema のボードと、見出し（表示名、バックリンク、操作の履歴、削除）。
 import { WemaBoard } from '@kanf/wema';
 import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type SkipReason } from '../shared/api';
-import { CHILD_PAGE_KEY } from '../shared/hierarchy';
+import { CHILD_PAGE_KEY, childPageOf } from '../shared/hierarchy';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import * as api from './api';
 import { CHILD_NOTE_SIZE, ChildNotes, childPageForm } from './child-notes';
-import { confirmDeletePage, el, errorMessage, formatDate, openInternalLink, textInput } from './dom';
+import { confirmDeletePage, el, errorMessage, formatDate, isPlainClick, openInternalLink, textInput } from './dom';
 import type { IconName } from './icons';
+import { onViewEnd, setBeforeLeave, type Transition, viewSignal } from './navigation';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
 import { header, iconButton, menuItem, popover, separator, settings, toast, zoomControls } from './toolbar';
+import { zoomTransitions } from './viewport-motion';
 import { rememberViewport } from './viewport-store';
 
 const NOTICE_MS = 8000;
+/** 他のページへ切り替える前に、保存中の変更を待つ時間の上限 */
+const LEAVE_WAIT_MS = 1500;
 
 /** ブラウザごとの設定のキー。ページの内容と同期の対象には含めない */
 const VIEW_ONLY_KEY = 'view-only';
@@ -61,7 +65,8 @@ function connect(slug: string): Promise<SyncSocket> {
   });
 }
 
-export function openPage(app: HTMLElement, slug: string): void {
+/** `arrival` は、どのように切り替わってきたか。最初の同期が済んだときに、最初の表示位置を決めるのに使う */
+export function openPage(app: HTMLElement, slug: string, arrival?: Transition): void {
   let currentTitle: string | null = null;
   /** このタブで削除を実行中か。完了を待ってから一覧へ戻るので、切断の通知では戻らない */
   let deleting = false;
@@ -73,7 +78,7 @@ export function openPage(app: HTMLElement, slug: string): void {
   const historyPanel = el('aside', { className: 'history-panel', hidden: true });
   const body = el('div', { className: 'page-body' }, container, historyPanel);
   // 子ページの付箋は、本文の代わりに子ページの概要を出す。表示名を押すと、子ページへ入る
-  const childNotes = new ChildNotes(slug);
+  const childNotes = new ChildNotes(slug, (child, noteId) => void zoom.enter(noteId, `/p/${child}`));
   const board = new WemaBoard({
     container,
     readOnly: true,
@@ -86,7 +91,29 @@ export function openPage(app: HTMLElement, slug: string): void {
   childNotes.attach(board);
 
   // 表示位置と倍率は、ページごとにブラウザへ保存する（次に開いたときと、子ページから戻ったときに使う）
-  const restoreViewport = rememberViewport(board, slug);
+  const viewport = rememberViewport(board, slug);
+
+  // --- 階層を移るときの、ズームの演出（子ページへ入る、親ページや一覧へ戻る） ---
+  // 演出で動かした位置を、このページの見ていた場所として保存しない
+  const zoom = zoomTransitions(board, viewport.freeze);
+  /** 上の階層（先祖のページか、一覧）へのリンクを、縮んでから切り替わるようにする */
+  const leaveOnClick = (link: HTMLAnchorElement, from: () => string) => {
+    link.addEventListener('click', (e) => {
+      if (!isPlainClick(e)) return;
+      e.preventDefault();
+      void zoom.leave(link.href, from());
+    });
+    return link;
+  };
+  /** このページのルート（一覧に付箋として出ているページ）。先祖が分かるまでは、このページ自身 */
+  let root = slug;
+  /** 最初の表示位置を決める。入ってきたときは小さい状態から、戻ってきたときは子ページの付箋から広げる */
+  const arrive = async () => {
+    viewport.restore();
+    await zoom.arrive(arrival, (page) => board.getNotes().find((note) => childPageOf(note) === page));
+    // 表示位置の保存は、演出が済んでから始める（演出の途中の位置を、見ていた場所として保存しない）
+    viewport.start();
+  };
 
   // 一時的な通知は、ボードの上に重ねて出す
   const notify = toast(body, NOTICE_MS);
@@ -164,7 +191,7 @@ export function openPage(app: HTMLElement, slug: string): void {
     if (active instanceof HTMLElement && (active.isContentEditable || active.matches('input, textarea'))) return;
     e.preventDefault();
     board.selectAll();
-  });
+  }, { signal: viewSignal() });
 
   board.on('readOnly:change', updateTools);
   board.on('history:change', updateTools);
@@ -182,7 +209,8 @@ export function openPage(app: HTMLElement, slug: string): void {
 
   app.append(
     header(
-      [el('a', { href: '/', textContent: '一覧' }), crumbs, title, status],
+      // 一覧へ戻るときは、このページのルートの付箋へ縮む
+      [leaveOnClick(el('a', { href: '/', textContent: '一覧' }), () => root), crumbs, title, status],
       [
         el('span', { className: 'tool-group' }, undoButton, redoButton),
         separator(),
@@ -199,9 +227,13 @@ export function openPage(app: HTMLElement, slug: string): void {
   api
     .getAncestors(slug)
     .then(({ ancestors }) => {
-      for (const page of ancestors) {
-        crumbs.append(el('a', { href: `/p/${page.name}`, textContent: page.title ?? page.name }), '›');
-      }
+      root = ancestors[0]?.name ?? slug;
+      ancestors.forEach((page, i) => {
+        // 戻り先のページに置いてあるのは、道筋の上で 1 つ下のページ
+        const child = ancestors[i + 1]?.name ?? slug;
+        const link = el('a', { href: `/p/${page.name}`, textContent: page.title ?? page.name });
+        crumbs.append(leaveOnClick(link, () => child), '›');
+      });
     })
     .catch(fail('親ページの取得'));
 
@@ -213,7 +245,7 @@ export function openPage(app: HTMLElement, slug: string): void {
       // 参照モードは、サーバーの内容を読み込んだ後に入る（入った時点の位置を wema が覚えるため）
       if (settings.get(VIEW_ONLY_KEY) === '1') board.setViewOnly(true);
       // 前に見ていた場所があればそこへ、なければ全体が収まる倍率にする
-      restoreViewport();
+      void arrive();
     },
     onStatus(state, pending) {
       const text = state === 'synced' && pending > 0 ? '保存中…' : STATUS_TEXT[state];
@@ -243,6 +275,19 @@ export function openPage(app: HTMLElement, slug: string): void {
     },
   });
   sync.start();
+
+  // 読み込みなしで他のページへ切り替わるときの後始末。保存中の変更を送り終えるのを少し待ってから、
+  // 同期を止めて、ボードを破棄する
+  setBeforeLeave(async () => {
+    const deadline = Date.now() + LEAVE_WAIT_MS;
+    while (sync.pendingCount > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+  });
+  onViewEnd(() => {
+    sync.stop();
+    board.destroy();
+  });
 
   // --- 表示名の編集 ---
   title.addEventListener('click', () => {

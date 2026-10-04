@@ -2,15 +2,22 @@ import '@kanf/wema/style.css';
 import './style.css';
 import { isValidSlug } from '../shared/slug';
 import { openIndex } from './index-view';
+import { startRouter } from './navigation';
 import { openPage } from './page-view';
 
 const app = document.getElementById('app')!;
 
-const slug = /^\/p\/([^/]+)\/?$/.exec(location.pathname)?.[1];
-if (slug && isValidSlug(slug)) {
-  openPage(app, slug);
-} else if (location.pathname === '/') {
-  openIndex(app);
-} else {
+startRouter((path, initial, arrival) => {
+  const slug = /^\/p\/([^/]+)\/?$/.exec(path)?.[1];
+  const isPage = slug !== undefined && isValidSlug(slug);
+  if (isPage || path === '/') {
+    app.replaceChildren();
+    if (isPage) openPage(app, slug, arrival);
+    else openIndex(app, arrival);
+    return true;
+  }
+  // 見つからないパスは、最初の画面としてだけ出す。他の画面から移るときは、読み込み直す
+  if (!initial) return false;
   app.textContent = 'ページが見つかりません';
-}
+  return true;
+});

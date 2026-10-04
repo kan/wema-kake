@@ -166,7 +166,12 @@ export class BoardSync {
     try {
       socket = await this.connect();
     } catch {
-      if (this.hooks.isAuthenticated && !(await this.hooks.isAuthenticated())) this.authExpired();
+      // 接続を待っている間に止められていたら、何もしない（フックを呼ぶと、切り替えた先の画面を
+      // 読み込み直したり、古い画面の表示を書き換えたりする）
+      if (this.stopped) return;
+      const expired = this.hooks.isAuthenticated !== undefined && !(await this.hooks.isAuthenticated());
+      if (this.stopped) return;
+      if (expired) this.authExpired();
       else this.scheduleReconnect();
       return;
     }

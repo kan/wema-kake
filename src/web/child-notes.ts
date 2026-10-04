@@ -6,7 +6,8 @@ import type { WemaBoard, WemaNote } from '@kanf/wema';
 import type { PageSummary } from '../shared/api';
 import { type ChildRejectCode, childPageOf, MAX_DEPTH, parseChildRejection } from '../shared/hierarchy';
 import * as api from './api';
-import { el, errorMessage, textInput } from './dom';
+import { el, errorMessage, isPlainClick, textInput } from './dom';
+import { onViewEnd, viewSignal } from './navigation';
 import { checkedSlug, pageFields } from './page-form';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -64,8 +65,14 @@ export class ChildNotes {
   private board: WemaBoard | undefined;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
 
-  /** @param slug 今のページ（親ページ）のスラッグ */
-  constructor(private readonly slug: string) {}
+  /**
+   * @param slug 今のページ（親ページ）のスラッグ
+   * @param open 子ページへ入る。修飾キーなしの左クリックで呼ぶ。`noteId` は、押された付箋
+   */
+  constructor(
+    private readonly slug: string,
+    private readonly open: (child: string, noteId: string) => void,
+  ) {}
 
   /**
    * wema の `renderNote`。子ページの付箋なら、中身を描いて true を返す。
@@ -78,10 +85,16 @@ export class ChildNotes {
     if (!this.pages.has(child)) this.scheduleRefresh();
     const info = this.pages.get(child);
 
-    // リンクなので、押せば子ページへ移る（修飾キーつきなら、新しいタブで開く）
     const title = el('a', { className: 'child-title', href: `/p/${child}`, textContent: info?.title ?? child });
-    // 付箋の選択にしない（ポップアップを出さない）
-    title.addEventListener('click', (e) => e.stopPropagation());
+    title.addEventListener('click', (e) => {
+      // 付箋の選択にしない（ポップアップを出さない）
+      e.stopPropagation();
+      // 修飾キーつきのクリックと中ボタンは、ブラウザに任せる（リンクなので、新しいタブで開く）
+      if (!isPlainClick(e)) return;
+      // ふつうのクリックは、読み込みなしで、付箋へ寄ってから子ページへ入る
+      e.preventDefault();
+      this.open(child, note.id);
+    });
 
     container.classList.add('child-note');
     container.append(title, el('div', { className: 'child-meta', textContent: this.describe(child, info) }));
@@ -102,7 +115,12 @@ export class ChildNotes {
   attach(board: WemaBoard): void {
     this.board = board;
     // 別のタブで子ページを編集して戻ってきたときに、表示名と枚数を新しくする
-    window.addEventListener('focus', () => this.scheduleRefresh());
+    window.addEventListener('focus', () => this.scheduleRefresh(), { signal: viewSignal() });
+    onViewEnd(() => {
+      // 画面が切り替わったら、ボードは破棄される。予約してある取り直しも止める
+      clearTimeout(this.refreshTimer);
+      this.board = undefined;
+    });
   }
 
   /** 置いてある子ページの概要を、取り直す。予約が重なったら、1 回にまとめる */
@@ -127,6 +145,8 @@ export class ChildNotes {
       // 取得できなくても、スラッグだけの表示で使える。次のきっかけ（ウィンドウへ戻る）で取り直す
       return;
     }
+    // 待っている間に、画面が切り替わっていたら、何もしない
+    if (this.board !== board) return;
     const byName = new Map(found.map((page) => [page.name, page]));
     for (const [name, noteId] of placed) {
       this.pages.set(name, byName.get(name) ?? null);

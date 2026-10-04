@@ -1,13 +1,15 @@
 // 一覧の画面（/）。ページの一覧を wema のボードで表す（docs/plan.md の 3.7 節）。
 // ページ 1 つが付箋 1 枚、ページ間のリンクが接続線。検索は、一致するページの付箋だけを残す。
-import { WemaBoard } from '@kanf/wema';
+import { WemaBoard, type WemaViewport } from '@kanf/wema';
 import { type IndexLink, type IndexPage, MAX_QUERY_LENGTH } from '../shared/api';
 import * as api from './api';
-import { confirmDeletePage, el, errorMessage, formatDate, openInternalLink, textInput } from './dom';
+import { confirmDeletePage, el, errorMessage, formatDate, internalLinkTarget, textInput } from './dom';
 import { attachNoteActions } from './index-actions';
 import { buildIndexBoard, descendantHitsHtml, type IndexBoard } from './index-board';
+import { navigate, onViewEnd, type Transition, viewSignal } from './navigation';
 import { checkedSlug, pageFields } from './page-form';
 import { header, popover, separator, toast, zoomControls } from './toolbar';
+import { zoomTransitions } from './viewport-motion';
 
 /** 入力が止まってから検索するまでの時間 */
 const SEARCH_DELAY_MS = 200;
@@ -43,7 +45,7 @@ function newPageForm(): HTMLFormElement {
       }
       return;
     }
-    location.assign(`/p/${slug}`);
+    navigate(`/p/${slug}`);
   };
   form.addEventListener('submit', (e) => {
     e.preventDefault();
@@ -80,8 +82,17 @@ function highlightLinksOnHover(canvas: HTMLElement): void {
   canvas.addEventListener('pointerleave', () => show(undefined));
 }
 
-export function openIndex(app: HTMLElement): void {
+/**
+ * 最後に一覧を離れたときの、絞り込み（URL の検索の部分）と表示位置。ページから戻ってきたときに、
+ * 見ていた場所から始めるのに使う。ページを読み込み直すと消える（一覧の並びは、ページの増減で変わるので、
+ * ブラウザには保存しない）
+ */
+let lastSeen: { search: string; viewport: WemaViewport } | undefined;
+
+/** `arrival` は、どのように切り替わってきたか（ページから戻ってきたなら、そのページの付箋から広げる） */
+export function openIndex(app: HTMLElement, arrival?: Transition): void {
   document.title = 'wema-kake';
+  const signal = viewSignal();
 
   const search = textInput({
     type: 'search',
@@ -260,6 +271,8 @@ export function openIndex(app: HTMLElement): void {
   api
     .getIndex()
     .then((result) => {
+      // 待っている間に、他の画面へ切り替わっていたら、何もしない
+      if (signal.aborted) return;
       ({ pages, links } = result);
       if (pages.length === 0) {
         canvas.append(el('p', { className: 'empty', textContent: 'まだページがありません' }));
@@ -274,13 +287,48 @@ export function openIndex(app: HTMLElement): void {
         viewOnly: true,
         // ページが多くても、全体が収まる倍率まで縮小できるようにする
         minZoom: INDEX_MIN_ZOOM,
-        onLinkClick: openInternalLink,
+        // 付箋のリンクは、その付箋のページを指す。付箋へ寄ってから、ページへ入る。
+        // サイト外のリンクと、修飾キーや中ボタンでのクリックは、wema に任せる（新しいタブで開く）
+        onLinkClick(url, event) {
+          const target = internalLinkTarget(url, event);
+          if (target === null) return false;
+          const noteId = (event.target as Element).closest<HTMLElement>('.wema-note')?.dataset.noteId;
+          if (noteId === undefined) navigate(target);
+          else void zoom.enter(noteId, target);
+          return true;
+        },
+      });
+      // 離れるときに見ていた場所を覚える。演出つきで離れるときは、演出で動かす前の位置を覚える
+      let remembered = false;
+      const remember = () => {
+        if (remembered) return;
+        remembered = true;
+        lastSeen = { search: location.search, viewport: created.getViewport() };
+      };
+      const zoom = zoomTransitions(board, remember);
+      // 付箋のリンクからページへは、読み込みなしで切り替わる。そのときに、ボードを破棄する
+      // 待っている検索や、改名と削除の応答が、破棄したボードを触らないよう、変数も空にする
+      // （applyFilter、showMatched、rebuild は、ボードがなければ何もしない）
+      const created = board;
+      onViewEnd(() => {
+        remember();
+        clearTimeout(timer);
+        board = undefined;
+        created.destroy();
       });
       zoomSlot.append(separator(), zoomControls(board, canvas));
       highlightLinksOnHover(canvas);
       // 表示位置や倍率が動いたら、付箋の上のボタンは位置がずれるので隠す
       board.on('viewport:change', hideActions);
-      return applyFilter();
+      // 絞り込みで最初の表示位置が決まる。ページから戻ってきたときは、そのページの付箋から、
+      // そこまで広げる（付箋の id は、ページのスラッグ）
+      // 同じ絞り込みの一覧へ戻ってきたときは、前に見ていた場所から始める
+      const seen = lastSeen?.search === location.search ? lastSeen.viewport : undefined;
+      void applyFilter().then(() => {
+        if (signal.aborted) return;
+        if (seen) created.setViewport(seen);
+        return zoom.arrive(arrival, (page) => created.getNote(page));
+      });
     })
     .catch((e: unknown) => {
       canvas.replaceChildren(

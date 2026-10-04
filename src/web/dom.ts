@@ -1,4 +1,5 @@
 import { internalUrl } from './links';
+import { navigate } from './navigation';
 
 export type Child =Node | string | null | undefined | false;
 
@@ -21,11 +22,19 @@ export function el<K extends keyof HTMLElementTagNameMap>(
  * （属性の値の先頭が `/` かどうかで判定すると、`//other.example/` でサイト外へ飛ばせてしまう）
  */
 export function openInternalLink(url: string, event: MouseEvent): boolean {
-  if (event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0) return false;
-  const target = internalUrl(url, location.origin);
+  const target = internalLinkTarget(url, event);
   if (target === null) return false;
-  location.assign(target);
+  navigate(target);
   return true;
+}
+
+/** 修飾キーなしの左クリックか。修飾キーつきのクリックと中ボタンは、ブラウザに任せる（新しいタブで開く） */
+export const isPlainClick = (event: MouseEvent): boolean =>
+  !(event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0);
+
+/** 同じタブで開くリンクなら、移動先の URL を返す。サイト外のリンクと、修飾キーつきのクリックは null */
+export function internalLinkTarget(url: string, event: MouseEvent): string | null {
+  return isPlainClick(event) ? internalUrl(url, location.origin) : null;
 }
 
 /**
