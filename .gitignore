@@ -2,4 +2,6 @@ node_modules/
 dist/
 .wrangler/
 .dev.vars
+# デプロイ先ごとの設定（Worker の名前、D1 と KV の ID、Access の値）。wrangler.jsonc のコピーから作る
+wrangler.deploy.jsonc
 worker-configuration.d.ts

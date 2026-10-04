@@ -1,8 +1,14 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+  // このファイルは、ローカル開発とテストに使う。デプロイ先ごとの値（Worker の名前、D1 と KV の ID、
+  // Access の値、SITE_ORIGIN）は、ここに書かない。このファイルを wrangler.deploy.jsonc（git には
+  // 入れない）へコピーして書き、`npm run deploy` はそちらを使う（AGENTS.md の「デプロイ」）
   "name": "wema-kake",
   "main": "src/worker/index.ts",
   "compatibility_date": "2026-10-01",
+  // プレビュー用の URL（<version>-<name>.….workers.dev）は出さない。Access のアプリケーションは
+  // 本番のホスト名にしか掛けないので、保護の外に同じ Worker の入口を作らない
+  "preview_urls": false,
   "assets": {
     "directory": "./dist/web",
     // /p/<slug> などアセットに一致しないパスは index.html を返す

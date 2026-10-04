@@ -36,6 +36,21 @@ MCP クライアント ──/mcp──> MCP ┘          │
  (claude.ai / ChatGPT)                     └──> 接続中のブラウザへブロードキャスト
 ```
 
+## デプロイ
+
+- **このリポジトリは公開している。デプロイ先ごとの値を、git に入れるファイルへ書かないこと。** 対象は、Worker の名前、ホスト名、D1 と KV の ID、Access のチームドメインと AUD タグ、`SITE_ORIGIN`。文書（`docs/`、この `AGENTS.md`）にも、実際のホスト名や ID を書かない
+- `wrangler.jsonc` は、ローカル開発とテストに使う。値は空のまま保つ
+- デプロイ用の設定は `wrangler.deploy.jsonc`（`.gitignore` 済み）。`wrangler.jsonc` をコピーして、デプロイ先の値を書く。**`wrangler.jsonc` のバインディングや `run_worker_first` を変えたら、`wrangler.deploy.jsonc` にも同じ変更を入れること**（wrangler は設定を継承できないので、丸ごとのコピーになっている）
+- デプロイは `npm run deploy`（`wrangler.deploy.jsonc` を使う）。本番の D1 のマイグレーションは `npx wrangler d1 migrations apply <DB 名> --remote --config wrangler.deploy.jsonc`
+- secret は `npx wrangler secret put <名前> --config wrangler.deploy.jsonc` で入れる
+- 最初のデプロイの手順
+  1. D1、KV、R2 バケットを作り、ID を `wrangler.deploy.jsonc` に書く。マイグレーションを適用して、デプロイする。**Access の値が空の間、`/api`、`/ws`、`/img` は 500、`/authorize` は 503 を返す**（保護のない状態では、データを読み書きできない）
+  2. 画面用の Access アプリケーション（Self-hosted）を作り、チームドメインと AUD タグを `wrangler.deploy.jsonc` に書いて、デプロイし直す。チームドメインは、末尾のスラッシュを付けない
+  3. 同じホスト名で、Access アプリケーションをもう 1 つ作る。パスは `/mcp`、`/authorize`、`/callback`、`/token`、`/register`、`/.well-known/*`、ポリシーは Bypass（Everyone）
+  4. Access for SaaS（OIDC）のアプリケーションを作る。リダイレクト先は `https://<ホスト名>/callback`、スコープは `openid`、`email`、`profile`。**このアプリケーションにも、Allow のポリシーが要る**（画面用のアプリケーションとは別。ないと、ログインの後に「That account does not have access」と出る）。表示された値と、乱数で作った `COOKIE_ENCRYPTION_KEY` を、secret に入れる
+  5. 未ログインの `curl` で確かめる。保護したパスは Access のログイン画面へ転送され、`/mcp` は 401、`/authorize` はクライアントの登録後に 200 を返す
+  - ポリシーを直した後は、MCP のクライアントの側で、接続を最初からやり直す。Access のエラーの画面からログインし直すと、戻り先が失われて、App Launcher の案内が出る
+
 ## 認証
 
 - **ブラウザ向けの画面と WebSocket**: Cloudflare Access のアプリケーションで保護する
@@ -144,7 +159,7 @@ CREATE INDEX links_to_page ON links (to_page);
 CREATE VIRTUAL TABLE pages_fts USING fts5(title, plain_text, tokenize = 'trigram');
 ```
 
-全文検索は FTS5 の trigram トークナイザを使う（`migrations/0002_fts.sql`）。ローカル（miniflare）では動作を確認し `test/runtime.test.ts` で固定した。本番の D1 では未確認なので、最初のデプロイ時にマイグレーションが通るか確認すること。3 文字未満の検索語は trigram に一致しないため LIKE を併用する。仮想テーブルがあると D1 を export できないので、FTS のテーブルは削除して作り直せるようにマイグレーションを分ける。
+全文検索は FTS5 の trigram トークナイザを使う（`migrations/0002_fts.sql`）。ローカル（miniflare）では動作を確認し `test/runtime.test.ts` で固定した。本番の D1 でも、マイグレーションが通ることを確認した。3 文字未満の検索語は trigram に一致しないため LIKE を併用する。仮想テーブルがあると D1 を export できないので、FTS のテーブルは削除して作り直せるようにマイグレーションを分ける。
 
 `links` は、付箋内の `<a href>` のうちパスが `/p/<slug>` に一致するものから作る（独自の Wiki リンク記法は入れない）。
 
