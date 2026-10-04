@@ -41,7 +41,8 @@ MCP クライアント ──/mcp──> MCP ┘          │
 - **このリポジトリは公開している。デプロイ先ごとの値を、git に入れるファイルへ書かないこと。** 対象は、Worker の名前、ホスト名、D1 と KV の ID、Access のチームドメインと AUD タグ、`SITE_ORIGIN`。文書（`docs/`、この `AGENTS.md`）にも、実際のホスト名や ID を書かない
 - `wrangler.jsonc` は、ローカル開発とテストに使う。値は空のまま保つ
 - デプロイ用の設定は `wrangler.deploy.jsonc`（`.gitignore` 済み）。`wrangler.jsonc` をコピーして、デプロイ先の値を書く。**`wrangler.jsonc` のバインディングや `run_worker_first` を変えたら、`wrangler.deploy.jsonc` にも同じ変更を入れること**（wrangler は設定を継承できないので、丸ごとのコピーになっている）
-- デプロイは `npm run deploy`（`wrangler.deploy.jsonc` を使う）。本番の D1 のマイグレーションは `npx wrangler d1 migrations apply <DB 名> --remote --config wrangler.deploy.jsonc`
+- デプロイは `npm run deploy`（`scripts/deploy.mjs`）。本番の D1 のマイグレーションを適用してから、Worker をデプロイする。設定は、`wrangler.deploy.jsonc` があればそれを、なければ `wrangler.jsonc` を使う（後者は、README の「Deploy to Cloudflare」ボタンからのデプロイのため。**`wrangler.deploy.jsonc` を消したまま `npm run deploy` を実行すると、`wrangler.jsonc` の名前で別の Worker ができる**）
+- マイグレーションだけを適用するには `npx wrangler d1 migrations apply DB --remote --config wrangler.deploy.jsonc`
 - secret は `npx wrangler secret put <名前> --config wrangler.deploy.jsonc` で入れる
 - 最初のデプロイの手順
   1. D1、KV、R2 バケットを作り、ID を `wrangler.deploy.jsonc` に書く。マイグレーションを適用して、デプロイする。**Access の値が空の間、`/api`、`/ws`、`/img` は 500、`/authorize` は 503 を返す**（保護のない状態では、データを読み書きできない）
