@@ -160,6 +160,14 @@ CREATE INDEX links_to_page ON links (to_page);
 -- rowid は pages.id と同じ値にする
 CREATE VIRTUAL TABLE pages_fts USING fts5(title, plain_text, tokenize = 'trigram');
 
+-- 利用者（'user:<email>'）ごとのブックマーク。ページを削除すると、そのページの行も消す
+CREATE TABLE bookmarks (
+  actor      TEXT NOT NULL,
+  page       TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (actor, page)
+);
+
 -- サイト全体で 1 つの値。今は first_page（最初のページを作ったか）だけ
 CREATE TABLE settings (
   key   TEXT PRIMARY KEY,
@@ -197,6 +205,9 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | `GET /api/search?q=` | 全文検索（D1）。3 文字以上は FTS、3 文字未満は LIKE。`roots=1` を付けると、一致したページのスラッグと、そのルートのスラッグだけを返す（一覧の絞り込み用。スラッグも照合する） |
 | `GET /api/pages/<slug>` | スナップショット（`seq`、`title`、付箋と接続線） |
 | `GET /api/pages/<slug>/backlinks` | このページへリンクしているページ（D1） |
+| `GET /api/bookmarks` | 自分のブックマーク（付けた順。`{ "pages": [{ "name", "title" }] }`）。利用者は Access の主体で決まり、他の利用者の分は返さない。索引への反映の前のページは、表示名が null になる |
+| `PUT /api/bookmarks/<slug>` | ブックマークを付ける。すでに付いていれば何もしない。ページがなければ 404、1 人 100 件を超えると 400 |
+| `DELETE /api/bookmarks/<slug>` | ブックマークを外す。付いていなくても成功を返す |
 | `PUT /api/pages/<slug>/title` | 表示名の変更（本文は `{ "title": "..." }`）。空文字で未設定に戻す。書き込みのないページに対して呼ぶとページが作られる。本文に `"mustExist": true` を付けると、作らずに 404 を返す（一覧の画面が使う。古い一覧に残った削除済みのページを作り直さないため） |
 | `POST /api/images` | 画像のアップロード（本文は画像のバイト列、`Content-Type` は png / jpeg / gif / webp / avif）。`{ "url": "/img/<key>" }` を返す。10MB まで |
 | `GET /img/<key>` | 画像の取得（R2） |
@@ -411,6 +422,11 @@ WebMCP 版はブラウザ内で wema の API を直接呼ぶので、LLM の変�
   - 演出つきの切り替えは、`zoomTransitions` の `enter` / `leave` を通す。演出の途中でもう一度呼ばれても、切り替えは 1 回だけになる
   - 表示位置の保存（`src/web/viewport-store.ts`）は、入ってきたときの演出が済んでから始め、切り替えの演出の前に止める。**演出で動かした位置を、見ていた場所として保存しないこと**
   - ページの削除と、認証の切れた後は、ページ全体の読み込みで移る
+- **ブックマーク**（`src/web/bookmarks.ts`）: ページの画面の表示名の後ろの ★ で、そのページを自分のブックマークに入れる。ヘッダーの右のボタンで、ブックマークしたページの一覧を出して移る（ページの画面と一覧の画面）。利用者ごとに D1 の `bookmarks` に保存し、開くたびに読み直す。**ブラウザ（localStorage）には保存しない**（別の端末でも同じ一覧を出すため）
+- 履歴に当たるものは 2 つあり、置き場所を分けてある
+  - 最近の変更: ヘッダーの右の時計のボタン。変更の新しい順のページ（`GET /api/pages?limit=`。子ページも含む）の一覧を出して移る。ページの画面と一覧の画面に置く（`src/web/bookmarks.ts` の `recentPagesMenu`）
+  - 操作の履歴: ページの画面のメニューから開く。そのページの ops の一覧と取り消しを、画面に重ねて出す（`src/web/toolbar.ts` の `modal`）。取り消しの結果は、重ねた枠の中に出す（ボードの上の通知は、背景の下になる）
+- サイト内へのリンクを画面に置くときは、`src/web/dom.ts` の `appLink` で作る（読み込みなしで切り替わる。修飾キーつきのクリックは、新しいタブで開く）
 - **使い方の付箋**は `src/shared/guide.ts` にあり、次の 2 か所で使う。付箋は autoSize で、幅は最も長い行で決まる。**長い行を足すと隣の付箋と重なるので、1 行を短く保つこと**
   - 最初のページ（スラッグは `first-page`）: ページが 1 つもない環境で、一覧（`GET /api/index`）を最初に開いたときに、サーバーが作る（`src/worker/first-page.ts`）。作ったことを D1 の `settings` の `first_page` に記録するので、すべてのページを消しても作り直さない。マイグレーションを適用した時点でページのあった環境には、作らない
   - 使い方の画面（`/help`、`src/web/help-view.ts`）: ページの画面のメニューの「使い方」から移る。試すためのボードで、編集できるが、**サーバーに保存せず、同期もしない**（ページとして置くと、内容が保存されて他の人にも見える）。画面を離れると消える

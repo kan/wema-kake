@@ -125,7 +125,7 @@ const guideNotes = (intro: string): GuideNote[] => [
     key: 'llm',
     text: section('LLM', [
       'MCP でつなぐと、Claude などが読み書きできる',
-      'LLM の操作は「操作の履歴」に残る',
+      'LLM の操作は、メニューの「操作の履歴」に残る',
       '履歴から、操作ごとに取り消せる',
     ]),
     color: '#B2DFDB',

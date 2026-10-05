@@ -133,6 +133,54 @@ pagesApi.delete('/pages/:slug', validSlug, async (c) => {
   return c.json({ ok: true });
 });
 
+/** 1 人が付けられるブックマークの数 */
+const MAX_BOOKMARKS = 100;
+
+/**
+ * 自分のブックマーク（付けた順）。表示名は索引から取るので、作ったばかりのページ（索引への
+ * 反映の前）は null になる
+ */
+pagesApi.get('/bookmarks', async (c) => {
+  const { results } = await c.env.DB.prepare(
+    `SELECT b.page AS name, p.title FROM bookmarks b LEFT JOIN pages p ON p.name = b.page
+     WHERE b.actor = ? ORDER BY b.created_at, b.page`,
+  )
+    .bind(c.get('actor'))
+    .all();
+  return c.json({ pages: results });
+});
+
+/** ブックマークを付ける。すでに付いていれば、何もしない */
+pagesApi.put('/bookmarks/:slug', validSlug, async (c) => {
+  const slug = c.req.param('slug');
+  const actor = c.get('actor');
+  // 索引への反映を待たずに確かめる（作ったばかりのページにも付けられる）
+  if ((await c.env.PAGE.getByName(slug).getPageRef()) === null) return c.json({ error: 'page not found' }, 404);
+  // 上限は、付ける行の条件にする（数えてから付けると、同時に届いた分で超える）
+  const added = await c.env.DB.prepare(
+    `INSERT OR IGNORE INTO bookmarks (actor, page, created_at)
+     SELECT ?1, ?2, ?3 WHERE (SELECT count(*) FROM bookmarks WHERE actor = ?1) < ?4`,
+  )
+    .bind(actor, slug, Date.now(), MAX_BOOKMARKS)
+    .run();
+  // 付かなかったのは、すでに付いているか、上限に達しているか
+  if (added.meta.changes === 0) {
+    const exists = await c.env.DB.prepare(`SELECT 1 FROM bookmarks WHERE actor = ? AND page = ?`)
+      .bind(actor, slug)
+      .first();
+    if (!exists) return c.json({ error: `too many bookmarks (limit ${MAX_BOOKMARKS})` }, 400);
+  }
+  return c.json({ ok: true });
+});
+
+/** ブックマークを外す。付いていなくても、成功として返す */
+pagesApi.delete('/bookmarks/:slug', validSlug, async (c) => {
+  await c.env.DB.prepare(`DELETE FROM bookmarks WHERE actor = ? AND page = ?`)
+    .bind(c.get('actor'), c.req.param('slug'))
+    .run();
+  return c.json({ ok: true });
+});
+
 /** このページへリンクしているページ */
 pagesApi.get('/pages/:slug/backlinks', validSlug, async (c) => {
   const { results } = await c.env.DB.prepare(

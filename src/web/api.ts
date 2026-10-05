@@ -1,6 +1,12 @@
 // サーバーの HTTP API の呼び出し。形は AGENTS.md の「HTTP API」を参照。
 import type { IndexLink, IndexPage, OpSummary, PageSummary, RevertOutcome, RootHit } from '../shared/api';
 
+/** ページへのリンクを出すのに要るもの。表示名が未設定なら null（スラッグを出す） */
+export interface PageLink {
+  name: string;
+  title: string | null;
+}
+
 /** API がエラーを返した。`status` は HTTP のステータス */
 export class ApiError extends Error {
   constructor(
@@ -49,6 +55,20 @@ export const getAncestors = (slug: string) =>
 /** ページを新しく作る。すでにあれば ApiError（status 409） */
 export const createPage = (slug: string, title: string) =>
   request<{ ok: true }>('POST', `/api/pages/${slug}`, { title });
+
+/** 自分のブックマーク（付けた順） */
+export async function getBookmarks(): Promise<PageLink[]> {
+  return (await request<{ pages: PageLink[] }>('GET', '/api/bookmarks')).pages;
+}
+
+/** ブックマークを付ける（`on` が false なら外す） */
+export const setBookmark = (slug: string, on: boolean) =>
+  request<{ ok: true }>(on ? 'PUT' : 'DELETE', `/api/bookmarks/${slug}`);
+
+/** 最近変更されたページ（新しい順）。子ページも含む */
+export async function getRecentPages(limit: number): Promise<(PageLink & { updated_at: number })[]> {
+  return (await request<{ pages: (PageLink & { updated_at: number })[] }>('GET', `/api/pages?limit=${limit}`)).pages;
+}
 
 export const getBacklinks = (slug: string) =>
   request<{ pages: { name: string; title: string | null }[] }>('GET', `/api/pages/${slug}/backlinks`);

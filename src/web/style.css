@@ -69,10 +69,16 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 .menu hr { border: none; border-top: 1px solid #e5e5e5; margin: 4px 0; width: 100%; }
 .link-list { display: flex; flex-direction: column; min-width: 180px; max-width: 320px; max-height: 60vh; overflow-y: auto; }
 .link-list a {
-  flex: none; padding: 6px 10px; border-radius: 4px; font-size: 13px; color: #222; text-decoration: none;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  flex: none; display: flex; align-items: baseline; gap: 12px;
+  padding: 6px 10px; border-radius: 4px; font-size: 13px; color: #222; text-decoration: none; white-space: nowrap;
 }
 .link-list a:hover { background: #eee; }
+.link-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* 表示名の右に薄く出す文字（更新日時など） */
+.link-detail { flex: none; font-size: 11px; color: #999; }
+.link-list .empty { padding: 6px 10px; font-size: 12px; }
+/* ブックマークの ★ は、表示名のすぐ後ろに置く */
+.zone-left > .icon-button { margin-left: -4px; }
 
 /* --- ページの画面 --- */
 .page-body { flex: 1; min-height: 0; display: flex; position: relative; }
@@ -112,11 +118,18 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
   background: #333; color: #fff; font-size: 13px; box-shadow: 0 4px 16px rgb(0 0 0 / 0.2);
 }
 
-.history-panel {
-  width: 300px; border-left: 1px solid #ddd; overflow-y: auto;
-  padding: 8px; box-sizing: border-box; font-size: 12px;
-}
+/* 画面に重ねて出す枠（操作の履歴） */
+.modal { border: 1px solid #ccc; border-radius: 8px; padding: 16px 20px; box-sizing: border-box; }
+.modal::backdrop { background: rgb(0 0 0 / 0.3); }
+.modal h2 { font-size: 16px; margin: 0 0 12px; }
+.modal-foot { margin-top: 12px; text-align: right; }
+.history-dialog { width: min(92vw, 480px); font-size: 12px; }
+.history-dialog[open] { display: flex; flex-direction: column; max-height: min(80vh, 640px); }
+.history-dialog .op-list { overflow-y: auto; min-height: 0; }
 .history-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+/* 取り消しの結果と、失敗の理由 */
+.op-result { margin-bottom: 8px; padding: 6px 8px; border-radius: 4px; background: #f3f3f3; overflow-wrap: anywhere; }
+.op-result:empty { display: none; }
 .op-list { list-style: none; margin: 0; padding: 0; }
 .op-list li { padding: 6px 0; border-bottom: 1px solid #eee; }
 .op-list li.reverted .op-summary { color: #999; }

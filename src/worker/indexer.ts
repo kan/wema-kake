@@ -100,6 +100,7 @@ export async function removePage(db: D1Database, slug: string): Promise<void> {
     db.prepare(`DELETE FROM pages_fts WHERE rowid = (SELECT id FROM pages WHERE name = ?)`).bind(slug),
     db.prepare(`DELETE FROM links WHERE from_page = ?`).bind(slug),
     db.prepare(`DELETE FROM pages WHERE name = ?`).bind(slug),
+    db.prepare(`DELETE FROM bookmarks WHERE page = ?`).bind(slug),
   ]);
 }
 

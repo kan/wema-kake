@@ -32,6 +32,20 @@ export function openInternalLink(url: string, event: MouseEvent): boolean {
 export const isPlainClick = (event: MouseEvent): boolean =>
   !(event.ctrlKey || event.metaKey || event.shiftKey || event.button !== 0);
 
+/**
+ * サイト内へのリンク。クリックすると、読み込みなしで切り替える（`navigate`）。修飾キーつきの
+ * クリックと中ボタンは、ブラウザに任せる（新しいタブで開く）
+ */
+export function appLink(href: string, ...children: Child[]): HTMLAnchorElement {
+  const link = el('a', { href }, ...children);
+  link.addEventListener('click', (e) => {
+    if (!isPlainClick(e)) return;
+    e.preventDefault();
+    navigate(href);
+  });
+  return link;
+}
+
 /** 同じタブで開くリンクなら、移動先の URL を返す。サイト外のリンクと、修飾キーつきのクリックは null */
 export function internalLinkTarget(url: string, event: MouseEvent): string | null {
   return isPlainClick(event) ? internalUrl(url, location.origin) : null;

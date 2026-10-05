@@ -77,6 +77,30 @@ export function popover(
   return { root, close };
 }
 
+/**
+ * 画面に重ねて出す枠（`showModal()` で開く）。「閉じる」のボタン、Escape、枠の外のクリックで閉じる。
+ * 画面（`app`）に足して使う
+ */
+export function modal(className: string, ...children: Child[]): HTMLDialogElement {
+  const dialog = el(
+    'dialog',
+    { className: `modal ${className}` },
+    ...children,
+    el('form', { method: 'dialog', className: 'modal-foot' }, el('button', { textContent: '閉じる' })),
+  );
+  // 枠の外（背景）のクリックでも閉じる。背景のクリックは、対象が dialog そのものになる。
+  // 枠の余白のクリックや、文字をドラッグで選んだ後のクリックも同じ対象になるので、座標で見分ける。
+  // 中のボタンやチェックボックスは、座標を見ない（キーボードで押したときのクリックは、座標が 0, 0 になる）
+  dialog.addEventListener('click', (e) => {
+    if (e.target !== dialog) return;
+    const box = dialog.getBoundingClientRect();
+    const inside =
+      e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom;
+    if (!inside) dialog.close();
+  });
+  return dialog;
+}
+
 /** メニューの項目 1 つ */
 export function menuItem(label: string, onClick: () => void, className = ''): HTMLButtonElement {
   const item = el('button', { type: 'button', className: `menu-item ${className}`.trim(), textContent: label });

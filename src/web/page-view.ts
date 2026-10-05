@@ -4,6 +4,7 @@ import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type SkipReason }
 import { CHILD_PAGE_KEY, childPageOf } from '../shared/hierarchy';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import * as api from './api';
+import { bookmarkStar, bookmarksMenu, pageLinks, recentPagesMenu } from './bookmarks';
 import { CHILD_NOTE_SIZE, ChildNotes, childPageForm } from './child-notes';
 import { confirmDeletePage, el, errorMessage, formatDate, isPlainClick, openInternalLink, textInput } from './dom';
 import type { IconName } from './icons';
@@ -15,6 +16,7 @@ import {
   iconButton,
   measureAutoSizeNotes,
   menuItem,
+  modal,
   popover,
   separator,
   settings,
@@ -86,8 +88,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   // ヘッダーのボタンがボードを操作するので、ボードを先に作る。
   // 最初の同期が済むまでは編集させない（同期でボード全体が入れ替わるため）
   const container = el('div', { className: 'board' });
-  const historyPanel = el('aside', { className: 'history-panel', hidden: true });
-  const body = el('div', { className: 'page-body' }, container, historyPanel);
+  const body = el('div', { className: 'page-body' }, container);
   // 子ページの付箋は、本文の代わりに子ページの概要を出す。表示名を押すと、子ページへ入る
   const childNotes = new ChildNotes(slug, (child, noteId) => void zoom.enter(noteId, `/p/${child}`));
   const board = new WemaBoard({
@@ -197,8 +198,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   // Ctrl / Cmd + A で全選択（wema のスタンドアロン版と同じ。入力中は、入力欄の全選択のままにする）
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.key !== 'a') return;
-    // 編集できないとき（最初の同期前、削除後）は、何もしない
-    if (board.isReadOnly()) return;
+    // 編集できないとき（最初の同期前、削除後）と、操作の履歴を重ねて出している間は、何もしない
+    if (board.isReadOnly() || document.querySelector('dialog[open]')) return;
     const active = document.activeElement;
     if (active instanceof HTMLElement && (active.isContentEditable || active.matches('input, textarea'))) return;
     e.preventDefault();
@@ -215,14 +216,15 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   // --- ヘッダーの右: Wiki の機能 ---
   const backlinksButton = el('button', { type: 'button', className: 'text-button', hidden: true });
   const backlinksPanel = el('div', { className: 'link-list' });
-  const historyButton = iconButton('history', '操作の履歴');
   const menuPanel = el('div', { className: 'menu' });
   const menu = popover(iconButton('menu', 'メニュー'), menuPanel, { align: 'right' });
+  // ★ でこのページをブックマークし、ブックマークしたページの一覧から移る
+  const star = bookmarkStar(slug, fail('ブックマークの変更'));
 
   app.append(
     header(
       // 一覧へ戻るときは、このページのルートの付箋へ縮む
-      [leaveOnClick(el('a', { href: '/', textContent: '一覧' }), () => root), crumbs, title, status],
+      [leaveOnClick(el('a', { href: '/', textContent: '一覧' }), () => root), crumbs, title, star, status],
       [
         el('span', { className: 'tool-group' }, undoButton, redoButton),
         separator(),
@@ -230,7 +232,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
         separator(),
         el('span', { className: 'tool-group optional' }, layout.root, separator(), zoomControls(board, container)),
       ],
-      [popover(backlinksButton, backlinksPanel, { align: 'right' }).root, historyButton, menu.root],
+      [popover(backlinksButton, backlinksPanel, { align: 'right' }).root, bookmarksMenu(), recentPagesMenu(), menu.root],
     ),
     body,
   );
@@ -341,7 +343,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       backlinksButton.textContent = `リンク元 ${pages.length}`;
       backlinksButton.title = 'このページへリンクしているページ';
       backlinksButton.hidden = false;
-      backlinksPanel.append(...pages.map((p) => el('a', { href: `/p/${p.name}`, textContent: p.title ?? p.name })));
+      backlinksPanel.append(...pageLinks(pages));
     })
     .catch(fail('リンク元の取得'));
 
@@ -349,20 +351,26 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   const agentOnly = el('input', { type: 'checkbox', checked: true });
   const opList = el('ul', { className: 'op-list' });
 
+  // 取り消しの結果と、失敗の理由。重ねて出している間は、ボードの上の通知が背景の下になるので、ここに出す
+  const opResult = el('div', { className: 'op-result', role: 'status' });
+  const opFail = (what: string) => (e: unknown) => {
+    opResult.textContent = `${what}に失敗しました（${errorMessage(e)}）`;
+  };
+
   const loadOps = async () => {
     const { ops } = await api.getOps(slug, agentOnly.checked);
     opList.replaceChildren(...ops.map(opRow));
     if (ops.length === 0) opList.append(el('li', { className: 'empty', textContent: '操作はありません' }));
   };
-  const refreshOps = () => loadOps().catch(fail('履歴の取得'));
+  const refreshOps = () => loadOps().catch(opFail('履歴の取得'));
 
   const revert = async (op: OpSummary, button: HTMLButtonElement) => {
     button.disabled = true;
     try {
-      notify(revertMessage(await api.revertOp(slug, op.seq, sync.clientId)));
+      opResult.textContent = revertMessage(await api.revertOp(slug, op.seq, sync.clientId));
       await loadOps();
     } catch (e) {
-      fail('取り消し')(e);
+      opFail('取り消し')(e);
     }
   };
 
@@ -381,19 +389,20 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   }
 
   agentOnly.addEventListener('change', refreshOps);
-  historyPanel.append(
+  // 重ねて出す（メニューの「操作の履歴」から開く）。ボードの幅は取らない
+  const historyDialog = modal(
+    'history-dialog',
+    el('h2', { textContent: '操作の履歴' }),
     el(
       'div',
       { className: 'history-head' },
       el('label', {}, agentOnly, ' agent の操作だけ'),
       el('button', { type: 'button', textContent: '更新', onclick: refreshOps }),
     ),
+    opResult,
     opList,
   );
-  historyButton.addEventListener('click', () => {
-    historyPanel.hidden = !historyPanel.hidden;
-    if (!historyPanel.hidden) void refreshOps();
-  });
+  app.append(historyDialog);
 
   // --- メニュー ---
   const viewOnlyItem = menuItem('', () => {
@@ -449,6 +458,12 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   menuPanel.append(
     viewOnlyItem,
     themeItem,
+    menuItem('操作の履歴…', () => {
+      menu.close();
+      opResult.textContent = '';
+      historyDialog.showModal();
+      void refreshOps();
+    }),
     menuItem('JSON を書き出す', exportJson),
     // 使い方は、試すためのボードで見せる（保存しない。src/web/help-view.ts）
     menuItem('使い方', () => navigate('/help')),

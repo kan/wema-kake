@@ -3,7 +3,8 @@
 import { WemaBoard, type WemaViewport } from '@kanf/wema';
 import { type IndexLink, type IndexPage, MAX_QUERY_LENGTH } from '../shared/api';
 import * as api from './api';
-import { confirmDeletePage, el, errorMessage, formatDate, internalLinkTarget, textInput } from './dom';
+import { bookmarksMenu, recentPagesMenu } from './bookmarks';
+import { appLink, confirmDeletePage, el, errorMessage, formatDate, internalLinkTarget, textInput } from './dom';
 import { attachNoteActions } from './index-actions';
 import { buildIndexBoard, descendantHitsHtml, type IndexBoard } from './index-board';
 import { navigate, onViewEnd, type Transition, viewSignal } from './navigation';
@@ -37,7 +38,7 @@ function newPageForm(): HTMLFormElement {
       if (e instanceof api.ApiError && e.status === 409) {
         message.replaceChildren(
           'そのスラッグのページはすでにあります（',
-          el('a', { href: `/p/${slug}`, textContent: '開く' }),
+          appLink(`/p/${slug}`, '開く'),
           '）',
         );
       } else {
@@ -113,7 +114,14 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
   );
   // ボードを置く要素。大きさは表示領域に固定し、はみ出した付箋へは wema のパンで移動する
   const canvas = el('div', { className: 'index-canvas' });
-  app.append(header([el('h1', { textContent: 'wema-kake' })], [search, count, zoomSlot], [newPage.root]), canvas);
+  app.append(
+    header(
+      [el('h1', { textContent: 'wema-kake' })],
+      [search, count, zoomSlot],
+      [bookmarksMenu(), recentPagesMenu(), newPage.root],
+    ),
+    canvas,
+  );
 
   let board: WemaBoard | undefined;
   let index: IndexBoard | undefined;

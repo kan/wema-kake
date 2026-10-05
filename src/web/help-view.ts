@@ -4,8 +4,8 @@
 // 消える。ページとして置くと、ページの内容として保存されて、他の人にも見えてしまう。
 import { WemaBoard } from '@kanf/wema';
 import { guideBoard } from '../shared/guide';
-import { el, isPlainClick, openInternalLink } from './dom';
-import { navigate, onViewEnd } from './navigation';
+import { appLink, el, openInternalLink } from './dom';
+import { onViewEnd } from './navigation';
 import { FOLD_LABELS, header, iconButton, measureAutoSizeNotes, separator, zoomControls } from './toolbar';
 
 export function openHelp(app: HTMLElement): void {
@@ -28,16 +28,9 @@ export function openHelp(app: HTMLElement): void {
   board.on('history:change', updateTools);
   updateTools();
 
-  const back = el('a', { href: '/', textContent: '一覧' });
-  back.addEventListener('click', (e) => {
-    if (!isPlainClick(e)) return;
-    e.preventDefault();
-    navigate('/');
-  });
-
   app.append(
     header(
-      [back, el('h1', { textContent: '使い方' })],
+      [appLink('/', '一覧'), el('h1', { textContent: '使い方' })],
       [undoButton, redoButton, separator(), zoomControls(board, container)],
       [el('span', { className: 'help-note', textContent: 'このボードは保存されません' })],
     ),
