@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <!-- 掛ける横木と、付箋を吊るす紐 -->
+  <line x1="2.5" y1="5" x2="29.5" y2="5" stroke="#555" stroke-width="2" stroke-linecap="round"/>
+  <line x1="8.5" y1="5" x2="8.5" y2="10" stroke="#555" stroke-width="1.5"/>
+  <line x1="23.5" y1="5" x2="23.5" y2="16" stroke="#555" stroke-width="1.5"/>
+  <!-- 付箋（色と形は wema のロゴと同じ） -->
+  <rect x="2" y="10" width="13" height="11" rx="2" fill="#FDD835" stroke="#F9A825"/>
+  <line x1="5" y1="14" x2="12" y2="14" stroke="#F9A825" opacity=".6" stroke-linecap="round"/>
+  <line x1="5" y1="17" x2="10" y2="17" stroke="#F9A825" opacity=".6" stroke-linecap="round"/>
+  <rect x="17" y="16" width="13" height="11" rx="2" fill="#64B5F6" stroke="#1E88E5"/>
+  <line x1="20" y1="20" x2="27" y2="20" stroke="#1E88E5" opacity=".6" stroke-linecap="round"/>
+  <line x1="20" y1="23" x2="25" y2="23" stroke="#1E88E5" opacity=".6" stroke-linecap="round"/>
+</svg>
