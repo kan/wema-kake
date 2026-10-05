@@ -2,25 +2,37 @@
 import { WemaBoard } from '@kanf/wema';
 import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type SkipReason } from '../shared/api';
 import { CHILD_PAGE_KEY, childPageOf } from '../shared/hierarchy';
+import { parseSystemSummary } from '../shared/op-summary';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import * as api from './api';
 import { bookmarkStar, bookmarksMenu, pageLinks, recentPagesMenu } from './bookmarks';
 import { CHILD_NOTE_SIZE, ChildNotes, childPageForm } from './child-notes';
-import { confirmDeletePage, el, errorMessage, formatDate, isPlainClick, openInternalLink, textInput } from './dom';
+import {
+  confirmDeletePage,
+  el,
+  failureMessage,
+  formatDate,
+  isPlainClick,
+  openInternalLink,
+  textInput,
+  type FailureKey,
+} from './dom';
+import { t } from './i18n';
 import type { IconName } from './icons';
 import { navigate, onViewEnd, setBeforeLeave, type Transition, viewSignal } from './navigation';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
 import {
-  FOLD_LABELS,
   header,
+  historyButtons,
   iconButton,
-  measureAutoSizeNotes,
   menuItem,
   modal,
   popover,
   separator,
   settings,
+  switchLang,
   toast,
+  WEMA_LABELS,
   zoomControls,
 } from './toolbar';
 import { zoomTransitions } from './viewport-motion';
@@ -36,36 +48,52 @@ const THEME_KEY = 'theme';
 
 /** 整列のボタン（アイコン、説明、wema に渡す整列の種類） */
 const ALIGNMENTS = [
-  ['alignLeft', '左端をそろえる', 'left'],
-  ['alignCenter', '左右の中央をそろえる', 'center'],
-  ['alignRight', '右端をそろえる', 'right'],
-  ['alignTop', '上端をそろえる', 'top'],
-  ['alignMiddle', '上下の中央をそろえる', 'middle'],
-  ['alignBottom', '下端をそろえる', 'bottom'],
+  ['alignLeft', t('align.left'), 'left'],
+  ['alignCenter', t('align.center'), 'center'],
+  ['alignRight', t('align.right'), 'right'],
+  ['alignTop', t('align.top'), 'top'],
+  ['alignMiddle', t('align.middle'), 'middle'],
+  ['alignBottom', t('align.bottom'), 'bottom'],
 ] as const;
 
 const STATUS_TEXT: Record<SyncStatus, string> = {
-  connecting: '接続中…',
+  connecting: t('status.connecting'),
   synced: '',
-  offline: 'オフライン（再接続します）',
+  offline: t('status.offline'),
 };
 
 /** 取り消さなかった理由の表示 */
 const SKIP_REASON: Record<SkipReason, string> = {
-  modified: 'その後に変更された',
-  connected: '他の接続線がつながっている',
-  deleted: 'すでに削除されている',
-  exists: '同じものがすでにある',
-  'endpoint-missing': '両端の付箋がない',
+  modified: t('skip.modified'),
+  connected: t('skip.connected'),
+  deleted: t('skip.deleted'),
+  exists: t('skip.exists'),
+  'endpoint-missing': t('skip.endpoint-missing'),
 };
 
 /** 取り消しの結果を知らせる文言 */
 function revertMessage(result: RevertOutcome): string {
   const reasons = [...new Set(result.skipped.map((s) => SKIP_REASON[s.reason]))];
-  const why = reasons.length > 0 ? `（${reasons.join('、')}）` : '';
-  if (result.applied === 0) return `取り消せる変更がありませんでした${why}`;
-  if (result.skipped.length === 0) return '取り消しました';
-  return `一部を取り消しました。${result.skipped.length} 件は残しています${why}`;
+  const why = reasons.length > 0 ? t('revert.reasons', reasons) : '';
+  if (result.applied === 0) return t('revert.none', why);
+  if (result.skipped.length === 0) return t('revert.done');
+  return t('revert.partial', result.skipped.length, why);
+}
+
+/** 操作の履歴に出す要約。サーバーの付けた符号は、今の言語の文言にする。それ以外は、書かれたまま出す */
+function summaryText(op: OpSummary): string {
+  if (op.summary === null) return op.reverts !== null ? t('ops.summary.revertUnknown') : t('ops.noSummary');
+  const system = parseSystemSummary(op.summary);
+  switch (system?.kind) {
+    case 'pageCreated':
+      return t('ops.summary.pageCreated');
+    case 'childRemoved':
+      return t('ops.summary.childRemoved', system.page);
+    case 'revert':
+      return t('ops.summary.revert', system.seq);
+    default:
+      return op.summary;
+  }
 }
 
 /** WebSocket で接続し、接続が開いてから返す。開く前に閉じたら失敗にする */
@@ -99,7 +127,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     // 他のページへのリンク（Wiki リンク）は、同じタブで開く
     onLinkClick: openInternalLink,
     renderNote: childNotes.render,
-    foldLabels: FOLD_LABELS,
+    labels: WEMA_LABELS,
   });
   childNotes.attach(board);
 
@@ -130,10 +158,10 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   // 一時的な通知は、ボードの上に重ねて出す
   const notify = toast(body, NOTICE_MS);
-  const fail = (what: string) => (e: unknown) => notify(`${what}に失敗しました（${errorMessage(e)}）`);
+  const fail = (what: FailureKey) => (e: unknown) => notify(failureMessage(what, e));
 
   // --- ヘッダーの左: 今いる場所 ---
-  const title = el('h1', { className: 'page-title', title: `/p/${slug}（クリックして表示名を変える）` });
+  const title = el('h1', { className: 'page-title', title: t('page.titleHint', slug) });
   // 同期の状態。同期済みのときは何も出さない。文言は title に入れ、文字で出すのはオフラインのときだけ
   const status = el('span', { className: 'sync-status' });
   const crumbs = el('span', { className: 'crumbs' });
@@ -141,20 +169,19 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   const showTitle = (value: string | null) => {
     currentTitle = value;
     title.textContent = value ?? slug;
-    document.title = `${value ?? slug} - wema-kake`;
+    document.title = t('documentTitle', value ?? slug);
   };
   showTitle(null);
 
   // --- ヘッダーの中央: 付箋の操作 ---
-  const undoButton = iconButton('undo', '元に戻す (Ctrl+Z)', () => board.undo());
-  const redoButton = iconButton('redo', 'やり直す (Ctrl+Shift+Z)', () => board.redo());
+  const { undo: undoButton, redo: redoButton } = historyButtons(board);
   /** 新しい付箋を置く位置。見えている範囲の左上の近くで、続けて置いても重ならないよう、少しずつずらす */
   const nextNotePosition = () => {
     const offset = (board.getNotes().length % 10) * 20;
     const viewport = board.getViewport();
     return { x: (120 + offset - viewport.x) / viewport.zoom, y: (80 + offset - viewport.y) / viewport.zoom };
   };
-  const addButton = iconButton('add', '付箋を追加', () => board.addNote(nextNotePosition()));
+  const addButton = iconButton('add', t('note.add'), () => board.addNote(nextNotePosition()));
 
   // 子ページを置く。新しく作るか、既存のルートのページを選ぶ
   const childForm = childPageForm(slug, (child) => {
@@ -163,11 +190,11 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     board.addNote({ ...nextNotePosition(), ...CHILD_NOTE_SIZE, text: '', meta: { [CHILD_PAGE_KEY]: child } });
     childPopover.close();
   });
-  const childButton = iconButton('childPage', '子ページを置く');
+  const childButton = iconButton('childPage', t('child.place'));
   const childPopover = popover(childButton, childForm.root, { onOpen: childForm.opened });
 
   const layoutPanel = el('div', { className: 'layout-panel' });
-  const layout = popover(iconButton('layout', '整列と配置'), layoutPanel);
+  const layout = popover(iconButton('layout', t('layout.title')), layoutPanel);
   /** 整列のボタンと、押せるようになる選択数 */
   const layoutButtons: [HTMLButtonElement, number][] = [];
   const layoutButton = (name: IconName, label: string, needs: number, run: (selected: string[]) => void) => {
@@ -181,9 +208,9 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   for (const [name, label, alignment] of ALIGNMENTS) {
     layoutButton(name, label, 2, (selected) => board.alignNotes(selected, alignment));
   }
-  layoutButton('distributeH', '左右に均等に並べる（3 枚以上を選択）', 3, (s) => board.distributeNotes(s, 'horizontal'));
-  layoutButton('distributeV', '上下に均等に並べる（3 枚以上を選択）', 3, (s) => board.distributeNotes(s, 'vertical'));
-  layoutButton('autoLayout', '接続線に沿って自動で配置（全体）', 0, () => board.autoLayout());
+  layoutButton('distributeH', t('layout.distributeH'), 3, (s) => board.distributeNotes(s, 'horizontal'));
+  layoutButton('distributeV', t('layout.distributeV'), 3, (s) => board.distributeNotes(s, 'vertical'));
+  layoutButton('autoLayout', t('layout.auto'), 0, () => board.autoLayout());
 
   /** ボタンの有効と無効を、ボードの状態に合わせる。自前の状態は持たない */
   const updateTools = () => {
@@ -217,14 +244,14 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   const backlinksButton = el('button', { type: 'button', className: 'text-button', hidden: true });
   const backlinksPanel = el('div', { className: 'link-list' });
   const menuPanel = el('div', { className: 'menu' });
-  const menu = popover(iconButton('menu', 'メニュー'), menuPanel, { align: 'right' });
+  const menu = popover(iconButton('menu', t('menu.title')), menuPanel, { align: 'right' });
   // ★ でこのページをブックマークし、ブックマークしたページの一覧から移る
-  const star = bookmarkStar(slug, fail('ブックマークの変更'));
+  const star = bookmarkStar(slug, fail('failed.bookmark'));
 
   app.append(
     header(
       // 一覧へ戻るときは、このページのルートの付箋へ縮む
-      [leaveOnClick(el('a', { href: '/', textContent: '一覧' }), () => root), crumbs, title, star, status],
+      [leaveOnClick(el('a', { href: '/', textContent: t('list') }), () => root), crumbs, title, star, status],
       [
         el('span', { className: 'tool-group' }, undoButton, redoButton),
         separator(),
@@ -249,13 +276,11 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
         crumbs.append(leaveOnClick(link, () => child), '›');
       });
     })
-    .catch(fail('親ページの取得'));
+    .catch(fail('failed.ancestors'));
 
   // --- 同期 ---
   const sync = new BoardSync(board, () => connect(slug), {
     // 最初の同期が済んだときに、1 回だけ呼ばれる
-    // 読み込みのたびに、付箋の大きさを計測し直す（最初の表示位置を決める onReady より先に届く）
-    onSnapshot: () => measureAutoSizeNotes(board),
     onReady() {
       board.setReadOnly(false);
       // 参照モードは、サーバーの内容を読み込んだ後に入る（入った時点の位置を wema が覚えるため）
@@ -264,7 +289,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       void arrive();
     },
     onStatus(state, pending) {
-      const text = state === 'synced' && pending > 0 ? '保存中…' : STATUS_TEXT[state];
+      const text = state === 'synced' && pending > 0 ? t('status.saving') : STATUS_TEXT[state];
       // 操作のたびに呼ばれるので、変わったときだけ書き換える
       if (status.title !== text) {
         status.title = text;
@@ -279,14 +304,14 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     onDeleted() {
       board.setReadOnly(true);
       if (deleting) return;
-      alert('このページは削除されました。一覧へ戻ります。');
+      alert(t('page.deletedAlert'));
       location.assign('/');
     },
     onReject(reason) {
       notify(
         reason === REASON_TEXT_CONFLICT
-          ? '他の人が同じ付箋を編集していたため、変更を取り消しました'
-          : (childForm.rejectionMessage(reason) ?? `変更を保存できなかったため、取り消しました（${reason}）`),
+          ? t('sync.conflict')
+          : (childForm.rejectionMessage(reason) ?? t('sync.rejected', reason)),
       );
     },
   });
@@ -320,7 +345,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       input.replaceWith(title);
       const value = input.value.trim();
       // 表示は、サーバーから届く meta で更新される
-      if (save && value !== (currentTitle ?? '')) api.setTitle(slug, value).catch(fail('表示名の変更'));
+      if (save && value !== (currentTitle ?? '')) api.setTitle(slug, value).catch(fail('failed.rename'));
     };
     input.addEventListener('keydown', (e) => {
       // 日本語入力の変換を確定する Enter では、編集を確定しない
@@ -340,12 +365,12 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     .then(({ pages }) => {
       // 件数だけをヘッダーに出し、ページ名は押したときに出す（リンク元が多くてもあふれない）
       if (pages.length === 0) return;
-      backlinksButton.textContent = `リンク元 ${pages.length}`;
-      backlinksButton.title = 'このページへリンクしているページ';
+      backlinksButton.textContent = t('backlinks.count', pages.length);
+      backlinksButton.title = t('backlinks.title');
       backlinksButton.hidden = false;
       backlinksPanel.append(...pageLinks(pages));
     })
-    .catch(fail('リンク元の取得'));
+    .catch(fail('failed.backlinks'));
 
   // --- 操作の履歴と取り消し ---
   const agentOnly = el('input', { type: 'checkbox', checked: true });
@@ -353,16 +378,16 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   // 取り消しの結果と、失敗の理由。重ねて出している間は、ボードの上の通知が背景の下になるので、ここに出す
   const opResult = el('div', { className: 'op-result', role: 'status' });
-  const opFail = (what: string) => (e: unknown) => {
-    opResult.textContent = `${what}に失敗しました（${errorMessage(e)}）`;
+  const opFail = (what: FailureKey) => (e: unknown) => {
+    opResult.textContent = failureMessage(what, e);
   };
 
   const loadOps = async () => {
     const { ops } = await api.getOps(slug, agentOnly.checked);
     opList.replaceChildren(...ops.map(opRow));
-    if (ops.length === 0) opList.append(el('li', { className: 'empty', textContent: '操作はありません' }));
+    if (ops.length === 0) opList.append(el('li', { className: 'empty', textContent: t('ops.empty') }));
   };
-  const refreshOps = () => loadOps().catch(opFail('履歴の取得'));
+  const refreshOps = () => loadOps().catch(opFail('failed.history'));
 
   const revert = async (op: OpSummary, button: HTMLButtonElement) => {
     button.disabled = true;
@@ -370,20 +395,20 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       opResult.textContent = revertMessage(await api.revertOp(slug, op.seq, sync.clientId));
       await loadOps();
     } catch (e) {
-      opFail('取り消し')(e);
+      opFail('failed.revert')(e);
     }
   };
 
   function opRow(op: OpSummary): HTMLLIElement {
     const reverted = op.revertedBy !== null;
-    const button = el('button', { type: 'button', textContent: '取り消す', disabled: reverted });
+    const button = el('button', { type: 'button', textContent: t('ops.revert'), disabled: reverted });
     button.addEventListener('click', () => void revert(op, button));
-    const summary = op.summary ?? (op.reverts !== null ? '取り消し' : '（説明なし）');
+    const summary = summaryText(op);
     return el(
       'li',
       { className: reverted ? 'reverted' : '' },
       el('div', { className: 'op-meta', textContent: `${formatDate(op.createdAt)} ${op.actor}` }),
-      el('div', { className: 'op-summary', textContent: summary + (reverted ? '（取り消し済み）' : '') }),
+      el('div', { className: 'op-summary', textContent: summary + (reverted ? t('ops.revertedMark') : '') }),
       button,
     );
   }
@@ -392,12 +417,12 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   // 重ねて出す（メニューの「操作の履歴」から開く）。ボードの幅は取らない
   const historyDialog = modal(
     'history-dialog',
-    el('h2', { textContent: '操作の履歴' }),
+    el('h2', { textContent: t('ops.title') }),
     el(
       'div',
       { className: 'history-head' },
-      el('label', {}, agentOnly, ' agent の操作だけ'),
-      el('button', { type: 'button', textContent: '更新', onclick: refreshOps }),
+      el('label', {}, agentOnly, ' ', t('ops.agentOnly')),
+      el('button', { type: 'button', textContent: t('ops.refresh'), onclick: refreshOps }),
     ),
     opResult,
     opList,
@@ -416,7 +441,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     menu.close();
   });
   const showViewOnly = () => {
-    viewOnlyItem.textContent = board.isViewOnly() ? '参照モードを終える' : '参照モード（読むだけ）';
+    viewOnlyItem.textContent = t(board.isViewOnly() ? 'menu.viewOnlyExit' : 'menu.viewOnly');
     updateTools();
   };
   board.on('viewOnly:change', showViewOnly);
@@ -428,7 +453,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     showTheme();
   });
   const showTheme = () => {
-    themeItem.textContent = board.getTheme() === 'card' ? '付箋の見た目: カード' : '付箋の見た目: 標準';
+    themeItem.textContent = t(board.getTheme() === 'card' ? 'menu.themeCard' : 'menu.themeDefault');
   };
   showTheme();
 
@@ -451,24 +476,26 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       .then(() => location.assign('/'))
       .catch((e) => {
         deleting = false;
-        fail('削除')(e);
+        fail('failed.delete')(e);
       });
   };
 
   menuPanel.append(
     viewOnlyItem,
     themeItem,
-    menuItem('操作の履歴…', () => {
+    menuItem(t('menu.history'), () => {
       menu.close();
       opResult.textContent = '';
       historyDialog.showModal();
       void refreshOps();
     }),
-    menuItem('JSON を書き出す', exportJson),
+    menuItem(t('menu.exportJson'), exportJson),
     // 使い方は、試すためのボードで見せる（保存しない。src/web/help-view.ts）
-    menuItem('使い方', () => navigate('/help')),
+    menuItem(t('help'), () => navigate('/help')),
+    // 切り替え先の言語の名前を出す。選ぶと、この端末に記憶して、読み込み直す
+    menuItem(t('lang.switch'), switchLang),
     el('hr'),
     // 削除は、常に見える場所には置かない
-    menuItem('ページを削除…', deletePage, 'danger'),
+    menuItem(t('menu.deletePage'), deletePage, 'danger'),
   );
 }

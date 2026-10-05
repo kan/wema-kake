@@ -255,7 +255,7 @@ describe('ページの削除と階層', () => {
     expect(notes.map((n) => n.id)).toEqual(['keep']);
     // 付箋の削除として記録される
     const [op] = await page(parent).listOps();
-    expect(op).toMatchObject({ actor: 'user:dev@example.com', summary: `子ページ ${child} の削除` });
+    expect(op).toMatchObject({ actor: 'user:dev@example.com', summary: `system:child-removed:${child}` });
   });
 
   it('親ページを削除すると、子ページはルートへ戻る（子孫ごとは削除しない）', async () => {

@@ -1,3 +1,4 @@
+import { lang, type MessageKey, t } from './i18n';
 import { internalUrl } from './links';
 import { navigate } from './navigation';
 
@@ -79,15 +80,23 @@ export function randomSlug(): string {
 
 /** ページの削除を確かめる（ページの画面と一覧の画面で、同じ文言を出す） */
 export function confirmDeletePage(name: string): boolean {
-  return confirm(`ページ「${name}」を削除します。付箋と履歴がすべて消え、取り消しはできません。`);
+  return confirm(t('page.deleteConfirm', name));
 }
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** 失敗の知らせの文言のキー（`failed.bookmark` など） */
+export type FailureKey = Extract<MessageKey, `failed.${string}`>;
+
+/** 「〜に失敗しました（理由）」の文言 */
+export function failureMessage(key: FailureKey, e: unknown): string {
+  return t(key, errorMessage(e));
+}
+
 export function formatDate(ms: number): string {
-  return new Date(ms).toLocaleString('ja-JP', {
+  return new Date(ms).toLocaleString(lang, {
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
   });
 }

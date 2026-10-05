@@ -56,8 +56,6 @@ export interface SyncHooks {
   onStatus?(status: SyncStatus, pending: number): void;
   /** 最初の同期が済み、ボードを編集できる状態になった */
   onReady?(): void;
-  /** スナップショットを読み込んで、ボード全体を入れ替えた（最初の同期と、差分で追いつけない再接続） */
-  onSnapshot?(): void;
   onTitle?(title: string | null): void;
   /** 認証の期限が切れた。再接続はできないので、ページを読み込み直して認証し直す */
   onAuthExpired?(): void;
@@ -231,7 +229,6 @@ export class BoardSync {
     switch (msg.type) {
       case 'snapshot':
         this.board.importData(msg.data);
-        this.hooks.onSnapshot?.();
         this.lastSeq = msg.seq;
         this.snapshotSeq = msg.seq;
         this.epoch = msg.epoch ?? undefined;

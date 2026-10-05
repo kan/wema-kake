@@ -4,12 +4,22 @@ import { WemaBoard, type WemaViewport } from '@kanf/wema';
 import { type IndexLink, type IndexPage, MAX_QUERY_LENGTH } from '../shared/api';
 import * as api from './api';
 import { bookmarksMenu, recentPagesMenu } from './bookmarks';
-import { appLink, confirmDeletePage, el, errorMessage, formatDate, internalLinkTarget, textInput } from './dom';
+import {
+  appLink,
+  confirmDeletePage,
+  el,
+  errorMessage,
+  failureMessage,
+  formatDate,
+  internalLinkTarget,
+  textInput,
+} from './dom';
+import { t } from './i18n';
 import { attachNoteActions } from './index-actions';
 import { buildIndexBoard, descendantHitsHtml, type IndexBoard } from './index-board';
 import { navigate, onViewEnd, type Transition, viewSignal } from './navigation';
 import { checkedSlug, pageFields } from './page-form';
-import { header, popover, separator, toast, zoomControls } from './toolbar';
+import { header, langButton, popover, separator, toast, WEMA_LABELS, zoomControls } from './toolbar';
 import { zoomTransitions } from './viewport-motion';
 
 /** 入力が止まってから検索するまでの時間 */
@@ -25,7 +35,7 @@ function newPageForm(): HTMLFormElement {
     'form',
     { className: 'new-page' },
     ...fields.labels,
-    el('button', { type: 'submit', textContent: '作成' }),
+    el('button', { type: 'submit', textContent: t('form.create') }),
     message,
   );
 
@@ -36,13 +46,9 @@ function newPageForm(): HTMLFormElement {
       await api.createPage(slug, fields.title.value);
     } catch (e) {
       if (e instanceof api.ApiError && e.status === 409) {
-        message.replaceChildren(
-          'そのスラッグのページはすでにあります（',
-          appLink(`/p/${slug}`, '開く'),
-          '）',
-        );
+        message.replaceChildren(t('form.slugTaken'), appLink(`/p/${slug}`, t('form.openIt')));
       } else {
-        message.textContent = `作成に失敗しました（${errorMessage(e)}）`;
+        message.textContent = failureMessage('failed.create', e);
       }
       return;
     }
@@ -98,7 +104,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
   const search = textInput({
     type: 'search',
     className: 'index-search',
-    placeholder: 'ページを絞り込む',
+    placeholder: t('index.filter'),
     maxLength: MAX_QUERY_LENGTH,
     value: new URLSearchParams(location.search).get('q') ?? '',
   });
@@ -108,7 +114,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
   // 新規ページの入力欄は常には出さず、ボタンを押したときに開く
   const form = newPageForm();
   const newPage = popover(
-    el('button', { type: 'button', className: 'text-button primary', textContent: '＋ 新規ページ' }),
+    el('button', { type: 'button', className: 'text-button primary', textContent: t('index.newPage') }),
     form,
     { align: 'right', onOpen: () => form.querySelector('input')?.focus() },
   );
@@ -118,7 +124,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
     header(
       [el('h1', { textContent: 'wema-kake' })],
       [search, count, zoomSlot],
-      [bookmarksMenu(), recentPagesMenu(), newPage.root],
+      [bookmarksMenu(), recentPagesMenu(), langButton(), newPage.root],
     ),
     canvas,
   );
@@ -151,7 +157,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
     }
     badged = new Set(hits.keys());
     board.setNoteFilter(matched && [...matched.keys()]);
-    count.textContent = matched ? `${matched.size} / ${total} ページ${note}` : `${total} ページ`;
+    count.textContent = matched ? t('index.matched', matched.size, total, note) : t('index.count', total);
   };
 
   const applyFilter = async () => {
@@ -196,7 +202,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
       if (found.size !== before) show();
       else showMatched();
     } catch (e) {
-      if (request === latest) showMatched(`（本文の検索に失敗しました: ${errorMessage(e)}）`);
+      if (request === latest) showMatched(t('index.searchFailed', errorMessage(e)));
     }
   };
 
@@ -256,10 +262,10 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
         })
         .catch((e: unknown) => {
           if (e instanceof api.ApiError && e.status === 404) {
-            notify('このページは、すでに削除されています');
+            notify(t('page.alreadyDeleted'));
             dropPage(slug);
           } else {
-            notify(`表示名の変更に失敗しました（${errorMessage(e)}）`);
+            notify(failureMessage('failed.rename', e));
           }
         });
     },
@@ -271,7 +277,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
       api
         .deletePage(slug)
         .then(() => dropPage(slug))
-        .catch((e: unknown) => notify(`削除に失敗しました（${errorMessage(e)}）`))
+        .catch((e: unknown) => notify(failureMessage('failed.delete', e)))
         .finally(() => deleting.delete(slug));
     },
   });
@@ -283,7 +289,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
       if (signal.aborted) return;
       ({ pages, links } = result);
       if (pages.length === 0) {
-        canvas.append(el('p', { className: 'empty', textContent: 'まだページがありません' }));
+        canvas.append(el('p', { className: 'empty', textContent: t('index.empty') }));
         return;
       }
       index = build();
@@ -293,6 +299,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
         container: canvas,
         data: index.data,
         viewOnly: true,
+        labels: WEMA_LABELS,
         // ページが多くても、全体が収まる倍率まで縮小できるようにする
         minZoom: INDEX_MIN_ZOOM,
         // 付箋のリンクは、その付箋のページを指す。付箋へ寄ってから、ページへ入る。
@@ -340,7 +347,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
     })
     .catch((e: unknown) => {
       canvas.replaceChildren(
-        el('p', { className: 'empty', textContent: `一覧を取得できませんでした（${errorMessage(e)}）` }),
+        el('p', { className: 'empty', textContent: t('index.loadFailed', errorMessage(e)) }),
       );
     });
 }

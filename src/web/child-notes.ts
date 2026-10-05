@@ -6,7 +6,8 @@ import type { WemaBoard, WemaNote } from '@kanf/wema';
 import type { PageSummary } from '../shared/api';
 import { type ChildRejectCode, childPageOf, MAX_DEPTH, parseChildRejection } from '../shared/hierarchy';
 import * as api from './api';
-import { el, errorMessage, isPlainClick, textInput } from './dom';
+import { el, failureMessage, isPlainClick, textInput } from './dom';
+import { t } from './i18n';
 import { onViewEnd, viewSignal } from './navigation';
 import { checkedSlug, pageFields } from './page-form';
 
@@ -104,11 +105,11 @@ export class ChildNotes {
 
   /** 付箋の枚数か、置かれ方がおかしいときの知らせ */
   private describe(child: string, info: PageSummary | null | undefined): string {
-    if (info === undefined) return '読み込み中…';
-    if (info === null) return 'ページが見つかりません';
+    if (info === undefined) return t('loading');
+    if (info === null) return t('notFound');
     // 索引の親は、置いた数秒後に反映される。別のページを指しているときだけ、食い違いとして知らせる
-    if (info.parent !== null && info.parent !== this.slug) return `「${info.parent}」に置かれています`;
-    return `子ページ・付箋 ${info.note_count} 枚（/p/${child}）`;
+    if (info.parent !== null && info.parent !== this.slug) return t('child.elsewhere', info.parent);
+    return t('child.summary', info.note_count, child);
   }
 
   /** ボードにつなぐ */
@@ -158,12 +159,12 @@ export class ChildNotes {
 
 /** 子ページとして置けなかった理由の、画面に出す文言 */
 const REJECTION: Record<ChildRejectCode, string> = {
-  'not-found': 'ページが見つかりません',
-  self: '自分自身は置けません',
-  'other-parent': 'すでに別のページの子になっています',
-  duplicate: 'このページにすでに置いてあります',
-  ancestor: 'このページの先祖なので、輪になります',
-  'too-deep': `階層は ${MAX_DEPTH} 段までです`,
+  'not-found': t('child.reject.not-found'),
+  self: t('child.reject.self'),
+  'other-parent': t('child.reject.other-parent'),
+  duplicate: t('child.reject.duplicate'),
+  ancestor: t('child.reject.ancestor'),
+  'too-deep': t('child.reject.too-deep', MAX_DEPTH),
 };
 
 /**
@@ -183,25 +184,25 @@ export function childPageForm(
   const created = new Set<string>();
   const fields = pageFields();
   const message = el('div', { className: 'form-error' });
-  const submit = el('button', { type: 'submit', textContent: '作成して置く' });
+  const submit = el('button', { type: 'submit', textContent: t('child.createAndPlace') });
   const createForm = el(
     'form',
     { className: 'new-page' },
-    el('strong', { textContent: '新しいページを作って置く' }),
+    el('strong', { textContent: t('child.newHeading') }),
     ...fields.labels,
     submit,
   );
 
   const roots = el('datalist', { id: 'child-page-roots' });
-  const existingInput = textInput({ placeholder: 'ページの名前（スラッグ）' });
+  const existingInput = textInput({ placeholder: t('child.slugPlaceholder') });
   existingInput.setAttribute('list', roots.id);
   const existingForm = el(
     'form',
     { className: 'new-page' },
-    el('strong', { textContent: '既存のページを置く' }),
-    el('label', {}, 'ルートのページ', existingInput),
+    el('strong', { textContent: t('child.existingHeading') }),
+    el('label', {}, t('child.rootPage'), existingInput),
     roots,
-    el('button', { type: 'submit', textContent: '置く' }),
+    el('button', { type: 'submit', textContent: t('child.placeExisting') }),
   );
 
   createForm.addEventListener('submit', (e) => {
@@ -219,8 +220,8 @@ export function childPageForm(
       .catch((error: unknown) => {
         message.textContent =
           error instanceof api.ApiError && error.status === 409
-            ? 'そのスラッグのページはすでにあります。既存のページとして置けます'
-            : `作成に失敗しました（${errorMessage(error)}）`;
+            ? t('child.slugTaken')
+            : failureMessage('failed.create', error);
       })
       .finally(() => {
         submit.disabled = false;
@@ -257,8 +258,7 @@ export function childPageForm(
       if (!rejection) return undefined;
       const why = REJECTION[rejection.code] ?? reason;
       // 「作成して置く」で作ったページは、置けなくても消えない
-      const kept = created.has(rejection.page) ? '。作成したページは、ルートのページとして一覧に残っています' : '';
-      return `子ページとして置けませんでした（${why}）${kept}`;
+      return t('child.rejected', why, created.has(rejection.page));
     },
   };
 }

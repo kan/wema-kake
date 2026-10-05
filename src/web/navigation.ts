@@ -51,6 +51,15 @@ async function show(path: string, arrival?: Transition): Promise<void> {
   if (!render(path, false, arrival)) location.reload();
 }
 
+/**
+ * ページを読み込み直す。画面を切り替えるときと同じく、先に、今の画面の待つ処理（保存中の変更を
+ * 送り終える）を済ませる
+ */
+export async function reloadPage(): Promise<void> {
+  await beforeLeave?.();
+  location.reload();
+}
+
 /** 最初の画面を出し、ブラウザの「戻る」と「進む」に応じる */
 export function startRouter(renderPath: Render): void {
   render = renderPath;

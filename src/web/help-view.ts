@@ -5,37 +5,37 @@
 import { WemaBoard } from '@kanf/wema';
 import { guideBoard } from '../shared/guide';
 import { appLink, el, openInternalLink } from './dom';
+import { lang, t } from './i18n';
 import { onViewEnd } from './navigation';
-import { FOLD_LABELS, header, iconButton, measureAutoSizeNotes, separator, zoomControls } from './toolbar';
+import { header, historyButtons, langButton, separator, WEMA_LABELS, zoomControls } from './toolbar';
 
 export function openHelp(app: HTMLElement): void {
-  document.title = '使い方 - wema-kake';
+  document.title = t('documentTitle', t('help'));
   const container = el('div', { className: 'board' });
+  // ボードを置く要素を、先に画面に出す。付箋の大きさは目安の値で、wema が読み込んだときに計測する。
+  // 画面に出ていない要素の中では計測されず、接続線が、目安の大きさで引かれる
+  app.append(el('div', { className: 'page-body' }, container));
   const board = new WemaBoard({
     container,
-    data: { version: 1, ...guideBoard('help') },
+    data: { version: 1, ...guideBoard('help', lang) },
     onLinkClick: openInternalLink,
-    foldLabels: FOLD_LABELS,
+    labels: WEMA_LABELS,
   });
   onViewEnd(() => board.destroy());
 
-  const undoButton = iconButton('undo', '元に戻す (Ctrl+Z)', () => board.undo());
-  const redoButton = iconButton('redo', 'やり直す (Ctrl+Shift+Z)', () => board.redo());
+  const { undo, redo } = historyButtons(board);
   const updateTools = () => {
-    undoButton.disabled = !board.canUndo();
-    redoButton.disabled = !board.canRedo();
+    undo.disabled = !board.canUndo();
+    redo.disabled = !board.canRedo();
   };
   board.on('history:change', updateTools);
   updateTools();
 
-  app.append(
+  app.prepend(
     header(
-      [appLink('/', '一覧'), el('h1', { textContent: '使い方' })],
-      [undoButton, redoButton, separator(), zoomControls(board, container)],
-      [el('span', { className: 'help-note', textContent: 'このボードは保存されません' })],
+      [appLink('/', t('list')), el('h1', { textContent: t('help') })],
+      [undo, redo, separator(), zoomControls(board, container)],
+      [el('span', { className: 'help-note', textContent: t('help.unsaved') }), langButton()],
     ),
-    el('div', { className: 'page-body' }, container),
   );
-  // 付箋の大きさは目安の値なので、画面に出してから計測する（接続線が、付箋の縁に合う）
-  measureAutoSizeNotes(board);
 }

@@ -3,6 +3,7 @@
 import { MAX_TITLE_LENGTH } from '../shared/api';
 import { isValidSlug } from '../shared/slug';
 import { el, randomSlug, textInput } from './dom';
+import { t } from './i18n';
 
 /** 表示名とスラッグの入力欄。`labels` を、そのままフォームに入れる */
 export function pageFields(): {
@@ -12,13 +13,13 @@ export function pageFields(): {
   /** 入力欄を開いたときの状態にする（表示名は空、スラッグは新しい乱数）。表示名にフォーカスを置く */
   reset: () => void;
 } {
-  const title = textInput({ placeholder: '省略できます', maxLength: MAX_TITLE_LENGTH });
-  const slug = textInput({ value: randomSlug(), title: 'URL に使う名前。小文字の英数字とハイフン' });
+  const title = textInput({ placeholder: t('form.optional'), maxLength: MAX_TITLE_LENGTH });
+  const slug = textInput({ value: randomSlug(), title: t('form.slugHint') });
   return {
     title,
     slug,
     labels: [
-      el('label', {}, '表示名', title),
+      el('label', {}, t('title'), title),
       el('label', {}, 'URL', el('span', { className: 'slug-field' }, '/p/', slug)),
     ],
     reset() {
@@ -33,6 +34,6 @@ export function pageFields(): {
 export function checkedSlug(input: HTMLInputElement, message: HTMLElement): string | undefined {
   const slug = input.value.trim();
   if (isValidSlug(slug)) return slug;
-  message.textContent = 'スラッグは小文字の英数字とハイフンで、64 文字までです';
+  message.textContent = t('form.slugInvalid');
   return undefined;
 }

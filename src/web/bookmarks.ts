@@ -5,6 +5,7 @@
 // ブックマークするかどうかを切り替える ★ も置く。
 import * as api from './api';
 import { appLink, el, errorMessage, formatDate } from './dom';
+import { t } from './i18n';
 import { type IconName, icon } from './icons';
 import { viewSignal } from './navigation';
 import { iconButton, popover } from './toolbar';
@@ -25,7 +26,7 @@ function showPageLinks(panel: HTMLElement, load: () => Promise<HTMLElement[]>, e
   const signal = viewSignal();
   const note = (text: string) => panel.replaceChildren(el('span', { className: 'empty', textContent: text }));
   // 前の内容があれば、読み込みの間はそのまま出しておく（開くたびに空にすると、ちらつく）
-  if (panel.childElementCount === 0) note('読み込み中…');
+  if (panel.childElementCount === 0) note(t('loading'));
   load()
     .then((links) => {
       if (signal.aborted) return;
@@ -33,7 +34,7 @@ function showPageLinks(panel: HTMLElement, load: () => Promise<HTMLElement[]>, e
       else panel.replaceChildren(...links);
     })
     .catch((e: unknown) => {
-      if (!signal.aborted) note(`取得できませんでした（${errorMessage(e)}）`);
+      if (!signal.aborted) note(t('links.loadFailed', errorMessage(e)));
     });
 }
 
@@ -60,18 +61,18 @@ function pageListMenu(
 export const recentPagesMenu = (): HTMLElement =>
   pageListMenu(
     'history',
-    '最近の変更',
+    t('recent.title'),
     async () => pageLinks(await api.getRecentPages(RECENT_PAGES), (page) => formatDate(page.updated_at)),
-    'ページはありません',
+    t('recent.empty'),
   );
 
 /** ブックマークしたページの一覧を出すボタン */
 export const bookmarksMenu = (): HTMLElement =>
   pageListMenu(
     'bookmarks',
-    'ブックマークしたページ',
+    t('bookmarks.title'),
     async () => pageLinks(await api.getBookmarks()),
-    'ブックマークはありません',
+    t('bookmarks.empty'),
   );
 
 /**
@@ -93,7 +94,7 @@ export function bookmarkStar(slug: string, onError: (e: unknown) => void): HTMLB
         if (signal.aborted) return;
         // 開いただけで、まだ何も書いていないページは、サーバーにない
         const missing = e instanceof api.ApiError && e.status === 404;
-        onError(missing ? new Error('まだ何も書かれていないページには、付けられません') : e);
+        onError(missing ? new Error(t('bookmark.unwritten')) : e);
       })
       .finally(() => {
         star.disabled = false;
@@ -102,7 +103,7 @@ export function bookmarkStar(slug: string, onError: (e: unknown) => void): HTMLB
   const show = (value: boolean) => {
     on = value;
     star.replaceChildren(icon(on ? 'starFilled' : 'star'));
-    star.title = on ? 'ブックマークを外す' : 'このページをブックマークする';
+    star.title = t(on ? 'bookmark.remove' : 'bookmark.add');
     star.ariaLabel = star.title;
     star.ariaPressed = String(on);
   };

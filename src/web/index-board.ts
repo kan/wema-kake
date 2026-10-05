@@ -3,6 +3,7 @@
 // 並べるので、リンクの多いページがあると横に長くなりすぎる）。
 import type { WemaBoardData, WemaEdge, WemaNote } from '@kanf/wema';
 import type { IndexLink, IndexPage } from '../shared/api';
+import { t } from './i18n';
 
 export interface IndexBoard {
   data: WemaBoardData;
@@ -39,8 +40,7 @@ const META_STYLE = 'font-size: 11px; color: #666';
 function pageHtml(page: IndexPage, formatDate: (ms: number) => string): string {
   const title = escapeHtml(page.title ?? page.name);
   // 子ページは一覧に出ないので、中に何枚のボードがあるかを、ルートの付箋に出す
-  const children = page.child_count > 0 ? `・子ページ ${page.child_count}` : '';
-  const meta = `${formatDate(page.updated_at)}・付箋 ${page.note_count} 枚${children}`;
+  const meta = t('index.meta', formatDate(page.updated_at), page.note_count, page.child_count);
   return (
     `<a href="/p/${page.name}"><b>${title}</b></a>` +
     `<div>${escapeHtml(page.excerpt)}</div>` +
@@ -54,11 +54,11 @@ function pageHtml(page: IndexPage, formatDate: (ms: number) => string): string {
  */
 export function descendantHitsHtml(count: number): string {
   if (count === 0) return '';
-  return `<div><span style="font-size: 11px; color: #1d4ed8"><b>子ページに ${count} 件の一致</b></span></div>`;
+  return `<div><span style="font-size: 11px; color: #1d4ed8"><b>${escapeHtml(t('index.descendantHits', count))}</b></span></div>`;
 }
 
 function missingHtml(slug: string): string {
-  return `<a href="/p/${slug}">${slug}</a><div><span style="${META_STYLE}">未作成</span></div>`;
+  return `<a href="/p/${slug}">${slug}</a><div><span style="${META_STYLE}">${escapeHtml(t('index.missing'))}</span></div>`;
 }
 
 const CELL_WIDTH = NOTE_WIDTH + GAP;

@@ -4,6 +4,7 @@
 // ポインタを載せた付箋の右上に、小さなボタンの列を重ねて出す。
 import { MAX_TITLE_LENGTH } from '../shared/api';
 import { el, textInput } from './dom';
+import { t } from './i18n';
 import { iconButton, onPressOutside } from './toolbar';
 
 /** これより小さく表示されている付箋には、ボタンを出さない（縮小して全体を見ているとき） */
@@ -25,16 +26,16 @@ export interface NoteActionHandlers {
  * 返す関数は、ボタンを隠す（表示位置が動いたときや、ボードを作り直したときに呼ぶ）。
  */
 export function attachNoteActions(canvas: HTMLElement, handlers: NoteActionHandlers): () => void {
-  const renameButton = iconButton('edit', '表示名を変える');
-  const removeButton = iconButton('trash', 'ページを削除');
+  const renameButton = iconButton('edit', t('page.rename'));
+  const removeButton = iconButton('trash', t('page.delete'));
   const buttons = el('div', { className: 'note-actions', hidden: true }, renameButton, removeButton);
 
-  const input = textInput({ maxLength: MAX_TITLE_LENGTH, ariaLabel: '表示名' });
+  const input = textInput({ maxLength: MAX_TITLE_LENGTH, ariaLabel: t('title') });
   const form = el(
     'form',
     { className: 'note-rename', hidden: true },
     input,
-    el('button', { type: 'submit', textContent: '保存' }),
+    el('button', { type: 'submit', textContent: t('save') }),
   );
   canvas.append(buttons, form);
 

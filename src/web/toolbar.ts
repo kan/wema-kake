@@ -2,10 +2,12 @@
 //
 // ヘッダーは 1 行で、3 つの区画に分ける。
 //   左: 今いる場所   中央: 付箋の操作   右: Wiki の機能
-import type { WemaBoard } from '@kanf/wema';
+import { jaLabels, type WemaBoard, type WemaLabels } from '@kanf/wema';
 import { type Child, el } from './dom';
+import { LANG_COOKIE } from '../shared/i18n';
+import { lang, otherLang, t } from './i18n';
 import { type IconName, icon } from './icons';
-import { viewSignal } from './navigation';
+import { reloadPage, viewSignal } from './navigation';
 
 /** 3 つの区画を持つヘッダー */
 export function header(left: Child[], tools: Child[], right: Child[]): HTMLElement {
@@ -86,7 +88,7 @@ export function modal(className: string, ...children: Child[]): HTMLDialogElemen
     'dialog',
     { className: `modal ${className}` },
     ...children,
-    el('form', { method: 'dialog', className: 'modal-foot' }, el('button', { textContent: '閉じる' })),
+    el('form', { method: 'dialog', className: 'modal-foot' }, el('button', { textContent: t('close') })),
   );
   // 枠の外（背景）のクリックでも閉じる。背景のクリックは、対象が dialog そのものになる。
   // 枠の余白のクリックや、文字をドラッグで選んだ後のクリックも同じ対象になるので、座標で見分ける。
@@ -108,23 +110,40 @@ export function menuItem(label: string, onClick: () => void, className = ''): HT
   return item;
 }
 
-/** 畳んで表示する付箋の、開閉のリンクの文言（wema の `foldLabels`） */
-export const FOLD_LABELS = { more: '続きを読む', less: '折り畳む' };
+/**
+ * wema が描く部分（付箋と接続線のポップアップ、文字のツールバー、畳んだ付箋の開閉のリンク）の文言
+ * （wema の `labels`）。ボードを作るところで、必ず渡す。日本語は wema に同梱のものを使い、
+ * 英語は wema の既定のまま
+ */
+export const WEMA_LABELS: Partial<WemaLabels> | undefined = lang === 'ja' ? jaLabels : undefined;
+
+/** 選んだ言語を記憶しておく長さ（秒）。1 年 */
+const REMEMBER_LANG_SECONDS = 60 * 60 * 24 * 365;
 
 /**
- * 読み込んだ autoSize の付箋の大きさを、表示に合わせる。ボードを画面に出した後に呼ぶ。
- *
- * wema 0.9.0 は、読み込んだ autoSize の付箋を計測しない（計測するのは、作ったときと変えたとき）。
- * 表示は内容に合った大きさになるが、データの幅と高さは読み込んだ値のままで、接続線と
- * `fitToContent()` はデータの値を使う。サーバーが置いた付箋（最初のページ）や、フォントの違う
- * 環境で作られた付箋では、線の端が付箋の縁からずれる。`refreshNote()` は、計測もやり直す。
- * データは変わるが、イベントも履歴も出ない（次にその付箋を変えたときの更新に含まれる）。
- * autoSize の付箋 1 枚ごとにレイアウトの計算が走る。wema の側が直ったら、この関数は消す
+ * 言語を切り替える。選んだ言語をこの端末に記憶して、ページを読み込み直す（文言を定数に入れている
+ * モジュールがあるので、表示中の画面の文言は差し替えない）
  */
-export function measureAutoSizeNotes(board: WemaBoard): void {
-  for (const note of board.getNotes()) {
-    if (note.autoSize) board.refreshNote(note.id);
-  }
+export function switchLang(): void {
+  // 選んだ言語は、Cookie に持つ（サーバーも読む。src/shared/i18n.ts）
+  document.cookie = `${LANG_COOKIE}=${otherLang}; Path=/; Max-Age=${REMEMBER_LANG_SECONDS}; SameSite=Lax`;
+  // 保存中の変更を送り終えてから、読み込み直す
+  void reloadPage();
+}
+
+/** 言語を切り替えるボタン（メニューの外に置くとき用）。切り替え先の言語の名前を出す */
+export function langButton(): HTMLButtonElement {
+  const button = el('button', { type: 'button', className: 'text-button', textContent: t('lang.switch') });
+  button.addEventListener('click', switchLang);
+  return button;
+}
+
+/** Undo と Redo のボタン。有効と無効は、呼ぶ側が決める */
+export function historyButtons(board: WemaBoard): { undo: HTMLButtonElement; redo: HTMLButtonElement } {
+  return {
+    undo: iconButton('undo', t('undo'), () => board.undo()),
+    redo: iconButton('redo', t('redo'), () => board.redo()),
+  };
 }
 
 /** ボタンで拡大と縮小をするときの、1 回の倍率（wema のスタンドアロン版と同じ） */
@@ -154,7 +173,7 @@ function centerOnNotes(board: WemaBoard, container: HTMLElement): void {
  * イベントに合わせる。`container` は、ボードを置いた要素
  */
 export function zoomControls(board: WemaBoard, container: HTMLElement): HTMLElement {
-  const level = el('button', { type: 'button', className: 'zoom-level', title: '等倍に戻す' });
+  const level = el('button', { type: 'button', className: 'zoom-level', title: t('zoom.reset') });
   level.addEventListener('click', () => board.zoomTo(1));
   // viewport:change はパンでも届くので、倍率の表示が変わるときだけ書き換える
   let shown = '';
@@ -169,11 +188,11 @@ export function zoomControls(board: WemaBoard, container: HTMLElement): HTMLElem
   return el(
     'span',
     { className: 'tool-group' },
-    iconButton('zoomOut', '縮小', () => board.zoomTo(board.getViewport().zoom / ZOOM_STEP)),
+    iconButton('zoomOut', t('zoom.out'), () => board.zoomTo(board.getViewport().zoom / ZOOM_STEP)),
     level,
-    iconButton('zoomIn', '拡大', () => board.zoomTo(board.getViewport().zoom * ZOOM_STEP)),
-    iconButton('zoomFit', '全体が収まるように縮小', () => board.fitToContent()),
-    iconButton('center', '付箋全体の中央へ移動（倍率はそのまま）', () => centerOnNotes(board, container)),
+    iconButton('zoomIn', t('zoom.in'), () => board.zoomTo(board.getViewport().zoom * ZOOM_STEP)),
+    iconButton('zoomFit', t('zoom.fit'), () => board.fitToContent()),
+    iconButton('center', t('zoom.center'), () => centerOnNotes(board, container)),
   );
 }
 

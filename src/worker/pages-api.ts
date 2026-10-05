@@ -2,6 +2,7 @@
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { INDEX_EXCERPT_LENGTH, MAX_LIST_LIMIT, type PageSummary } from '../shared/api';
+import { requestLang } from '../shared/i18n';
 import { isValidSlug } from '../shared/slug';
 import type { AuthEnv } from './access';
 import { createFirstPage } from './first-page';
@@ -55,7 +56,9 @@ pagesApi.get('/index', async (c) => {
     ]);
   let [pages, links] = await read();
   // ページが 1 つもない環境では、使い方の付箋を置いた最初のページを作る（1 回だけ）
-  if (pages.results.length === 0 && (await createFirstPage(c.env))) [pages, links] = await read();
+  if (pages.results.length === 0 && (await createFirstPage(c.env, requestLang(c.req.raw)))) {
+    [pages, links] = await read();
+  }
   return c.json({ pages: pages.results, links: links.results });
 });
 

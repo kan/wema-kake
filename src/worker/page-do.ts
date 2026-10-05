@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers';
 import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome } from '../shared/api';
 import { type BoardContent, type HistoryDelta, invertDeltas, type Snapshot } from '../shared/delta';
+import { systemSummary } from '../shared/op-summary';
 import {
   CLOSE_AUTH_EXPIRED,
   CLOSE_PAGE_DELETED,
@@ -124,7 +125,7 @@ export interface RevertInput {
   opId: string;
   /** 自分（同じ主体）の操作だけを取り消せるようにする。MCP の revert_operation で使う */
   ownOnly?: boolean;
-  /** 一覧に出す説明。省略すると `revert #<seq>` */
+  /** 一覧に出す説明。省略すると、取り消しを表す符号（src/shared/op-summary.ts） */
   summary?: string;
 }
 
@@ -524,7 +525,7 @@ export class PageDO extends DurableObject<Env> {
         clientId: 'system',
         opId: crypto.randomUUID(),
         deltas: notes.map((note): HistoryDelta => ({ type: 'note:delete', note })),
-        summary: `子ページ ${page} の削除`,
+        summary: systemSummary.childRemoved(page),
       });
     }, undefined);
   }
@@ -555,7 +556,7 @@ export class PageDO extends DurableObject<Env> {
       clientId: 'system',
       opId: crypto.randomUUID(),
       deltas,
-      summary: 'ページの作成',
+      summary: systemSummary.pageCreated(),
     });
     if (!applied.ok) throw new Error(`could not create the page content: ${applied.reason}`);
     this.setTitle(title);
@@ -894,7 +895,7 @@ export class PageDO extends DurableObject<Env> {
           const { deltas, skipped } = applyRevert(this.sql, inverse, actor, now);
           if (deltas.length === 0) return { ok: true, seq: null, applied: 0, skipped };
 
-          const summary = input.summary ?? `revert #${target}`;
+          const summary = input.summary ?? systemSummary.revert(target);
           const recorded = this.recordOp({ actor, clientId, opId, summary, reverts: target }, deltas, [], now);
           // 取り消しを取り消した場合は、元の操作の内容が戻るので、元の操作をもう一度取り消せるようにする
           this.sql.exec(`UPDATE ops SET reverted_by = NULL WHERE reverted_by = ?`, target);

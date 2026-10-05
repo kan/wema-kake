@@ -45,7 +45,7 @@ describe('revert', () => {
 
     const ops = await stub.listOps();
     expect(ops[0]).toMatchObject({
-      seq: seq + 1, actor: USER, summary: `revert #${seq}`, reverts: seq, revertedBy: null,
+      seq: seq + 1, actor: USER, summary: `system:revert:${seq}`, reverts: seq, revertedBy: null,
     });
     expect(ops[1]).toMatchObject({ seq, actor: AGENT, revertedBy: seq + 1 });
   });
@@ -239,7 +239,7 @@ describe('revert', () => {
       actor: 'user:dev@example.com',
       clientId: 'browser-1',
       opId: 'rv',
-      summary: `revert #${seq}`,
+      summary: `system:revert:${seq}`,
       reverts: seq,
       deltas: [{ type: 'note:delete', note: note('n1') }],
     };

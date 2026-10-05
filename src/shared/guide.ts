@@ -1,142 +1,259 @@
 // 使い方の付箋。最初のページ（サーバーが 1 回だけ作る。src/worker/first-page.ts）と、
 // 使い方のボード（保存しない。src/web/help-view.ts）で使う。wema のスタンドアロン版の、
 // 最初に出る付箋にならっている。
+//
+// 文面は、言語ごとに持つ（docs/plan.md のフェーズ 9）。画面の文言（src/web/i18n/）とは別に、
+// ここに置く。サーバーも使うのと、付箋の本文（HTML）で、行の長さが配置に関わるため。
 import type { BoardContent, WemaEdge, WemaNote } from './delta';
+import type { Lang } from './i18n';
 
-/** 最初のページのスラッグと表示名 */
-export const FIRST_PAGE = { slug: 'first-page', title: '最初のページ' };
+/** 最初のページのスラッグ */
+export const FIRST_PAGE_SLUG = 'first-page';
 
-const INTRO = {
-  first:
-    '<b>wema-kake へようこそ</b>' +
-    '<div>付箋を並べて書く Wiki です。</div>' +
-    '<div>1 ページが、1 枚のボードになります。</div>' +
-    '<div>このページの付箋は、消してかまいません。</div>',
-  help:
-    '<b>使い方</b>' +
-    '<div>試すためのボードです。</div>' +
-    '<div>付箋を動かしたり、書き換えたりできます。</div>' +
-    '<div>ここでの変更は、保存されません。</div>',
-};
+/** 付箋の名前。接続線が指す名前で、付箋の id にもなる */
+type Key = 'sample' | 'intro' | 'notes' | 'text' | 'edges' | 'view' | 'pages' | 'llm';
 
-const section = (heading: string, items: string[]) =>
-  `<b>${heading}</b><ul>${items.map((item) => `<li>${item}</li>`).join('')}</ul>`;
+/** 1 つの言語の文面 */
+interface GuideText {
+  /** 最初のページの表示名 */
+  firstPageTitle: string;
+  /** 案内の付箋。最初のページ用と、使い方のボード用 */
+  intro: { first: string; help: string };
+  /** 本文の装飾の見本 */
+  sample: string;
+  /** 見出しと、項目の並び */
+  sections: Record<Exclude<Key, 'sample' | 'intro'>, [heading: string, items: string[]]>;
+  /**
+   * 列の間隔。付箋は autoSize なので、幅は最も長い行で決まる。**長い行を足すと、隣の付箋と重なる。**
+   * 1 行を短く保つか、ここを広げる
+   */
+  column: number;
+}
 
-/** 本文の装飾の見本。HTML は、wema が作るものと同じ形にする */
-const DECORATION =
-  '<b>装飾の見本</b>' +
-  '<div><b>太字</b>、<s>取り消し線</s>、<span style="color: #d32f2f">文字の色</span>、' +
-  '<a href="https://github.com/kan/wema-kake" target="_blank" rel="noopener">リンク</a></div>' +
-  '<ul><li>箇条書き<ul><li>段を下げた項目</li></ul></li></ul>' +
-  '<ol><li>番号付きのリスト</li><li>2 つ目</li></ol>' +
+const paragraphs = (heading: string, lines: string[]) =>
+  `<b>${heading}</b>${lines.map((line) => `<div>${line}</div>`).join('')}`;
+
+/** 装飾の見本。HTML は、wema が画面の操作で作るものと同じ形にする */
+const sample = (text: {
+  heading: string;
+  bold: string;
+  strike: string;
+  color: string;
+  link: string;
+  separator: string;
+  bullet: string;
+  nested: string;
+  numbered: [string, string];
+  todo: string;
+  done: string;
+}) =>
+  `<b>${text.heading}</b>` +
+  `<div><b>${text.bold}</b>${text.separator}<s>${text.strike}</s>${text.separator}` +
+  `<span style="color: #d32f2f">${text.color}</span>${text.separator}` +
+  `<a href="https://github.com/kan/wema-kake" target="_blank" rel="noopener">${text.link}</a></div>` +
+  `<ul><li>${text.bullet}<ul><li>${text.nested}</li></ul></li></ul>` +
+  `<ol><li>${text.numbered[0]}</li><li>${text.numbered[1]}</li></ol>` +
   '<ul class="wema-checklist">' +
-  '<li><input type="checkbox">チェックリスト</li>' +
-  '<li class="wema-checked"><input type="checkbox" checked>済んだ項目</li>' +
+  `<li><input type="checkbox">${text.todo}</li>` +
+  `<li class="wema-checked"><input type="checkbox" checked>${text.done}</li>` +
   '</ul>';
 
-/** 列の間隔と、段の位置。付箋は autoSize なので、幅は最も長い行で決まる（長い行を書くと、隣と重なる） */
-const COLUMN = 460;
+const TEXTS: Record<Lang, GuideText> = {
+  ja: {
+    firstPageTitle: '最初のページ',
+    intro: {
+      first: paragraphs('wema-kake へようこそ', [
+        '付箋を並べて書く Wiki です。',
+        '1 ページが、1 枚のボードになります。',
+        'このページの付箋は、消してかまいません。',
+      ]),
+      help: paragraphs('使い方', [
+        '試すためのボードです。',
+        '付箋を動かしたり、書き換えたりできます。',
+        'ここでの変更は、保存されません。',
+      ]),
+    },
+    sample: sample({
+      heading: '装飾の見本',
+      bold: '太字',
+      strike: '取り消し線',
+      color: '文字の色',
+      link: 'リンク',
+      separator: '、',
+      bullet: '箇条書き',
+      nested: '段を下げた項目',
+      numbered: ['番号付きのリスト', '2 つ目'],
+      todo: 'チェックリスト',
+      done: '済んだ項目',
+    }),
+    sections: {
+      notes: [
+        '付箋',
+        [
+          '空いている場所をダブルクリック → 作る',
+          '上端をドラッグ → 動かす',
+          '右下をドラッグ → 大きさを変える',
+          '右下をダブルクリック → 内容に合わせる',
+          '選択して Delete → 削除する',
+          'Shift + クリック → 複数を選ぶ',
+        ],
+      ],
+      text: [
+        '本文',
+        [
+          '文字を選択 → 太字、取り消し線、色、リンク',
+          '付箋を選択 → 色、リスト、画像',
+          'リストの中で Tab → 段を下げる',
+          '長い本文は、畳んで表示できる',
+        ],
+      ],
+      edges: [
+        '接続線',
+        [
+          '縁の ● をドラッグ → 他の付箋とつなぐ',
+          '空いている場所で離す → 先に付箋を作る',
+          '線をクリック → 種類やラベルを変える',
+        ],
+      ],
+      view: [
+        '表示',
+        [
+          'ホイール、Space + ドラッグ → 動かす',
+          'Ctrl + ホイール、ピンチ → 拡大と縮小',
+          'Ctrl + Z → 元に戻す（自分の操作だけ）',
+          'メニューの「参照モード」 → 読むだけにする',
+        ],
+      ],
+      pages: [
+        'ページ',
+        [
+          '「子ページを置く」 → 中にページを作る',
+          '子ページの表示名をクリック → 中へ入る',
+          '/p/ページ名 へのリンク → 他のページへ移る',
+          '左上の表示名をクリック → 名前を変える',
+        ],
+      ],
+      llm: [
+        'LLM',
+        [
+          'MCP でつなぐと、Claude などが読み書きできる',
+          'LLM の操作は、メニューの「操作の履歴」に残る',
+          '履歴から、操作ごとに取り消せる',
+        ],
+      ],
+    },
+    column: 460,
+  },
+  en: {
+    firstPageTitle: 'First page',
+    intro: {
+      first: paragraphs('Welcome to wema-kake', [
+        'A wiki you write with sticky notes.',
+        'Each page is one board.',
+        'Feel free to delete the notes on this page.',
+      ]),
+      help: paragraphs('Help', [
+        'A board for trying things out.',
+        'Move the notes around or rewrite them.',
+        'Nothing you change here is saved.',
+      ]),
+    },
+    sample: sample({
+      heading: 'Formatting sample',
+      bold: 'Bold',
+      strike: 'strikethrough',
+      color: 'text color',
+      link: 'link',
+      separator: ', ',
+      bullet: 'Bulleted list',
+      nested: 'Indented item',
+      numbered: ['Numbered list', 'Second item'],
+      todo: 'Checklist',
+      done: 'Finished item',
+    }),
+    sections: {
+      notes: [
+        'Notes',
+        [
+          'Double-click an empty spot → create',
+          'Drag the top edge → move',
+          'Drag the bottom-right corner → resize',
+          'Double-click that corner → fit the content',
+          'Select and press Delete → delete',
+          'Shift + click → select several',
+        ],
+      ],
+      text: [
+        'Text',
+        [
+          'Select text → bold, strikethrough, color, link',
+          'Select a note → color, lists, image',
+          'Tab inside a list → indent',
+          'A long text can be shown folded',
+        ],
+      ],
+      edges: [
+        'Connections',
+        [
+          'Drag a ● on the edge → connect to a note',
+          'Drop on an empty spot → create a note there',
+          'Click a line → change its style or label',
+        ],
+      ],
+      view: [
+        'View',
+        [
+          'Wheel, or Space + drag → pan',
+          'Ctrl + wheel, or pinch → zoom',
+          'Ctrl + Z → undo (your own changes only)',
+          '“View-only mode” in the menu → read only',
+        ],
+      ],
+      pages: [
+        'Pages',
+        [
+          '“Place a child page” → a page inside this one',
+          'Click a child page’s title → go inside',
+          'A link to /p/page-name → go to that page',
+          'Click the title at the top left → rename',
+        ],
+      ],
+      llm: [
+        'LLM',
+        [
+          'Over MCP, Claude and others can read and write',
+          'Their operations are kept in “Operation history”',
+          'Revert them there, one operation at a time',
+        ],
+      ],
+    },
+    column: 480,
+  },
+};
+
+/** 最初のページの表示名 */
+export const firstPageTitle = (lang: Lang): string => TEXTS[lang].firstPageTitle;
+
+/** 段の位置 */
 const ROWS = [60, 370, 680];
 
 /**
- * 付箋 1 枚。`key` は、接続線が指す名前（付箋の id にもなる）。位置は、列と段で決める。
- * autoSize にするので、実際の大きさは、画面が出した後に計測して決める（src/web/toolbar.ts の
- * `measureAutoSizeNotes`）。`height` は、計測されるまでの目安
+ * 付箋の色、位置（列、段）、高さの目安。autoSize にするので、実際の大きさは、ボードが読み込んだ
+ * ときに wema が計測して決める（wema 0.10.0 以降）。高さは、計測されるまでの値
  */
-interface GuideNote {
-  key: string;
-  text: string;
-  color: string;
-  column: number;
-  row: number;
-  height: number;
-}
-
-const guideNotes = (intro: string): GuideNote[] => [
-  { key: 'sample', text: DECORATION, color: '#F5F5F5', column: 0, row: 0, height: 250 },
-  { key: 'intro', text: intro, color: '#FFF9C4', column: 1, row: 0, height: 120 },
-  {
-    key: 'notes',
-    text: section('付箋', [
-      '空いている場所をダブルクリック → 作る',
-      '上端をドラッグ → 動かす',
-      '右下をドラッグ → 大きさを変える',
-      '右下をダブルクリック → 内容に合わせる',
-      '選択して Delete → 削除する',
-      'Shift + クリック → 複数を選ぶ',
-    ]),
-    color: '#BBDEFB',
-    column: 0,
-    row: 1,
-    height: 220,
-  },
-  {
-    key: 'text',
-    text: section('本文', [
-      '文字を選択 → 太字、取り消し線、色、リンク',
-      '付箋を選択 → 色、リスト、画像',
-      'リストの中で Tab → 段を下げる',
-      '長い本文は、畳んで表示できる',
-    ]),
-    color: '#FFE0B2',
-    column: 1,
-    row: 1,
-    height: 170,
-  },
-  {
-    key: 'edges',
-    text: section('接続線', [
-      '縁の ● をドラッグ → 他の付箋とつなぐ',
-      '空いている場所で離す → 先に付箋を作る',
-      '線をクリック → 種類やラベルを変える',
-    ]),
-    color: '#C8E6C9',
-    column: 2,
-    row: 1,
-    height: 150,
-  },
-  {
-    key: 'view',
-    text: section('表示', [
-      'ホイール、Space + ドラッグ → 動かす',
-      'Ctrl + ホイール、ピンチ → 拡大と縮小',
-      'Ctrl + Z → 元に戻す（自分の操作だけ）',
-      'メニューの「参照モード」 → 読むだけにする',
-    ]),
-    color: '#FFCDD2',
-    column: 0,
-    row: 2,
-    height: 170,
-  },
-  {
-    key: 'pages',
-    text: section('ページ', [
-      '「子ページを置く」 → 中にページを作る',
-      '子ページの表示名をクリック → 中へ入る',
-      '/p/ページ名 へのリンク → 他のページへ移る',
-      '左上の表示名をクリック → 名前を変える',
-    ]),
-    color: '#E1BEE7',
-    column: 1,
-    row: 2,
-    height: 170,
-  },
-  {
-    key: 'llm',
-    text: section('LLM', [
-      'MCP でつなぐと、Claude などが読み書きできる',
-      'LLM の操作は、メニューの「操作の履歴」に残る',
-      '履歴から、操作ごとに取り消せる',
-    ]),
-    color: '#B2DFDB',
-    column: 2,
-    row: 2,
-    height: 150,
-  },
-];
+const LAYOUT: Record<Key, { color: string; column: number; row: number; height: number }> = {
+  sample: { color: '#F5F5F5', column: 0, row: 0, height: 250 },
+  intro: { color: '#FFF9C4', column: 1, row: 0, height: 120 },
+  notes: { color: '#BBDEFB', column: 0, row: 1, height: 220 },
+  text: { color: '#FFE0B2', column: 1, row: 1, height: 170 },
+  edges: { color: '#C8E6C9', column: 2, row: 1, height: 150 },
+  view: { color: '#FFCDD2', column: 0, row: 2, height: 170 },
+  pages: { color: '#E1BEE7', column: 1, row: 2, height: 170 },
+  llm: { color: '#B2DFDB', column: 2, row: 2, height: 150 },
+};
 
 /** 接続線。案内の付箋から 2 段目へ、2 段目から 3 段目へ。装飾の見本は、どれともつながない */
-const EDGES: [from: string, to: string][] = [
+const EDGES: [from: Key, to: Key][] = [
   ['intro', 'notes'],
   ['intro', 'text'],
   ['intro', 'edges'],
@@ -145,23 +262,31 @@ const EDGES: [from: string, to: string][] = [
   ['edges', 'llm'],
 ];
 
-const noteId = (key: string) => `guide-${key}`;
+const noteId = (key: Key) => `guide-${key}`;
 
 /** 使い方の付箋と接続線。`intro` で、案内の付箋の文面を選ぶ */
-export function guideBoard(intro: keyof typeof INTRO): BoardContent {
-  const notes = guideNotes(INTRO[intro]).map(
-    ({ key, text, color, column, row, height }, index): WemaNote => ({
+export function guideBoard(intro: keyof GuideText['intro'], lang: Lang): BoardContent {
+  const text = TEXTS[lang];
+  const bodyOf = (key: Key): string => {
+    if (key === 'sample') return text.sample;
+    if (key === 'intro') return text.intro[intro];
+    const [heading, items] = text.sections[key];
+    return `<b>${heading}</b><ul>${items.map((item) => `<li>${item}</li>`).join('')}</ul>`;
+  };
+  const notes = (Object.keys(LAYOUT) as Key[]).map((key, index): WemaNote => {
+    const { color, column, row, height } = LAYOUT[key];
+    return {
       id: noteId(key),
-      x: 60 + column * COLUMN,
+      x: 60 + column * text.column,
       y: ROWS[row],
       width: 380,
       height,
-      text,
+      text: bodyOf(key),
       color,
       zIndex: index + 1,
       autoSize: true,
-    }),
-  );
+    };
+  });
   const edges = EDGES.map(
     ([from, to]): WemaEdge => ({
       id: `guide-${from}-${to}`,
