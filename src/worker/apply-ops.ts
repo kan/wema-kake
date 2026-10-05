@@ -3,7 +3,7 @@ import { CHILD_PAGE_KEY, childPageOf, childRejection } from '../shared/hierarchy
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import type { BoardState } from '../shared/tools';
 import { sanitizeHtml } from './sanitize';
-import { type Obj, RejectError, REQUIRED_EDGE_FIELDS } from './validate';
+import { type NoteField, type Obj, RejectError, REQUIRED_EDGE_FIELDS } from './validate';
 
 /** WemaNote のフィールド名 → notes の列名（更新できるもの） */
 const NOTE_COLUMNS: Record<string, string> = {
@@ -14,9 +14,19 @@ const NOTE_COLUMNS: Record<string, string> = {
   text: 'text',
   color: 'color',
   autoSize: 'auto_size',
+  foldable: 'foldable',
   // meta は JSON の文字列で保存する。空なら NULL
   meta: 'extra',
-};
+  // wema が付箋にフィールドを足したら、ここで型エラーになる（知らないフィールドを黙って捨てないため）
+} satisfies Record<NoteField, string>;
+
+/**
+ * 真偽値のフィールドを、すべて未設定（false）にした値。「未設定」と false が同じ意味で、
+ * 列には 0 / 1 で保存する。読んだ付箋には true のものしか入らないので、付箋の内容に合わせる
+ * デルタを作るときは、これを下に敷く
+ */
+export const UNSET_FLAGS = { autoSize: false, foldable: false } satisfies Partial<WemaNote>;
+const FLAG_FIELDS = Object.keys(UNSET_FLAGS);
 
 /** meta を、保存する形（JSON の文字列。空なら null）にする。キーは検証のときに並べ替えてある */
 function metaJson(meta: unknown): string | null {
@@ -24,25 +34,25 @@ function metaJson(meta: unknown): string | null {
 }
 
 /**
- * 付箋のフィールドの値が同じか。autoSize は「未設定」と false が同じ意味。
+ * 付箋のフィールドの値が同じか。autoSize と foldable は「未設定」と false が同じ意味。
  * meta は全体を比べる（キーがないことと、空は同じ）
  */
 export function sameNoteValue(key: string, a: unknown, b: unknown): boolean {
-  if (key === 'autoSize') return (a === true) === (b === true);
+  if (FLAG_FIELDS.includes(key)) return (a === true) === (b === true);
   if (key === 'meta') return metaJson(a) === metaJson(b);
   return a === b;
 }
 
 /** 保存した列の値を、付箋のフィールドの値にする */
 function fromColumn(key: string, value: unknown): unknown {
-  if (key === 'autoSize') return Boolean(value);
+  if (FLAG_FIELDS.includes(key)) return Boolean(value);
   if (key === 'meta') return value === null ? undefined : JSON.parse(value as string);
   return value;
 }
 
 /** 付箋のフィールドの値を、保存する列の値にする */
 function toColumn(key: string, value: unknown): unknown {
-  if (key === 'autoSize') return value === true ? 1 : 0;
+  if (FLAG_FIELDS.includes(key)) return value === true ? 1 : 0;
   if (key === 'meta') return metaJson(value);
   return value;
 }
@@ -59,6 +69,7 @@ function rowToNote(row: Obj): WemaNote {
     zIndex: row.z_index as number,
   };
   if (row.auto_size) note.autoSize = true;
+  if (row.foldable) note.foldable = true;
   if (row.extra !== null) note.meta = JSON.parse(row.extra as string);
   return note;
 }
@@ -116,7 +127,7 @@ export function readNote(sql: SqlStorage, id: string): WemaNote | undefined {
 
 /**
  * 付箋の、指定したフィールドだけを読む（`keys` のうち更新できるフィールド以外は無視する）。
- * 移動だけの更新で大きな text を読まないようにするためのもの。autoSize は真偽値で返す。
+ * 移動だけの更新で大きな text を読まないようにするためのもの。autoSize と foldable は真偽値で返す。
  */
 export function readNoteFields(sql: SqlStorage, id: string, keys: string[]): Obj | undefined {
   const fields = keys.filter((k) => k in NOTE_COLUMNS);
@@ -230,11 +241,11 @@ export function applyDeltas(
         if (exists(sql, 'notes', n.id)) throw new RejectError(`note already exists: ${n.id}`);
         assertNotPlaced(sql, n, n.id);
         sql.exec(
-          `INSERT INTO notes (id, x, y, width, height, text, color, z_index, auto_size, extra,
+          `INSERT INTO notes (id, x, y, width, height, text, color, z_index, auto_size, foldable, extra,
                               created_by, updated_at, updated_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           n.id, n.x, n.y, n.width, n.height, n.text, n.color, n.zIndex, n.autoSize ? 1 : 0,
-          metaJson(n.meta), actor, now, actor,
+          n.foldable ? 1 : 0, metaJson(n.meta), actor, now, actor,
         );
         applied.push(d);
         break;
@@ -242,8 +253,10 @@ export function applyDeltas(
 
       case 'note:update': {
         const next: Obj = { ...d.after };
-        // autoSize は「未設定」と false が同じ意味
-        if ('autoSize' in d.before || 'autoSize' in next) next.autoSize = next.autoSize === true;
+        // autoSize と foldable は「未設定」と false が同じ意味
+        for (const flag of FLAG_FIELDS) {
+          if (flag in d.before || flag in next) next[flag] = next[flag] === true;
+        }
         // meta は全体を置き換える。after になく before にあれば、取り除く（空の meta にする）
         if (!('meta' in next) && 'meta' in d.before) next.meta = {};
         const keys = Object.keys(NOTE_COLUMNS).filter((k) => next[k] !== undefined);

@@ -75,10 +75,14 @@ class FakeBoard implements SyncBoard {
     for (const handler of this.handlers) handler({ deltas: typed });
   }
 
-  /** 比較用。autoSize の false と未設定、zIndex（同期しない）の違いは無視する */
+  /** 比較用。autoSize と foldable の false と未設定、zIndex（同期しない）の違いは無視する */
   state() {
     const notes = [...this.notes.values()]
-      .map(({ zIndex: _z, autoSize, ...rest }) => ({ ...rest, autoSize: autoSize === true }))
+      .map(({ zIndex: _z, autoSize, foldable, ...rest }) => ({
+        ...rest,
+        autoSize: autoSize === true,
+        foldable: foldable === true,
+      }))
       .sort((a, b) => a.id.localeCompare(b.id));
     const edges = [...this.edges.values()].sort((a, b) => a.id.localeCompare(b.id));
     return { notes, edges };

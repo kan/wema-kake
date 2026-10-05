@@ -87,6 +87,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     // 他のページへのリンク（Wiki リンク）は、同じタブで開く
     onLinkClick: openInternalLink,
     renderNote: childNotes.render,
+    foldLabels: { more: '続きを読む', less: '折り畳む' },
   });
   childNotes.attach(board);
 

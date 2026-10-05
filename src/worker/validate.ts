@@ -122,7 +122,15 @@ function meta(v: unknown): Record<string, string> {
   return out;
 }
 
-/** 付箋の、id と zIndex 以外のフィールド。zIndex は同期しないので更新では捨てる */
+/** 付箋の、id と zIndex 以外のフィールド */
+export type NoteField = Exclude<keyof WemaNote, 'id' | 'zIndex'>;
+type EdgeField = Exclude<keyof WemaEdge, 'id' | 'from' | 'to'>;
+
+/**
+ * 付箋の、id と zIndex 以外のフィールド。zIndex は同期しないので更新では捨てる。
+ * **wema が足したフィールドは、ここに足すまで型エラーになる**（`pick` は知らないフィールドを黙って
+ * 捨てるので、足し忘れると、そのフィールドだけが保存されない）
+ */
 const NOTE_FIELDS = {
   x: (v: unknown) => num(v, 'x'),
   y: (v: unknown) => num(v, 'y'),
@@ -131,8 +139,9 @@ const NOTE_FIELDS = {
   text,
   color,
   autoSize: (v: unknown) => bool(v, 'autoSize'),
+  foldable: (v: unknown) => bool(v, 'foldable'),
   meta,
-} satisfies { [K in keyof WemaNote]?: (v: unknown) => WemaNote[K] };
+} satisfies { [K in NoteField]: (v: unknown) => WemaNote[K] };
 
 /** 接続線の、id / from / to 以外のフィールド。from / to は変更できないので更新では捨てる */
 const EDGE_FIELDS = {
@@ -146,7 +155,7 @@ const EDGE_FIELDS = {
   arrowSize: (v: unknown) => num(v, 'arrowSize'),
   routing: (v: unknown) => oneOf(v, ROUTINGS, 'routing'),
   collapsed: (v: unknown) => bool(v, 'collapsed'),
-} satisfies { [K in keyof WemaEdge]?: (v: unknown) => WemaEdge[K] };
+} satisfies { [K in EdgeField]: (v: unknown) => WemaEdge[K] };
 
 type Fields = Record<string, (v: unknown) => unknown>;
 

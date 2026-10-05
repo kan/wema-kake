@@ -91,6 +91,7 @@ CREATE TABLE notes (
   color      TEXT NOT NULL,
   z_index    INTEGER NOT NULL,       -- 作成時の値のみ。以降の変更は同期しない（後述）
   auto_size  INTEGER NOT NULL DEFAULT 0,
+  foldable   INTEGER NOT NULL DEFAULT 0,  -- 長い本文を畳んで表示する（wema 0.9.0）。開いているかどうかは保存しない
   extra      TEXT,                   -- 付箋の meta（利用側のデータ）の JSON。なければ NULL
   created_by TEXT,                   -- 'user:<id>' / 'agent:<client>'
   updated_at INTEGER NOT NULL,

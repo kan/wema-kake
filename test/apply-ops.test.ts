@@ -1,4 +1,4 @@
-import { env, runInDurableObject } from 'cloudflare:test';
+import { env, evictDurableObject, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { PageDO } from '../src/worker/page-do';
 import { createNote, edge, note } from './helpers';
@@ -81,6 +81,40 @@ describe('applyOps', () => {
     await apply([{ type: 'note:update', noteId: 'n1', before: {}, after: { autoSize: true } }]);
     await apply([{ type: 'note:update', noteId: 'n1', before: { autoSize: true }, after: {} }]);
     expect((await stub.getSnapshot()).data.notes[0].autoSize).toBeUndefined();
+  });
+
+  it('foldable を保存し、切り替えられる', async () => {
+    const { stub, apply } = newPage();
+    await apply([createNote('n1'), createNote('n2', { foldable: true })]);
+    expect((await stub.getSnapshot()).data.notes).toEqual([note('n1'), note('n2', { foldable: true })]);
+
+    // wema は、切り替えと一緒に、計測し直した高さを送ってくる
+    const res = await apply([
+      { type: 'note:update', noteId: 'n1', before: { height: 150 }, after: { foldable: true, height: 88 } },
+    ]);
+    expect(res).toMatchObject({
+      deltas: [{ before: { height: 150, foldable: false }, after: { height: 88, foldable: true } }],
+    });
+    expect((await stub.getSnapshot()).data.notes[0]).toMatchObject({ foldable: true, height: 88 });
+
+    // after にキーがなく before にだけある形（undefined が JSON で消えた場合）でも解除できる
+    await apply([{ type: 'note:update', noteId: 'n1', before: { foldable: true }, after: {} }]);
+    expect((await stub.getSnapshot()).data.notes[0].foldable).toBeUndefined();
+  });
+
+  it('foldable の列がないページ（スキーマのバージョン 1）を移行する', async () => {
+    const { stub, apply } = newPage();
+    await apply([createNote('n1')]);
+    // バージョン 1 のスキーマに戻して、DO を起こし直す（移行は、DO を起こしたときに走る）
+    await runInDurableObject(stub, (_do, state) => {
+      state.storage.sql.exec(`ALTER TABLE notes DROP COLUMN foldable`);
+      state.storage.sql.exec(`UPDATE meta SET value = '1' WHERE key = 'version'`);
+    });
+    await evictDurableObject(stub);
+
+    expect((await stub.getSnapshot()).data.notes).toEqual([note('n1')]);
+    await apply([{ type: 'note:update', noteId: 'n1', before: {}, after: { foldable: true } }]);
+    expect((await stub.getSnapshot()).data.notes[0].foldable).toBe(true);
   });
 
   it('text をサニタイズして保存し、送信元向けの fixup を返す', async () => {

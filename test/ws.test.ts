@@ -69,7 +69,7 @@ describe('WebSocket', () => {
       // サーバーの現在値に合わせるためのデルタ。zIndex は含まない
       fixups: [{
         type: 'note:update', noteId: 'n1', before: {},
-        after: { x: 10, y: 20, width: 200, height: 150, text: 'v1', color: '#FFF9C4', autoSize: false },
+        after: { x: 10, y: 20, width: 200, height: 150, text: 'v1', color: '#FFF9C4', autoSize: false, foldable: false },
       }],
     });
     await a.expectSilent();

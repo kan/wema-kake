@@ -26,6 +26,7 @@ import {
   readNotes,
   type Sanitized,
   sanitizeDeltas,
+  UNSET_FLAGS,
 } from './apply-ops';
 import {
   buildLayout,
@@ -195,6 +196,8 @@ CREATE UNIQUE INDEX ops_client_op ON ops (actor, client_id, op_id);
 
 INSERT INTO meta (key, value) VALUES ('seq', '0');
 `,
+  // 長い本文を畳んで表示する付箋（wema 0.9.0 の WemaNote.foldable）
+  `ALTER TABLE notes ADD COLUMN foldable INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 /** ページ 1 つ分の付箋・接続線・操作履歴を持つ */
@@ -1064,7 +1067,7 @@ function parseTitle(input: unknown): string | null | undefined {
 function contentToDeltas(content: BoardContent): HistoryDelta[] {
   return [
     ...content.notes.map(({ id, zIndex: _zIndex, ...after }): HistoryDelta => ({
-      type: 'note:update', noteId: id, before: {}, after: { autoSize: false, ...after },
+      type: 'note:update', noteId: id, before: {}, after: { ...UNSET_FLAGS, ...after },
     })),
     ...content.edges.map(({ id, from: _from, to: _to, ...after }): HistoryDelta => ({
       type: 'edge:update', edgeId: id, before: {}, after,
