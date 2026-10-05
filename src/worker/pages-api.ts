@@ -4,6 +4,7 @@ import { createMiddleware } from 'hono/factory';
 import { INDEX_EXCERPT_LENGTH, MAX_LIST_LIMIT, type PageSummary } from '../shared/api';
 import { isValidSlug } from '../shared/slug';
 import type { AuthEnv } from './access';
+import { createFirstPage } from './first-page';
 import type { RevertFailure } from './page-do';
 import { listPages, searchPages, searchRoots } from './page-queries';
 
@@ -35,22 +36,26 @@ pagesApi.get('/session', (c) => c.json({ actor: c.get('actor') }));
 pagesApi.get('/index', async (c) => {
   const db = c.env.DB;
   const roots = `SELECT name FROM pages WHERE parent IS NULL ORDER BY updated_at DESC LIMIT ?`;
-  const [pages, links] = await db.batch([
-    db
-      .prepare(
-        `SELECT name, title, note_count, updated_at, substr(plain_text, 1, ?) AS excerpt,
-                (SELECT count(*) FROM pages c WHERE c.parent = pages.name) AS child_count
-         FROM pages WHERE parent IS NULL ORDER BY updated_at DESC LIMIT ?`,
-      )
-      .bind(INDEX_EXCERPT_LENGTH, MAX_LIST_LIMIT),
-    db
-      .prepare(
-        `SELECT l.from_page, l.to_page, p.name IS NULL AS missing
-         FROM links l LEFT JOIN pages p ON p.name = l.to_page
-         WHERE l.from_page IN (${roots}) AND p.parent IS NULL`,
-      )
-      .bind(MAX_LIST_LIMIT),
-  ]);
+  const read = () =>
+    db.batch([
+      db
+        .prepare(
+          `SELECT name, title, note_count, updated_at, substr(plain_text, 1, ?) AS excerpt,
+                  (SELECT count(*) FROM pages c WHERE c.parent = pages.name) AS child_count
+           FROM pages WHERE parent IS NULL ORDER BY updated_at DESC LIMIT ?`,
+        )
+        .bind(INDEX_EXCERPT_LENGTH, MAX_LIST_LIMIT),
+      db
+        .prepare(
+          `SELECT l.from_page, l.to_page, p.name IS NULL AS missing
+           FROM links l LEFT JOIN pages p ON p.name = l.to_page
+           WHERE l.from_page IN (${roots}) AND p.parent IS NULL`,
+        )
+        .bind(MAX_LIST_LIMIT),
+    ]);
+  let [pages, links] = await read();
+  // ページが 1 つもない環境では、使い方の付箋を置いた最初のページを作る（1 回だけ）
+  if (pages.results.length === 0 && (await createFirstPage(c.env))) [pages, links] = await read();
   return c.json({ pages: pages.results, links: links.results });
 });
 

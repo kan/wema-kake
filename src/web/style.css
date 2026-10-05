@@ -124,12 +124,8 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 .op-meta { color: #666; }
 .op-summary { margin: 2px 0 4px; overflow-wrap: anywhere; }
 
-.help { border: 1px solid #ccc; border-radius: 8px; padding: 16px 20px; max-width: 520px; font-size: 13px; }
-.help::backdrop { background: rgb(0 0 0 / 0.3); }
-.help h2 { font-size: 16px; margin: 0 0 8px; }
-.help h3 { font-size: 13px; margin: 12px 0 4px; }
-.help ul { margin: 0; padding-left: 1.4em; }
-.help form { margin-top: 16px; text-align: right; }
+/* 使い方の画面（保存しないボード）の、ヘッダーの注記 */
+.help-note { font-size: 12px; color: #999; white-space: nowrap; }
 
 /* --- 一覧の画面 --- */
 .index-search { width: 16em; min-width: 6em; height: 26px; box-sizing: border-box; font: inherit; font-size: 13px; }

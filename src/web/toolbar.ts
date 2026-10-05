@@ -84,6 +84,25 @@ export function menuItem(label: string, onClick: () => void, className = ''): HT
   return item;
 }
 
+/** 畳んで表示する付箋の、開閉のリンクの文言（wema の `foldLabels`） */
+export const FOLD_LABELS = { more: '続きを読む', less: '折り畳む' };
+
+/**
+ * 読み込んだ autoSize の付箋の大きさを、表示に合わせる。ボードを画面に出した後に呼ぶ。
+ *
+ * wema 0.9.0 は、読み込んだ autoSize の付箋を計測しない（計測するのは、作ったときと変えたとき）。
+ * 表示は内容に合った大きさになるが、データの幅と高さは読み込んだ値のままで、接続線と
+ * `fitToContent()` はデータの値を使う。サーバーが置いた付箋（最初のページ）や、フォントの違う
+ * 環境で作られた付箋では、線の端が付箋の縁からずれる。`refreshNote()` は、計測もやり直す。
+ * データは変わるが、イベントも履歴も出ない（次にその付箋を変えたときの更新に含まれる）。
+ * autoSize の付箋 1 枚ごとにレイアウトの計算が走る。wema の側が直ったら、この関数は消す
+ */
+export function measureAutoSizeNotes(board: WemaBoard): void {
+  for (const note of board.getNotes()) {
+    if (note.autoSize) board.refreshNote(note.id);
+  }
+}
+
 /** ボタンで拡大と縮小をするときの、1 回の倍率（wema のスタンドアロン版と同じ） */
 const ZOOM_STEP = 1.25;
 

@@ -7,9 +7,20 @@ import * as api from './api';
 import { CHILD_NOTE_SIZE, ChildNotes, childPageForm } from './child-notes';
 import { confirmDeletePage, el, errorMessage, formatDate, isPlainClick, openInternalLink, textInput } from './dom';
 import type { IconName } from './icons';
-import { onViewEnd, setBeforeLeave, type Transition, viewSignal } from './navigation';
+import { navigate, onViewEnd, setBeforeLeave, type Transition, viewSignal } from './navigation';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
-import { header, iconButton, menuItem, popover, separator, settings, toast, zoomControls } from './toolbar';
+import {
+  FOLD_LABELS,
+  header,
+  iconButton,
+  measureAutoSizeNotes,
+  menuItem,
+  popover,
+  separator,
+  settings,
+  toast,
+  zoomControls,
+} from './toolbar';
 import { zoomTransitions } from './viewport-motion';
 import { rememberViewport } from './viewport-store';
 
@@ -87,7 +98,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     // 他のページへのリンク（Wiki リンク）は、同じタブで開く
     onLinkClick: openInternalLink,
     renderNote: childNotes.render,
-    foldLabels: { more: '続きを読む', less: '折り畳む' },
+    foldLabels: FOLD_LABELS,
   });
   childNotes.attach(board);
 
@@ -186,8 +197,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   // Ctrl / Cmd + A で全選択（wema のスタンドアロン版と同じ。入力中は、入力欄の全選択のままにする）
   document.addEventListener('keydown', (e) => {
     if (!(e.ctrlKey || e.metaKey) || e.key !== 'a') return;
-    // 編集できないとき（最初の同期前、削除後）と、使い方を開いている間は、何もしない
-    if (board.isReadOnly() || document.querySelector('dialog[open]')) return;
+    // 編集できないとき（最初の同期前、削除後）は、何もしない
+    if (board.isReadOnly()) return;
     const active = document.activeElement;
     if (active instanceof HTMLElement && (active.isContentEditable || active.matches('input, textarea'))) return;
     e.preventDefault();
@@ -241,6 +252,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   // --- 同期 ---
   const sync = new BoardSync(board, () => connect(slug), {
     // 最初の同期が済んだときに、1 回だけ呼ばれる
+    // 読み込みのたびに、付箋の大きさを計測し直す（最初の表示位置を決める onReady より先に届く）
+    onSnapshot: () => measureAutoSizeNotes(board),
     onReady() {
       board.setReadOnly(false);
       // 参照モードは、サーバーの内容を読み込んだ後に入る（入った時点の位置を wema が覚えるため）
@@ -419,9 +432,6 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     menu.close();
   };
 
-  const help = helpDialog();
-  app.append(help);
-
   const deletePage = () => {
     menu.close();
     if (!confirmDeletePage(currentTitle ?? slug)) return;
@@ -440,56 +450,10 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     viewOnlyItem,
     themeItem,
     menuItem('JSON を書き出す', exportJson),
-    menuItem('使い方', () => {
-      menu.close();
-      help.showModal();
-    }),
+    // 使い方は、試すためのボードで見せる（保存しない。src/web/help-view.ts）
+    menuItem('使い方', () => navigate('/help')),
     el('hr'),
     // 削除は、常に見える場所には置かない
     menuItem('ページを削除…', deletePage, 'danger'),
   );
-}
-
-/** 使い方。付箋として置くと、ページの内容として保存されて他の人にも見えるので、重ねて出す */
-function helpDialog(): HTMLDialogElement {
-  const section = (heading: string, items: string[]) => [
-    el('h3', { textContent: heading }),
-    el('ul', {}, ...items.map((text) => el('li', { textContent: text }))),
-  ];
-  const dialog = el(
-    'dialog',
-    { className: 'help' },
-    el('h2', { textContent: '使い方' }),
-    ...section('付箋', [
-      '空いている場所をダブルクリック → 付箋を作る',
-      '付箋の上端をドラッグ → 動かす',
-      '右下をドラッグ → 大きさを変える',
-      '選択して Delete → 削除する',
-      'Shift + クリック、空いている場所をドラッグ → 複数を選ぶ（Ctrl + A で全部）',
-    ]),
-    ...section('接続線', [
-      '付箋の縁の ● をドラッグ → 他の付箋とつなぐ',
-      '空いている場所で離す → つないだ先に付箋を作る',
-      '接続線をクリック → 線の種類やラベルを変える',
-    ]),
-    ...section('表示', [
-      'ホイール、Space + ドラッグ → 表示位置を動かす',
-      'Ctrl + ホイール、ピンチ → 拡大と縮小',
-      'Ctrl + Z / Ctrl + Shift + Z → 元に戻す / やり直す（自分の操作だけ）',
-    ]),
-    ...section('Wiki', [
-      '他のページへのリンクは、付箋の本文に /p/ページ名 へのリンクを張る',
-      'agent（MCP）の操作は「操作の履歴」から取り消せる',
-    ]),
-    el('form', { method: 'dialog' }, el('button', { textContent: '閉じる' })),
-  );
-  // 背景（dialog の外側）のクリックでも閉じる。対象の要素ではなく座標で判定する
-  // （余白のクリックや、文字をドラッグで選んだ後のクリックも、対象は dialog になるため）
-  dialog.addEventListener('click', (e) => {
-    const box = dialog.getBoundingClientRect();
-    const inside =
-      e.clientX >= box.left && e.clientX <= box.right && e.clientY >= box.top && e.clientY <= box.bottom;
-    if (!inside) dialog.close();
-  });
-  return dialog;
 }

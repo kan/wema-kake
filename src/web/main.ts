@@ -1,6 +1,7 @@
 import '@kanf/wema/style.css';
 import './style.css';
 import { isValidSlug } from '../shared/slug';
+import { openHelp } from './help-view';
 import { openIndex } from './index-view';
 import { startRouter } from './navigation';
 import { openPage } from './page-view';
@@ -10,9 +11,10 @@ const app = document.getElementById('app')!;
 startRouter((path, initial, arrival) => {
   const slug = /^\/p\/([^/]+)\/?$/.exec(path)?.[1];
   const isPage = slug !== undefined && isValidSlug(slug);
-  if (isPage || path === '/') {
+  if (isPage || path === '/' || path === '/help') {
     app.replaceChildren();
     if (isPage) openPage(app, slug, arrival);
+    else if (path === '/help') openHelp(app);
     else openIndex(app, arrival);
     return true;
   }

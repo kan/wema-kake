@@ -544,6 +544,26 @@ export class PageDO extends DurableObject<Env> {
   }
 
   /**
+   * ページを、付箋と接続線を置いた状態で作り、D1 の索引にも反映する（最初のページ用。作った直後の
+   * 一覧に出すため、索引への反映を待つ）。すでにあれば何もせず、false を返す
+   */
+  async createWithContent(title: string, deltas: HistoryDelta[]): Promise<boolean> {
+    if (this.version > 0) return false;
+    // 付箋を先に書く。断られたときに、表示名だけの空のページを残さない（残ると、作り直せない）
+    const applied = await this.applyOps({
+      actor: 'system',
+      clientId: 'system',
+      opId: crypto.randomUUID(),
+      deltas,
+      summary: 'ページの作成',
+    });
+    if (!applied.ok) throw new Error(`could not create the page content: ${applied.reason}`);
+    this.setTitle(title);
+    await this.reindexInOrder(Date.now());
+    return true;
+  }
+
+  /**
    * ページを削除する。付箋、接続線、履歴、表示名と、D1 の索引を消す。取り消しはできない。
    * 貼った画像は R2 に残る（どのページの画像かを記録していない）。
    */
@@ -601,8 +621,15 @@ export class PageDO extends DurableObject<Env> {
     if (this.version === 0) return;
     const now = Date.now();
     this.pruneOps(now);
-    // 書き込みや削除と同じ順番待ちに入れる。索引の書き込みが、ページの削除と前後しないようにする
-    await this.inOrder(async () => {
+    await this.reindexInOrder(now);
+  }
+
+  /**
+   * D1 の索引へ反映する。書き込みや削除と同じ順番待ちに入れる（索引の書き込みが、ページの削除と
+   * 前後しないようにする）
+   */
+  private reindexInOrder(now: number): Promise<void> {
+    return this.inOrder(async () => {
       if (this.version > 0) await this.reindex(now);
     });
   }

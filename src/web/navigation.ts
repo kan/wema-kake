@@ -59,12 +59,13 @@ export function startRouter(renderPath: Render): void {
 }
 
 /**
- * サイト内の URL へ移る。一覧（/）とページ（/p/<slug>）なら、読み込みなしで切り替える。
+ * サイト内の URL へ移る。一覧（/）、ページ（/p/<slug>）、使い方（/help）なら、読み込みなしで切り替える。
  * それ以外は、ページ全体の読み込みで移る
  */
 export function navigate(url: string, transition?: Transition): void {
   const target = new URL(url, location.href);
-  if (target.origin !== location.origin || !(target.pathname === '/' || target.pathname.startsWith('/p/'))) {
+  const { pathname } = target;
+  if (target.origin !== location.origin || !(pathname === '/' || pathname === '/help' || pathname.startsWith('/p/'))) {
     location.assign(target.href);
     return;
   }
