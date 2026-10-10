@@ -30,6 +30,7 @@ import {
 } from './navigation';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
 import {
+  centerOnNotes,
   header,
   historyButtons,
   iconButton,
@@ -237,7 +238,11 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   }
   layoutButton('distributeH', t('layout.distributeH'), 3, (s) => board.distributeNotes(s, 'horizontal'));
   layoutButton('distributeV', t('layout.distributeV'), 3, (s) => board.distributeNotes(s, 'vertical'));
-  layoutButton('autoLayout', t('layout.auto'), 0, () => board.autoLayout());
+  layoutButton('autoLayout', t('layout.auto'), 0, () => {
+    board.autoLayout();
+    // 並べ直した付箋全体の中央へ動かす（倍率は変えない）
+    centerOnNotes(board, container);
+  });
 
   /** ボタンの有効と無効を、ボードの状態に合わせる。自前の状態は持たない */
   const updateTools = () => {
