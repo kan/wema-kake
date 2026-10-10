@@ -20,6 +20,8 @@ export function openHelp(app: HTMLElement): void {
     data: { version: 1, ...guideBoard('help', lang) },
     onLinkClick: openInternalLink,
     labels: WEMA_LABELS,
+    // ページの画面と同じ操作にする
+    emptyDrag: 'pan',
   });
   onViewEnd(() => board.destroy());
 

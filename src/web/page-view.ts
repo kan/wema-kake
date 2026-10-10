@@ -136,6 +136,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     onLinkClick: openInternalLink,
     renderNote: childNotes.render,
     labels: WEMA_LABELS,
+    // 空いている場所のドラッグは、表示位置を動かす。範囲で選ぶのは、Ctrl / Cmd か Shift + ドラッグ
+    emptyDrag: 'pan',
   });
   childNotes.attach(board);
 

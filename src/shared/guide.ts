@@ -96,6 +96,7 @@ const TEXTS: Record<Lang, GuideText> = {
           '右下をダブルクリック → 内容に合わせる',
           '選択して Delete → 削除する',
           'Shift + クリック → 複数を選ぶ',
+          'Ctrl + ドラッグ → 囲んで選ぶ',
         ],
       ],
       text: [
@@ -118,7 +119,7 @@ const TEXTS: Record<Lang, GuideText> = {
       view: [
         '表示',
         [
-          'ホイール、Space + ドラッグ → 動かす',
+          'ホイール、空いた場所をドラッグ → 動かす',
           'Ctrl + ホイール、ピンチ → 拡大と縮小',
           'Ctrl + Z → 元に戻す（自分の操作だけ）',
           'メニューの「参照モード」 → 読むだけにする',
@@ -181,6 +182,7 @@ const TEXTS: Record<Lang, GuideText> = {
           'Double-click that corner → fit the content',
           'Select and press Delete → delete',
           'Shift + click → select several',
+          'Ctrl + drag → select an area',
         ],
       ],
       text: [
@@ -203,7 +205,7 @@ const TEXTS: Record<Lang, GuideText> = {
       view: [
         'View',
         [
-          'Wheel, or Space + drag → pan',
+          'Wheel, or drag an empty spot → pan',
           'Ctrl + wheel, or pinch → zoom',
           'Ctrl + Z → undo (your own changes only)',
           '“View-only mode” in the menu → read only',
