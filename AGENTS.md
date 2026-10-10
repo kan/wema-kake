@@ -209,7 +209,7 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | `PUT /api/bookmarks/<slug>` | ブックマークを付ける。すでに付いていれば何もしない。ページがなければ 404、1 人 100 件を超えると 400 |
 | `DELETE /api/bookmarks/<slug>` | ブックマークを外す。付いていなくても成功を返す |
 | `PUT /api/pages/<slug>/title` | 表示名の変更（本文は `{ "title": "..." }`）。空文字で未設定に戻す。書き込みのないページに対して呼ぶとページが作られる。本文に `"mustExist": true` を付けると、作らずに 404 を返す（一覧の画面が使う。古い一覧に残った削除済みのページを作り直さないため） |
-| `POST /api/pages/<slug>/notes` | 他のページから移す（写す）付箋を置く（本文は `{ "clientId", "opId", "from", "notes", "edges" }`。`from` は付箋が元あったページのスラッグ）。互いの位置関係を保って、今ある付箋の下に置く。同じ `opId` で送り直しても二重には置かない。ページがなければ 404（作らない） |
+| `POST /api/pages/<slug>/notes` | 他のページから移す（写す）付箋を置く（本文は `{ "clientId", "opId", "from", "notes", "edges" }`。`from` は付箋が元あったページのスラッグ）。互いの位置関係を保って、今ある付箋の下に置く。同じ `opId` で送り直しても二重には置かない。置いた後のページの概要（`page`。`POST /api/pages-info` と同じ形で、索引への反映を待たない）を返す。ページがなければ 404（作らない） |
 | `POST /api/images` | 画像のアップロード（本文は画像のバイト列、`Content-Type` は png / jpeg / gif / webp / avif）。`{ "url": "/img/<key>" }` を返す。10MB まで |
 | `GET /img/<key>` | 画像の取得（R2） |
 | `GET /api/pages/<slug>/ops?agent=1&limit=` | 最近の操作（新しい順）。`agent=1` で agent の操作に絞る |

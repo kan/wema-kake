@@ -37,6 +37,10 @@ describe('POST /api/pages/:slug/notes', () => {
       edges: [edge('e1', 'a', 'b')],
     });
     expect(res.status).toBe(200);
+    // 置いた後の概要が、索引への反映を待たずに返る
+    expect(await res.json()).toMatchObject({
+      page: { name: slug, title: slug, note_count: 3, parent: null, layout: expect.stringContaining('[100,240,') },
+    });
 
     const { notes, edges } = await board(slug);
     const at = (id: string) => notes.find((n) => n.id === id)!;

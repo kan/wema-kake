@@ -358,7 +358,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     clientId: sync.clientId,
     titleOf: (child) => childNotes.titleOf(child),
     notify,
-    onSent: () => childNotes.contentChanged(),
+    onSent: (page) => childNotes.contentChanged(page),
   });
 
   // 読み込みなしで他のページへ切り替わるときの後始末。保存中の変更を送り終えるのを少し待ってから、

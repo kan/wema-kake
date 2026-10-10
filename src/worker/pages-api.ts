@@ -231,7 +231,9 @@ pagesApi.post('/pages/:slug/notes', validSlug, async (c) => {
     .catch(() => null);
   const from = body?.from;
   if (typeof from !== 'string' || !isValidSlug(from)) return c.json({ error: 'invalid from' }, 400);
-  const result = await c.env.PAGE.getByName(c.req.param('slug')).receiveNotes({
+  const slug = c.req.param('slug');
+  const stub = c.env.PAGE.getByName(slug);
+  const result = await stub.receiveNotes({
     actor: c.get('actor'),
     clientId: String(body?.clientId ?? ''),
     opId: String(body?.opId ?? ''),
@@ -239,7 +241,11 @@ pagesApi.post('/pages/:slug/notes', validSlug, async (c) => {
     notes: body?.notes,
     edges: body?.edges,
   });
-  if (result.ok) return c.json({ ok: true, seq: result.seq });
+  if (result.ok) {
+    // 置いた後の概要も返す（送った側が、索引への反映を待たずに、子ページの付箋を描き直せる）
+    const summary = await stub.getSummary();
+    return c.json({ ok: true, seq: result.seq, page: summary && { name: slug, ...summary } });
+  }
   return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
 });
 

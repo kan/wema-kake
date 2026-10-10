@@ -67,6 +67,8 @@ export class ChildNotes {
   private readonly pages = new Map<string, PageSummary | null>();
   private board: WemaBoard | undefined;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 手元の概要のほうが、索引より新しい子ページ（付箋を移した直後） */
+  private readonly ahead = new Set<string>();
   /** 子ページの中身を変えた後の、索引への反映を待つ取り直し */
   private indexedTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -134,11 +136,22 @@ export class ChildNotes {
     return this.pages.get(child)?.title ?? child;
   }
 
-  /** このページから、子ページの中身を変えた（付箋を移した）。索引への反映を待って、概要を取り直す */
-  contentChanged(): void {
+  /**
+   * このページから、子ページの中身を変えた（付箋を移した）。`page` は、変えた後の概要。
+   * すぐに描き直し、索引への反映を待って、取り直す
+   */
+  contentChanged(page: PageSummary): void {
+    this.pages.set(page.name, page);
+    // 索引に反映されるまでは、取り直すと古い概要が返る。その間は、この概要を上書きしない
+    this.ahead.add(page.name);
+    const note = this.board?.getNotes().find((n) => childPageOf(n) === page.name);
+    if (note) this.board?.refreshNote(note.id);
     // ふつうの取り直しの予約とは、別に持つ（間に取り直しが入っても、反映の後の取り直しを残す）
     clearTimeout(this.indexedTimer);
-    this.indexedTimer = setTimeout(() => void this.refresh(), INDEXING_WAIT_MS);
+    this.indexedTimer = setTimeout(() => {
+      this.ahead.clear();
+      void this.refresh();
+    }, INDEXING_WAIT_MS);
   }
 
   /** 置いてある子ページの概要を、取り直す。予約が重なったら、1 回にまとめる */
@@ -167,6 +180,7 @@ export class ChildNotes {
     if (this.board !== board) return;
     const byName = new Map(found.map((page) => [page.name, page]));
     for (const [name, noteId] of placed) {
+      if (this.ahead.has(name)) continue;
       this.pages.set(name, byName.get(name) ?? null);
       // 描き直す。概要が入ったので、ここからの render は、取り直しを予約しない
       board.refreshNote(noteId);

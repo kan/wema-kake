@@ -99,6 +99,8 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 }
 /* 運んでいる付箋を放すと、中へ移る子ページの付箋（note-drop.ts） */
 .wema-note.drop-target { outline: 3px solid #2563eb; outline-offset: 2px; }
+/* 子ページへ送っている途中の付箋。放した直後から見えなくし、送り終えたら消す */
+.wema-note.note-leaving { opacity: 0; pointer-events: none; transition: opacity 0.12s; }
 .child-title { font-weight: bold; color: #1d4ed8; overflow-wrap: anywhere; flex: none; }
 .child-meta { font-size: 11px; color: #666; flex: none; }
 /* 子ページの付箋の配置の、簡易な再現 */

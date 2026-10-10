@@ -92,12 +92,12 @@ export const revertOp = (slug: string, seq: number, clientId: string) =>
 /**
  * 付箋と、その間の接続線を、ページ `slug` へ送る（そのページの、今ある付箋の下に置かれる）。
  * `from` は、付箋が元あったページ。id は、送る側で新しく振っておく。
- * 同じ `opId` で送り直しても、二重には置かれない
+ * 同じ `opId` で送り直しても、二重には置かれない。`page` は、置いた後のそのページの概要
  */
 export const sendNotes = (
   slug: string,
   body: { clientId: string; opId: string; from: string; notes: WemaNote[]; edges: WemaEdge[] },
-) => request<{ ok: true }>('POST', `/api/pages/${slug}/notes`, body);
+) => request<{ ok: true; page: PageSummary | null }>('POST', `/api/pages/${slug}/notes`, body);
 
 /** 画像を R2 に上げ、付箋に入れる URL を返す */
 export async function uploadImage(file: File): Promise<string> {

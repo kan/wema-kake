@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { INDEX_DELAY_MS, MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome } from '../shared/api';
+import { INDEX_DELAY_MS, MAX_TITLE_LENGTH, type OpSummary, type PageSummary, type RevertOutcome } from '../shared/api';
 import {
   type BoardContent,
   type HistoryDelta,
@@ -374,6 +374,21 @@ export class PageDO extends DurableObject<Env> {
     if (this.version === 0) return null;
     const noteCount = this.sql.exec(`SELECT count(*) AS n FROM notes`).one().n as number;
     return { title: this.getMeta('title'), parent: this.getMeta('parent'), noteCount };
+  }
+
+  /**
+   * ページの概要（子ページの付箋の表示に使うもの）。ページがなければ null。
+   * 索引（D1）への反映を待たないので、変更の直後でも、今の付箋の数と配置が入る
+   */
+  getSummary(): Omit<PageSummary, 'name'> | null {
+    const ref = this.getPageRef();
+    if (!ref) return null;
+    return {
+      title: ref.title,
+      note_count: ref.noteCount,
+      parent: ref.parent,
+      layout: buildLayout(readNotes(this.sql)),
+    };
   }
 
   /** このページを `parent` の子にする。すでに別の親があるか、輪になるなら、理由を返す。置けたら null */

@@ -4,6 +4,7 @@
 // wema には、付箋を放したことを知らせるイベントがない。付箋の上で押し始めたポインターが離れた
 // ときに、位置だけを変える操作が確定したら（history:commit）、ドラッグの終わりとして扱う。
 import type { WemaBoard, WemaNote } from '@kanf/wema';
+import type { PageSummary } from '../shared/api';
 import { childPageOf } from '../shared/hierarchy';
 import * as api from './api';
 import { failureMessage } from './dom';
@@ -15,6 +16,8 @@ const DRAG_KEYS = new Set(['x', 'y', 'zIndex']);
 
 /** 放せる子ページの付箋に付けるクラス */
 const TARGET_CLASS = 'drop-target';
+/** 子ページへ送っている途中の付箋に付けるクラス（見えなくする） */
+const LEAVING_CLASS = 'note-leaving';
 
 type Position = Pick<Partial<WemaNote>, 'x' | 'y'>;
 
@@ -26,8 +29,8 @@ export interface NoteDropOptions {
   /** 子ページの表示名（知らせに出す） */
   titleOf(child: string): string;
   notify(text: string): void;
-  /** 子ページへ付箋を送り終えた */
-  onSent(): void;
+  /** 子ページへ付箋を送り終えた。`page` は、置いた後の子ページの概要 */
+  onSent(page: PageSummary): void;
 }
 
 /**
@@ -70,6 +73,9 @@ export function dropOntoChildPages(
       );
     return top && isChildNote(top.dataset.noteId ?? '') ? top : undefined;
   };
+
+  const noteElement = (id: string) =>
+    container.querySelector<HTMLElement>(`.wema-note[data-note-id="${CSS.escape(id)}"]`);
 
   /** 放せる子ページの付箋に、印を付ける（`next` がなければ、外す） */
   const mark = (next: HTMLElement | undefined) => {
@@ -145,7 +151,22 @@ export function dropOntoChildPages(
       .filter((edge) => newIds.has(edge.from) && newIds.has(edge.to))
       .map((edge) => ({ ...edge, id: crypto.randomUUID(), from: newIds.get(edge.from)!, to: newIds.get(edge.to)! }));
     const body = { clientId: options.clientId, opId: crypto.randomUUID(), from: options.slug, notes, edges };
-    const failure = await api
+
+    /** `which` に合う付箋を、動かす前の位置へ戻す */
+    const putBack = (which: (id: string) => boolean) => {
+      const back = [...before].filter(([id]) => which(id) && board.getNote(id) !== undefined);
+      if (back.length > 0) board.batch(() => back.forEach(([id, position]) => board.updateNote(id, position)));
+    };
+    // 操作の確定（history:commit）を処理している途中では、ボードを書き換えない
+    await Promise.resolve();
+    // 応答を待たずに、見た目を先に済ませる。移す付箋は、送り終えるまで見えなくしておく（消すのは、
+    // 送れてから）。残る付箋（写す付箋、一緒に運んでいた子ページの付箋）は、動かす前の位置へ戻す
+    const moving = (id: string) => !copy && newIds.has(id);
+    const leaving = ids.filter(moving).flatMap((id) => noteElement(id) ?? []);
+    for (const el of leaving) el.classList.add(LEAVING_CLASS);
+    putBack((id) => !moving(id));
+
+    const result = await api
       .sendNotes(child, body)
       .catch((error: unknown) => {
         // 断られたのなら、送り直さない。応答を受け取れなかっただけなら、置かれたかどうかが分からない
@@ -153,25 +174,20 @@ export function dropOntoChildPages(
         if (error instanceof api.ApiError) throw error;
         return api.sendNotes(child, body);
       })
-      .then(() => null, (error: unknown) => ({ error }));
+      .catch((error: unknown) => ({ error }));
     // 待っている間に、画面が切り替わっていたら、ボードは破棄されている
     if (signal.aborted) return;
-    // 移した付箋は消す。残る付箋（写した付箋、送れなかった付箋、一緒に運んでいた子ページの付箋）は、
-    // 子ページの付箋に重なったままにせず、動かす前の位置へ戻す
-    const remove = !failure && !copy;
-    board.batch(() => {
-      for (const [id, position] of before) {
-        if (!board.getNote(id)) continue;
-        if (remove && newIds.has(id)) board.deleteNote(id);
-        else board.updateNote(id, position);
-      }
-    });
-    if (failure) {
-      options.notify(failureMessage('failed.transfer', failure.error));
+    if ('error' in result) {
+      // 送れなかった付箋は、見えるようにして、動かす前の位置へ戻す
+      for (const el of leaving) el.classList.remove(LEAVING_CLASS);
+      putBack(moving);
+      options.notify(failureMessage('failed.transfer', result.error));
       return;
     }
+    const gone = ids.filter((id) => moving(id) && board.getNote(id) !== undefined);
+    if (gone.length > 0) board.batch(() => gone.forEach((id) => board.deleteNote(id)));
     options.notify(t(copy ? 'transfer.copied' : 'transfer.moved', ids.length, options.titleOf(child)));
-    options.onSent();
+    if (result.page) options.onSent(result.page);
   }
 
   return { settled: () => Promise.allSettled(pending).then(() => {}) };
