@@ -114,6 +114,7 @@ export const en = {
   'ops.summary.revert': (seq) => `Reverted #${seq}`,
   'ops.summary.revertUnknown': 'Revert',
   'ops.summary.notesReceived': (page) => `Notes received from page ${page}`,
+  'ops.summary.childRecolored': (page) => `Matched the color of child page ${page}`,
 
   'revert.done': 'Reverted',
   'revert.none': (why) => `There was nothing to revert${why}`,

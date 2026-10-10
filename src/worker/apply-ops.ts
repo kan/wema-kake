@@ -82,6 +82,16 @@ export function childPages(sql: SqlStorage): Set<string> {
   return new Set(rows.map((row) => row.page).filter((page): page is string => typeof page === 'string'));
 }
 
+/** 子ページの付箋の、id、色、指している子ページ（本文は読まない） */
+export function childNoteColors(sql: SqlStorage): { id: string; color: string; page: string }[] {
+  return sql
+    .exec<{ id: string; color: string; page: SqlStorageValue }>(
+      `SELECT id, color, json_extract(extra, '$.${CHILD_PAGE_KEY}') AS page FROM notes WHERE extra IS NOT NULL`,
+    )
+    .toArray()
+    .filter((row): row is { id: string; color: string; page: string } => typeof row.page === 'string');
+}
+
 /** `page` を指す子ページの付箋が、`exceptId` 以外にあるか */
 function hasChildNote(sql: SqlStorage, page: string, exceptId: string): boolean {
   return (

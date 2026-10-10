@@ -102,6 +102,10 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 .crumbs:empty { display: none; }
 .crumbs a { color: #555; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 12em; }
 
+/* 付箋の本文のスクロールバーは、細くする（既定の太さだと、小さい付箋の本文が狭くなる）。
+   一覧の画面の付箋にも効く */
+.wema-note-content, .wema-note-custom { scrollbar-width: thin; scrollbar-color: rgb(0 0 0 / 0.3) transparent; }
+
 /* 子ページの付箋（child-notes.ts）。本文の代わりに、子ページの概要を出す */
 /* wema の .wema-note-custom の指定（display: block）より優先させるため、付箋の要素から書く */
 .wema-note .child-note {
@@ -112,12 +116,6 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 .wema-note.drop-target { outline: 3px solid #2563eb; outline-offset: 2px; }
 /* 子ページへ送っている途中の付箋。放した直後から見えなくし、送り終えたら消す */
 .wema-note.note-leaving { opacity: 0; pointer-events: none; transition: opacity 0.12s; }
-/* 子ページに色が付いているときは、付箋の全面を、その色で塗る（child-notes.ts）。付箋の要素を基準に
-   置くので、.child-note 自身は position を持たせない */
-.wema-note .child-note.page-colored::before {
-  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
-  border-radius: var(--wema-note-border-radius); background: var(--page-color);
-}
 .child-title { font-weight: bold; color: #1d4ed8; overflow-wrap: anywhere; flex: none; }
 .child-meta { font-size: 11px; color: #666; flex: none; }
 /* 子ページの付箋の配置の、簡易な再現 */

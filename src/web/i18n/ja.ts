@@ -132,6 +132,7 @@ export const ja = {
   'ops.summary.revert': (seq: number) => `#${seq} の取り消し`,
   'ops.summary.revertUnknown': '取り消し',
   'ops.summary.notesReceived': (page: string) => `ページ ${page} から付箋を受け取り`,
+  'ops.summary.childRecolored': (page: string) => `子ページ ${page} の色に合わせる`,
 
   // 取り消しの結果。`why` は、`revert.reasons` で作った理由（なければ空文字）
   'revert.done': '取り消しました',

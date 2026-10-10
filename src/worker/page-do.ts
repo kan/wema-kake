@@ -1,5 +1,13 @@
 import { DurableObject } from 'cloudflare:workers';
-import { INDEX_DELAY_MS, MAX_TITLE_LENGTH, PAGE_COLORS, type OpSummary, type PageSummary, type RevertOutcome } from '../shared/api';
+import {
+  INDEX_DELAY_MS,
+  MAX_TITLE_LENGTH,
+  PAGE_COLORS,
+  UNSET_PAGE_COLOR,
+  type OpSummary,
+  type PageSummary,
+  type RevertOutcome,
+} from '../shared/api';
 import {
   type BoardContent,
   type HistoryDelta,
@@ -27,6 +35,7 @@ import {
 } from '../shared/hierarchy';
 import {
   applyDeltas,
+  childNoteColors,
   childPages,
   readBoard,
   readBoardWithAuthors,
@@ -364,7 +373,34 @@ export class PageDO extends DurableObject<Env> {
    * まだ作られていないページと、削除の途中のページには、付けない（色を選んだだけで、ページを
    * 作らない。削除されたページを、古いタブから作り直さない）
    */
-  setColor(
+  async setColor(
+    input: unknown,
+    actor = 'system',
+  ): Promise<{ ok: true; color: string | null } | { ok: false; reason: 'invalid color' | typeof REASON_PAGE_NOT_FOUND }> {
+    const set = this.setOwnColor(input);
+    if (!set.ok) return set;
+    // 親ページにある自分の付箋を、同じ色にする。色が変わっていなくても合わせる（前に合わせ損ねて
+    // いたら、選び直すと直る）。色を外したときは、付箋を既定の色へ戻す
+    await this.recolorOwnNote(actor, true);
+    return set;
+  }
+
+  /** 親ページにある自分の付箋を、このページの色にする。失敗しても、例外にしない */
+  private async recolorOwnNote(actor: string, resetUnset: boolean): Promise<void> {
+    const parent = this.getMeta('parent');
+    if (parent === null) return;
+    try {
+      await this.env.PAGE.getByName(parent).recolorChildNotes(this.slug(), actor, resetUnset);
+    } catch (e) {
+      console.error('failed to recolor the child note', parent, e);
+    }
+  }
+
+  /**
+   * 色を変える。親ページにある付箋の色は、変えない（`setColor` との違い）。親ページの DO が、
+   * 子ページの付箋の色を変えた後に、子ページへ呼ぶ（matchChildColors）。書き込みの順番待ちに入れない
+   */
+  setOwnColor(
     input: unknown,
   ): { ok: true; color: string | null } | { ok: false; reason: 'invalid color' | typeof REASON_PAGE_NOT_FOUND } {
     if (input !== null && (typeof input !== 'string' || !(PAGE_COLORS as readonly string[]).includes(input))) {
@@ -559,6 +595,73 @@ export class PageDO extends DurableObject<Env> {
   }
 
   /**
+   * 子ページの付箋の色と、子ページの色をそろえる。`applied` は、適用して記録したデルタ
+   * （断られた変更と、今と同じ色への変更は、入っていない）。
+   *
+   * - 子ページの付箋の色を変えたら、子ページの色を、その色にする
+   * - 子ページの付箋を置いたら（Undo や取り消しで戻したときも）、付箋の色を、子ページの色にする。
+   *   子ページに色が付いていなければ、付箋の色のままにする
+   *
+   * 失敗しても、書き込みは取り消さない。食い違いは、子ページの次の索引の更新か、子ページの色の
+   * 選び直しで直る（どちらも、付箋を子ページの色に合わせる）
+   */
+  private async matchChildColors(applied: HistoryDelta[], actor: string): Promise<void> {
+    /** 色を変えた付箋 */
+    const recolored = new Set<string>();
+    /** 子ページの付箋として置いた付箋 */
+    const placed = new Set<string>();
+    for (const d of applied) {
+      if (d.type === 'note:create' && childPageOf(d.note) !== undefined) placed.add(d.note.id);
+      else if (d.type === 'note:update' && childPageOf(d.after) !== undefined) placed.add(d.noteId);
+      else if (d.type === 'note:update' && typeof d.after.color === 'string') recolored.add(d.noteId);
+    }
+    // 付箋の移動や本文の編集では、何も読まずに終える
+    if (recolored.size === 0 && placed.size === 0) return;
+    for (const note of childNoteColors(this.sql)) {
+      try {
+        if (placed.has(note.id)) {
+          await this.recolorChildNotesInOrder(note.page, actor, false);
+        } else if (recolored.has(note.id)) {
+          const set = await this.env.PAGE.getByName(note.page).setOwnColor(note.color);
+          // ページに付けられない色（PAGE_COLORS にない色。MCP からは、どの色も付箋に付けられる）
+          if (!set.ok) console.warn('could not match the color of a child page', note.page, set.reason);
+        }
+      } catch (e) {
+        console.error('failed to match the color of a child page', note.page, e);
+      }
+    }
+  }
+
+  /**
+   * 子ページ `page` の付箋の色を、子ページの今の色にする。付箋の更新として記録するので、
+   * 開いているブラウザにも届く。色は、順番待ちに入ってから、子ページへ聞く（呼び出しが前後しても、
+   * 最後に子ページの今の色になる）
+   *
+   * @param resetUnset 子ページに色が付いていないときに、付箋を既定の色へ戻すか
+   */
+  recolorChildNotes(page: string, actor: string, resetUnset: boolean): Promise<void> {
+    return this.write(() => this.recolorChildNotesInOrder(page, actor, resetUnset), undefined);
+  }
+
+  private async recolorChildNotesInOrder(page: string, actor: string, resetUnset: boolean): Promise<void> {
+    if (this.version === 0) return;
+    const ref = await this.env.PAGE.getByName(page).getPageRef();
+    const color = ref && (ref.color ?? (resetUnset ? UNSET_PAGE_COLOR : null));
+    if (!color) return;
+    const notes = childNoteColors(this.sql).filter((note) => note.page === page && note.color !== color);
+    if (notes.length === 0) return;
+    await this.applyOpsInOrder({
+      actor,
+      clientId: 'system',
+      opId: crypto.randomUUID(),
+      deltas: notes.map(
+        (note): HistoryDelta => ({ type: 'note:update', noteId: note.id, before: { color: note.color }, after: { color } }),
+      ),
+      summary: systemSummary.childRecolored(page),
+    }, undefined, false);
+  }
+
+  /**
    * ページを削除する前に、階層から外す。親ページにある自分の付箋を消し、子ページはルートへ戻す
    * （子孫ごとの削除はしない）。失敗しても削除は続ける。残った食い違いは、付箋の側が
    * 「削除済み」と表示され、親ページの索引の更新（reconcileChildren）でも直る
@@ -745,6 +848,9 @@ export class PageDO extends DurableObject<Env> {
     const placed = new Set(notes.map(childPageOf).filter((page) => page !== undefined));
     await this.reconcileChildren(slug, placed);
     await this.healParent(row.parent);
+    // 親ページにある自分の付箋の色が、合っていなければ合わせる（合わせ損ねた分と、色をそろえる
+    // ようにする前に付けた色）。色を付けていないページでは、付箋の色のままにする
+    if (row.color !== null) await this.recolorOwnNote('system', false);
   }
 
   /**
@@ -880,10 +986,12 @@ export class PageDO extends DurableObject<Env> {
   /**
    * @param prepare 検証の済んだデルタを、適用する前に書き換える（今あるボードに合わせた位置決めなど）。
    *   同じ操作の再送（適用済み）では、呼ばない
+   * @param matchColors 適用した後に、子ページの色と、その付箋の色をそろえる（matchChildColors）
    */
   private async applyOpsInOrder(
     input: ApplyInput,
     prepare?: (deltas: HistoryDelta[]) => void,
+    matchColors = true,
   ): Promise<ApplyResult> {
     let deltas: HistoryDelta[];
     let sanitized: Sanitized;
@@ -938,7 +1046,10 @@ export class PageDO extends DurableObject<Env> {
         throw e;
       }
     };
-    return this.withChildren(deltas, apply, (reason) => ({ ok: false, reason }));
+    const result = await this.withChildren(deltas, apply, (reason): ApplyResult => ({ ok: false, reason }));
+    // 同じ操作の再送と、何も変えなかった操作では、そろえ直さない
+    if (matchColors && result.ok && result.broadcast) await this.matchChildColors(result.deltas, input.actor);
+    return result;
   }
 
   // --- 取り消しと履歴 ---
@@ -1006,6 +1117,8 @@ export class PageDO extends DurableObject<Env> {
       // 戻す text も、今のサニタイズの規則を通す
       await sanitizeDeltas(inverse, { cleanBefore: false });
 
+      /** 適用して記録したデルタ */
+      let reverted: HistoryDelta[] = [];
       const apply = (): RevertResult => {
         let deliver: (() => void) | undefined;
         const result = this.ctx.storage.transactionSync((): RevertResult => {
@@ -1018,6 +1131,7 @@ export class PageDO extends DurableObject<Env> {
           const now = Date.now();
           const { deltas, skipped } = applyRevert(this.sql, inverse, actor, now);
           if (deltas.length === 0) return { ok: true, seq: null, applied: 0, skipped };
+          reverted = deltas;
 
           const summary = input.summary ?? systemSummary.revert(target);
           const recorded = this.recordOp({ actor, clientId, opId, summary, reverts: target }, deltas, [], now);
@@ -1031,7 +1145,9 @@ export class PageDO extends DurableObject<Env> {
         return result;
       };
       // 取り消しで子ページの付箋が戻るなら、もう一度子にする。置けなければ、取り消しを断る
-      return await this.withChildren(inverse, apply, (reason) => fail('conflict', reason));
+      const result = await this.withChildren(inverse, apply, (reason) => fail('conflict', reason));
+      await this.matchChildColors(reverted, actor);
+      return result;
     } catch (e) {
       if (e instanceof RejectError || e instanceof SanitizeError) return fail('invalid', e.message);
       throw e;

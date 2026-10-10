@@ -2,7 +2,7 @@
 // DOM には依存しない。配置はここで計算する（wema の自動レイアウトは、1 つの階層を横 1 列に
 // 並べるので、リンクの多いページがあると横に長くなりすぎる）。
 import type { WemaBoardData, WemaEdge, WemaNote } from '@kanf/wema';
-import type { IndexLink, IndexPage } from '../shared/api';
+import { type IndexLink, type IndexPage, UNSET_PAGE_COLOR } from '../shared/api';
 import { t } from './i18n';
 
 export interface IndexBoard {
@@ -18,7 +18,6 @@ const NOTE_WIDTH = 220;
 const NOTE_HEIGHT = 160;
 const GAP = 40;
 const MARGIN = 40;
-const PAGE_COLOR = '#FFF9C4';
 /** まだ作られていないページ（リンクだけがある） */
 const MISSING_COLOR = '#E0E0E0';
 
@@ -172,7 +171,7 @@ export function buildIndexBoard(
     searchText.set(id, search.toLowerCase());
   };
   for (const page of pages) {
-    addNote(page.name, pageHtml(page, formatDate), page.color ?? PAGE_COLOR, `${page.title ?? ''}\n${page.name}`);
+    addNote(page.name, pageHtml(page, formatDate), page.color ?? UNSET_PAGE_COLOR, `${page.title ?? ''}\n${page.name}`);
   }
 
   const edges: WemaEdge[] = [];

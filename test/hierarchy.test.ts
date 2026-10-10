@@ -424,6 +424,104 @@ describe('索引と API', () => {
   });
 });
 
+describe('子ページの色と、その付箋の色', () => {
+  const noteColor = async (parent: string, id: string) =>
+    (await page(parent).getSnapshot()).data.notes.find((n) => n.id === id)?.color;
+  const pageColor = async (slug: string) => (await page(slug).getPageRef())?.color;
+  const recolor = (id: string, color: string) => ({ type: 'note:update', noteId: id, before: {}, after: { color } });
+
+  it('付箋の色を変えると、子ページの色になる。ふつうの付箋の色は、ページの色にしない', async () => {
+    const parent = await create('color-parent');
+    const child = await create('color-child');
+    const id = await place(parent, child);
+    await apply(parent, [createNote('plain')]);
+
+    expect((await apply(parent, [recolor(id, '#BBDEFB'), recolor('plain', '#FFCDD2')])).ok).toBe(true);
+    expect(await pageColor(child)).toBe('#BBDEFB');
+    expect(await pageColor(parent)).toBeNull();
+  });
+
+  it('子ページの色を変えると、親ページにある付箋の色になる。色を外すと、既定の色に戻る', async () => {
+    const parent = await create('color-parent');
+    const child = await create('color-child');
+    const id = await place(parent, child);
+
+    const res = await api(`/api/pages/${child}/color`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color: '#C8E6C9' }),
+    });
+    expect(res.status).toBe(200);
+    expect(await noteColor(parent, id)).toBe('#C8E6C9');
+    // 親ページの履歴には、色を合わせた操作として残る
+    const [op] = await page(parent).listOps({ limit: 1 });
+    expect(op).toMatchObject({ actor: 'user:dev@example.com', summary: `system:child-recolored:${child}` });
+
+    expect(await page(child).setColor(null)).toEqual({ ok: true, color: null });
+    expect(await noteColor(parent, id)).toBe('#FFF9C4');
+    expect(await pageColor(child)).toBeNull();
+  });
+
+  it('色の付いたページを子として置くと、付箋がその色になる', async () => {
+    const parent = await create('color-parent');
+    const child = await create('color-child');
+    await page(child).setColor('#E1BEE7');
+    const id = await place(parent, child);
+    expect(await noteColor(parent, id)).toBe('#E1BEE7');
+    expect(await pageColor(child)).toBe('#E1BEE7');
+  });
+
+  it('色の付いていないページを置いた付箋は、色を変えない操作では、ページの色にならない', async () => {
+    const parent = await create('color-parent');
+    const child = await create('color-child');
+    const id = await apply(parent, [childNote('kid', child, { color: '#FFCDD2' })]).then(() => 'kid');
+    expect(await pageColor(child)).toBeNull();
+
+    // 今と同じ色への変更と、色のほかの変更
+    await apply(parent, [recolor(id, '#FFCDD2')]);
+    await apply(parent, [{ type: 'note:update', noteId: id, before: {}, after: { x: 500 } }]);
+    expect(await noteColor(parent, id)).toBe('#FFCDD2');
+    expect(await pageColor(child)).toBeNull();
+  });
+
+  it('ページに付けられない色を付箋に付けても、ページの色は変わらない', async () => {
+    const parent = await create('color-parent');
+    const child = await create('color-child');
+    const id = await place(parent, child);
+    await apply(parent, [recolor(id, '#BBDEFB')]);
+    expect((await apply(parent, [recolor(id, '#123456')])).ok).toBe(true);
+    expect(await pageColor(child)).toBe('#BBDEFB');
+  });
+
+  it('付箋の色が子ページの色と食い違っていたら、子ページの索引の更新で、付箋を合わせる', async () => {
+    const parent = await create('color-parent');
+    const child = await create('color-child');
+    const id = await place(parent, child);
+    // 色をそろえるようにする前の状態（ページにだけ色が付いている）を作る
+    expect(await page(child).setOwnColor('#B2DFDB')).toEqual({ ok: true, color: '#B2DFDB' });
+    expect(await noteColor(parent, id)).toBe('#FFF9C4');
+
+    await reindex(child);
+    expect(await noteColor(parent, id)).toBe('#B2DFDB');
+  });
+
+  it('付箋の色の変更を取り消すと、子ページの色も戻る', async () => {
+    const parent = await create('color-parent');
+    const child = await create('color-child');
+    const id = await place(parent, child);
+    await apply(parent, [recolor(id, '#BBDEFB')]);
+    const changed = await apply(parent, [recolor(id, '#FFCDD2')]);
+    expect(await pageColor(child)).toBe('#FFCDD2');
+
+    const reverted = await page(parent).revert({
+      actor: 'user:a', clientId: 'c1', opId: unique('op'), seq: (changed as { seq: number }).seq,
+    });
+    expect(reverted).toMatchObject({ ok: true });
+    expect(await noteColor(parent, id)).toBe('#BBDEFB');
+    expect(await pageColor(child)).toBe('#BBDEFB');
+  });
+});
+
 describe('MCP', () => {
   const call = async (name: string, input: unknown): Promise<any> => {
     const tool = TOOLS.find((t) => t.name === name)!;

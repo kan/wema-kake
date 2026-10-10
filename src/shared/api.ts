@@ -15,6 +15,8 @@ export const MAX_TITLE_LENGTH = 200;
  */
 export const PAGE_COLORS = ['#FFF9C4', '#FFCDD2', '#FFE0B2', '#E1BEE7', '#BBDEFB', '#B2DFDB', '#C8E6C9', '#F5F5F5'] as const;
 export type PageColor = (typeof PAGE_COLORS)[number];
+/** 色を付けていないページの、付箋（子ページの付箋、一覧の付箋）の色 */
+export const UNSET_PAGE_COLOR: PageColor = '#FFF9C4';
 
 /** 検索語の長さの上限 */
 export const MAX_QUERY_LENGTH = 200;

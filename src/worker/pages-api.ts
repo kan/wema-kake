@@ -273,7 +273,7 @@ pagesApi.put('/pages/:slug/color', validSlug, async (c) => {
   const body = await c.req.json<{ color?: unknown }>().catch(() => null);
   // `color` のない本文を、「付けていない状態に戻す」として扱わない
   if (body?.color === undefined) return c.json({ error: 'invalid color' }, 400);
-  const result = await c.env.PAGE.getByName(c.req.param('slug')).setColor(body.color);
+  const result = await c.env.PAGE.getByName(c.req.param('slug')).setColor(body.color, c.get('actor'));
   if (result.ok) return c.json(result);
   return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
 });

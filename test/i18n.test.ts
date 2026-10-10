@@ -58,6 +58,7 @@ describe('サーバーが付ける操作の要約', () => {
     expect(parseSystemSummary(systemSummary.pageCreated())).toEqual({ kind: 'pageCreated' });
     expect(parseSystemSummary(systemSummary.childRemoved('my-page'))).toEqual({ kind: 'childRemoved', page: 'my-page' });
     expect(parseSystemSummary(systemSummary.revert(12))).toEqual({ kind: 'revert', seq: 12 });
+    expect(parseSystemSummary(systemSummary.childRecolored('my-page'))).toEqual({ kind: 'childRecolored', page: 'my-page' });
   });
 
   it('符号でない要約と、知らない符号は、null（画面は、書かれたまま出す）', () => {
