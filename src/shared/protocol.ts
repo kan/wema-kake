@@ -46,10 +46,10 @@ export interface OpsMsg {
 
 /** サーバー → ブラウザ */
 export type ServerMsg =
-  | { type: 'snapshot'; seq: number; title: string | null; epoch: string | null; data: BoardData }
+  | { type: 'snapshot'; seq: number; title: string | null; color: string | null; epoch: string | null; data: BoardData }
   | OpsMsg
-  /** 表示名が変わった。付箋の変更ではないので seq は進まない */
-  | { type: 'meta'; title: string | null; epoch: string | null }
+  /** 表示名か、ページの色が変わった。付箋の変更ではないので seq は進まない */
+  | { type: 'meta'; title: string | null; color: string | null; epoch: string | null }
   /**
    * 操作を受け付けなかった。送信元は手元の変更を巻き戻し、`fixups`（サーバーの現在値に
    * 合わせるためのデルタ。text が競合した付箋など）を適用する

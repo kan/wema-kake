@@ -4,7 +4,7 @@ import { buildIndexBoard } from '../src/web/index-board';
 import { sanitizeHtml } from '../src/worker/sanitize';
 
 const page = (name: string, over: Partial<IndexPage> = {}): IndexPage => ({
-  name, title: null, note_count: 1, updated_at: 0, excerpt: '', child_count: 0, ...over,
+  name, title: null, color: null, note_count: 1, updated_at: 0, excerpt: '', child_count: 0, ...over,
 });
 const link = (from_page: string, to_page: string, missing = 0): IndexLink => ({ from_page, to_page, missing });
 const build = (pages: IndexPage[], links: IndexLink[] = [], width = 1000, height = 600) =>
@@ -23,6 +23,13 @@ const extent = (notes: Box[]) => ({
 });
 
 describe('buildIndexBoard', () => {
+  it('ページの色を、付箋の色にする。付けていなければ、既定の色', () => {
+    const { data } = build([page('plain'), page('blue', { color: '#BBDEFB' })]);
+    const colors = new Map(data.notes.map((note) => [note.id, note.color]));
+    expect(colors.get('plain')).toBe('#FFF9C4');
+    expect(colors.get('blue')).toBe('#BBDEFB');
+  });
+
   it('ページ 1 つを付箋 1 枚にし、表示名のリンク、本文の冒頭、更新日を出す', () => {
     const { data } = build([page('memo', { title: 'メモ <b>', excerpt: '本文 & 冒頭', note_count: 3 })]);
     expect(data.notes).toHaveLength(1);

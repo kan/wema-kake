@@ -338,7 +338,7 @@ describe('索引と API', () => {
     const fresh = await create('info-fresh', '作ったばかり', '本文');
     const early = await api('/api/pages-info', { method: 'POST', body: JSON.stringify({ names: [fresh] }) });
     expect(((await early.json()) as { pages: PageSummary[] }).pages).toEqual([
-      { name: fresh, title: '作ったばかり', note_count: 1, parent: null, layout: null },
+      { name: fresh, title: '作ったばかり', color: null, note_count: 1, parent: null, layout: null },
     ]);
 
     for (const names of [[], ['Bad Slug'], 'x', Array.from({ length: 201 }, (_, i) => `p${i}`)]) {

@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { INDEX_DELAY_MS, MAX_TITLE_LENGTH, type OpSummary, type PageSummary, type RevertOutcome } from '../shared/api';
+import { INDEX_DELAY_MS, MAX_TITLE_LENGTH, PAGE_COLORS, type OpSummary, type PageSummary, type RevertOutcome } from '../shared/api';
 import {
   type BoardContent,
   type HistoryDelta,
@@ -304,11 +304,12 @@ export class PageDO extends DurableObject<Env> {
     if (created) this.broadcast(this.metaJson());
   }
 
-  /** 表示名と epoch を伝えるメッセージ。スキーマがある（version > 0）ときだけ呼ぶ */
+  /** 表示名、ページの色、epoch を伝えるメッセージ。スキーマがある（version > 0）ときだけ呼ぶ */
   private metaJson(): string {
     return JSON.stringify({
       type: 'meta',
       title: this.getMeta('title'),
+      color: this.getMeta('color'),
       epoch: this.getMeta('epoch'),
     } satisfies ServerMsg);
   }
@@ -320,11 +321,12 @@ export class PageDO extends DurableObject<Env> {
 
   getSnapshot(): Snapshot {
     if (this.version === 0) {
-      return { seq: 0, title: null, epoch: null, data: { version: 1, notes: [], edges: [] } };
+      return { seq: 0, title: null, color: null, epoch: null, data: { version: 1, notes: [], edges: [] } };
     }
     return {
       seq: this.getSeq(),
       title: this.getMeta('title'),
+      color: this.getMeta('color'),
       epoch: this.getMeta('epoch'),
       data: readBoard(this.sql),
     };
@@ -357,6 +359,27 @@ export class PageDO extends DurableObject<Env> {
     return { ok: true, title };
   }
 
+  /**
+   * ページの色を変える。null なら、付けていない状態に戻す。表示名と同じく、ops には記録しない。
+   * まだ作られていないページと、削除の途中のページには、付けない（色を選んだだけで、ページを
+   * 作らない。削除されたページを、古いタブから作り直さない）
+   */
+  setColor(
+    input: unknown,
+  ): { ok: true; color: string | null } | { ok: false; reason: 'invalid color' | typeof REASON_PAGE_NOT_FOUND } {
+    if (input !== null && (typeof input !== 'string' || !(PAGE_COLORS as readonly string[]).includes(input))) {
+      return { ok: false, reason: 'invalid color' };
+    }
+    if (this.version === 0 || this.deleting > 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
+    // 同じ色なら、何もしない（索引を更新すると、変更のないページの更新日時が変わる）
+    if (input !== this.getMeta('color')) {
+      this.setMeta('color', input);
+      this.broadcast(this.metaJson());
+      this.scheduleIndexing();
+    }
+    return { ok: true, color: input };
+  }
+
   // --- 階層（src/shared/hierarchy.ts） ---
   //
   // 子ページの付箋は親ページの DO にあり、「親は誰か」は子ページの DO にある（meta の parent）。
@@ -370,10 +393,15 @@ export class PageDO extends DurableObject<Env> {
    * 親をたどるための情報と、付箋の数。ページがなければ null。
    * 索引（D1）への反映を待たずに読めるので、作ったばかりのページの概要にも使う
    */
-  getPageRef(): { title: string | null; parent: string | null; noteCount: number } | null {
+  getPageRef(): { title: string | null; color: string | null; parent: string | null; noteCount: number } | null {
     if (this.version === 0) return null;
     const noteCount = this.sql.exec(`SELECT count(*) AS n FROM notes`).one().n as number;
-    return { title: this.getMeta('title'), parent: this.getMeta('parent'), noteCount };
+    return {
+      title: this.getMeta('title'),
+      color: this.getMeta('color'),
+      parent: this.getMeta('parent'),
+      noteCount,
+    };
   }
 
   /**
@@ -385,6 +413,7 @@ export class PageDO extends DurableObject<Env> {
     if (!ref) return null;
     return {
       title: ref.title,
+      color: ref.color,
       note_count: ref.noteCount,
       parent: ref.parent,
       layout: buildLayout(readNotes(this.sql)),
@@ -697,6 +726,7 @@ export class PageDO extends DurableObject<Env> {
     const notes = readNotes(this.sql);
     const row: PageRow = {
       title,
+      color: this.getMeta('color'),
       parent: this.getMeta('parent'),
       layout: buildLayout(notes),
       noteCount: notes.length,

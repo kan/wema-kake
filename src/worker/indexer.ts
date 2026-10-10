@@ -49,6 +49,8 @@ export async function contentHash(title: string | null, content: PageContent): P
 /** 検索とリンクのほかに、ページの行へ書く値 */
 export interface PageRow {
   title: string | null;
+  /** ページの色。付けていなければ null */
+  color: string | null;
   /** 親ページのスラッグ。ルートのページなら null */
   parent: string | null;
   /** 付箋の配置（buildLayout の結果） */
@@ -79,8 +81,8 @@ export function buildLayout(notes: Pick<WemaNote, 'x' | 'y' | 'width' | 'height'
  */
 export async function touchPage(db: D1Database, slug: string, row: PageRow): Promise<boolean> {
   const result = await db
-    .prepare(`UPDATE pages SET note_count = ?, updated_at = ?, parent = ?, layout = ? WHERE name = ?`)
-    .bind(row.noteCount, row.now, row.parent, row.layout, slug)
+    .prepare(`UPDATE pages SET note_count = ?, updated_at = ?, parent = ?, layout = ?, color = ? WHERE name = ?`)
+    .bind(row.noteCount, row.now, row.parent, row.layout, row.color, slug)
     .run();
   return result.meta.changes > 0;
 }
@@ -114,13 +116,13 @@ export async function writePage(
   await db.batch([
     db
       .prepare(
-        `INSERT INTO pages (name, title, plain_text, note_count, updated_at, parent, layout)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO pages (name, title, plain_text, note_count, updated_at, parent, layout, color)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (name) DO UPDATE SET title = excluded.title, plain_text = excluded.plain_text,
            note_count = excluded.note_count, updated_at = excluded.updated_at,
-           parent = excluded.parent, layout = excluded.layout`,
+           parent = excluded.parent, layout = excluded.layout, color = excluded.color`,
       )
-      .bind(slug, row.title, content.plainText, row.noteCount, row.now, row.parent, row.layout),
+      .bind(slug, row.title, content.plainText, row.noteCount, row.now, row.parent, row.layout, row.color),
     db.prepare(`DELETE FROM links WHERE from_page = ?`).bind(slug),
     db
       .prepare(`INSERT INTO links (from_page, to_page) SELECT ?, value FROM json_each(?)`)

@@ -19,6 +19,17 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .page-title { cursor: text; }
+/* ページの色を選ぶボタンと、色の一覧（toolbar.ts の pageColorPicker） */
+.color-button, .color-swatch {
+  border: 1px solid rgb(0 0 0 / 0.25); border-radius: 50%; background: #fff; padding: 0; cursor: pointer; flex: none;
+}
+/* 白い縁を付ける（ヘッダーの地が同じ色になるので、縁がないと見分けにくい） */
+.color-button { width: 14px; height: 14px; border-color: rgb(0 0 0 / 0.4); box-shadow: 0 0 0 2px #fff; }
+.color-panel { display: grid; grid-template-columns: repeat(3, 22px); gap: 6px; padding: 4px; }
+.color-swatch { width: 22px; height: 22px; }
+.color-swatch.active { outline: 2px solid #2563eb; outline-offset: 1px; }
+/* 「色なし」は、斜めの線で表す */
+.color-swatch:last-child { background: linear-gradient(to top right, #fff 45%, #d33 45% 55%, #fff 55%); }
 .title-input { font-size: 15px; font-weight: bold; width: 20em; min-width: 0; }
 
 .tool-group { display: inline-flex; align-items: center; gap: 2px; }
@@ -101,6 +112,12 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 .wema-note.drop-target { outline: 3px solid #2563eb; outline-offset: 2px; }
 /* 子ページへ送っている途中の付箋。放した直後から見えなくし、送り終えたら消す */
 .wema-note.note-leaving { opacity: 0; pointer-events: none; transition: opacity 0.12s; }
+/* 子ページに色が付いているときは、付箋の全面を、その色で塗る（child-notes.ts）。付箋の要素を基準に
+   置くので、.child-note 自身は position を持たせない */
+.wema-note .child-note.page-colored::before {
+  content: ''; position: absolute; inset: 0; z-index: -1; pointer-events: none;
+  border-radius: var(--wema-note-border-radius); background: var(--page-color);
+}
 .child-title { font-weight: bold; color: #1d4ed8; overflow-wrap: anywhere; flex: none; }
 .child-meta { font-size: 11px; color: #666; flex: none; }
 /* 子ページの付箋の配置の、簡易な再現 */

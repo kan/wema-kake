@@ -21,6 +21,7 @@ export const en = {
   'failed.bookmark': (reason) => `Could not change the bookmark (${reason})`,
   'failed.ancestors': (reason) => `Could not load the parent pages (${reason})`,
   'failed.rename': (reason) => `Could not rename the page (${reason})`,
+  'failed.color': (reason) => `Could not change the page color (${reason})`,
   'failed.backlinks': (reason) => `Could not load the backlinks (${reason})`,
   'failed.history': (reason) => `Could not load the history (${reason})`,
   'failed.revert': (reason) => `Could not revert the operation (${reason})`,
@@ -57,6 +58,8 @@ export const en = {
   'page.alreadyDeleted': 'This page has already been deleted',
   'page.deletedAlert': 'This page was deleted. Returning to the list of pages.',
   'page.titleHint': (slug) => `/p/${slug} (click to rename)`,
+  'page.color': 'Page color',
+  'page.colorNone': 'No color',
 
   'index.filter': 'Filter pages',
   'index.newPage': '+ New page',

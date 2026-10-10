@@ -26,6 +26,7 @@ export const ja = {
   'failed.bookmark': (reason: string) => `ブックマークの変更に失敗しました（${reason}）`,
   'failed.ancestors': (reason: string) => `親ページの取得に失敗しました（${reason}）`,
   'failed.rename': (reason: string) => `表示名の変更に失敗しました（${reason}）`,
+  'failed.color': (reason: string) => `ページの色の変更に失敗しました（${reason}）`,
   'failed.backlinks': (reason: string) => `リンク元の取得に失敗しました（${reason}）`,
   'failed.history': (reason: string) => `履歴の取得に失敗しました（${reason}）`,
   'failed.revert': (reason: string) => `取り消しに失敗しました（${reason}）`,
@@ -66,6 +67,8 @@ export const ja = {
   'page.alreadyDeleted': 'このページは、すでに削除されています',
   'page.deletedAlert': 'このページは削除されました。一覧へ戻ります。',
   'page.titleHint': (slug: string) => `/p/${slug}（クリックして表示名を変える）`,
+  'page.color': 'ページの色',
+  'page.colorNone': '色なし',
 
   // --- 一覧の画面 ---
   'index.filter': 'ページを絞り込む',

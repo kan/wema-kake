@@ -20,6 +20,7 @@ describe('GET /api/pages/:slug', () => {
       slug: 'first-page',
       seq: 0,
       title: null,
+      color: null,
       epoch: null,
       data: { version: 1, notes: [], edges: [] },
     });

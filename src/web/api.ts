@@ -78,6 +78,10 @@ export const getBacklinks = (slug: string) =>
 export const setTitle = (slug: string, title: string, mustExist = false) =>
   request<{ title: string | null }>('PUT', `/api/pages/${slug}/title`, { title, mustExist });
 
+/** ページの色を変える。null で、付けていない状態に戻す */
+export const setColor = (slug: string, color: string | null) =>
+  request<{ color: string | null }>('PUT', `/api/pages/${slug}/color`, { color });
+
 export const deletePage = (slug: string) => request<{ ok: true }>('DELETE', `/api/pages/${slug}`);
 
 export const getOps = (slug: string, agentOnly: boolean) =>

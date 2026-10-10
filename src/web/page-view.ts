@@ -37,6 +37,7 @@ import {
   iconButton,
   menuItem,
   modal,
+  pageColorPicker,
   popover,
   separator,
   settings,
@@ -203,6 +204,14 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     document.title = t('documentTitle', value ?? slug);
   };
   showTitle(null);
+  // ページの色。ヘッダーの地の色にする。変更は、サーバーから届いたときにも反映する（他の人の変更）。
+  // 自分の変更は、応答で反映する（切断中は、サーバーからの知らせが届かない）
+  const colorPicker = pageColorPicker((color) => {
+    api
+      .setColor(slug, color)
+      .then((result) => showColor(result.color))
+      .catch(fail('failed.color'));
+  });
 
   // --- ヘッダーの中央: 付箋の操作 ---
   const { undo: undoButton, redo: redoButton } = historyButtons(board);
@@ -283,21 +292,24 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   // ★ でこのページをブックマークし、ブックマークしたページの一覧から移る
   const star = bookmarkStar(slug, fail('failed.bookmark'));
 
-  app.append(
-    header(
-      // 一覧へ戻るときは、このページのルートの付箋へ縮む
-      [leaveOnClick(el('a', { href: '/', textContent: t('list') }), root), crumbs, title, star, status],
-      [
-        el('span', { className: 'tool-group' }, undoButton, redoButton),
-        separator(),
-        el('span', { className: 'tool-group' }, addButton, childPopover.root),
-        separator(),
-        el('span', { className: 'tool-group optional' }, layout.root, separator(), zoomControls(board, container)),
-      ],
-      [popover(backlinksButton, backlinksPanel, { align: 'right' }).root, bookmarksMenu(), recentPagesMenu(), menu.root],
-    ),
-    body,
+  const pageHeader = header(
+    // 一覧へ戻るときは、このページのルートの付箋へ縮む
+    [leaveOnClick(el('a', { href: '/', textContent: t('list') }), root), crumbs, title, colorPicker.root, star, status],
+    [
+      el('span', { className: 'tool-group' }, undoButton, redoButton),
+      separator(),
+      el('span', { className: 'tool-group' }, addButton, childPopover.root),
+      separator(),
+      el('span', { className: 'tool-group optional' }, layout.root, separator(), zoomControls(board, container)),
+    ],
+    [popover(backlinksButton, backlinksPanel, { align: 'right' }).root, bookmarksMenu(), recentPagesMenu(), menu.root],
   );
+  app.append(pageHeader, body);
+  const showColor = (color: string | null) => {
+    // サーバーが PAGE_COLORS のどれかであることを確かめた値。なければ、スタイルシートの既定の色に戻る
+    pageHeader.style.backgroundColor = color ?? '';
+    colorPicker.show(color);
+  };
 
   // --- パンくず（ルートから親までの道筋。URL を直接開いたときも出る） ---
   api
@@ -333,6 +345,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       if (status.dataset.state !== state) status.dataset.state = state;
     },
     onTitle: showTitle,
+    onColor: showColor,
     // 認証し直すには、Access を通る通常のページ読み込みが要る
     onAuthExpired: () => location.reload(),
     isAuthenticated: api.isAuthenticated,

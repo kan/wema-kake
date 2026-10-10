@@ -79,7 +79,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 ```sql
 CREATE TABLE meta (
-  key   TEXT PRIMARY KEY,   -- 'slug', 'title', 'seq', 'version', 'epoch', 'index_hash', 'parent'（親ページのスラッグ）
+  key   TEXT PRIMARY KEY,   -- 'slug', 'title', 'color'（ページの色）, 'seq', 'version', 'epoch', 'index_hash', 'parent'（親ページのスラッグ）
   value TEXT NOT NULL
 );
 
@@ -143,7 +143,8 @@ CREATE TABLE pages (
   note_count INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL,
   parent     TEXT,                -- 親ページのスラッグ。ルートのページなら NULL（正は、子ページの DO の meta）
-  layout     TEXT                 -- 付箋の配置（[[x, y, 幅, 高さ, 色], ...] の JSON）。子ページの付箋の表示に使う
+  layout     TEXT,                -- 付箋の配置（[[x, y, 幅, 高さ, 色], ...] の JSON）。子ページの付箋の表示に使う
+  color      TEXT                 -- ページの色。付けていなければ NULL（正は、ページの DO の meta）
 );
 
 CREATE INDEX pages_updated_at ON pages (updated_at);
@@ -184,7 +185,7 @@ CREATE TABLE settings (
 D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変更の 5 秒後に 1 ページ分の `pages` / `links` / `pages_fts` を入れ替え、同じ alarm で古い `ops` も消す。
 
 - DO は自分のスラッグを `ctx.id.name` から得て、スキーマを作るとき（最初の書き込み）に `meta` の `slug` に保存する。alarm は保存した値だけを使う（alarm はリクエストを伴わずに起動されるので、そこで名前を取得できない場合に備えている）。ローカルでは `ctx.id.name` を取得できることを `test/runtime.test.ts` で固定した。本番では未確認なので、最初のデプロイ時に索引ができるか確認すること
-- 検索とリンクに関わる内容（表示名、テキスト、リンク先）が前回の反映から変わっていなければ、`pages` の `note_count` と `updated_at` だけを書く。付箋の移動や色の変更のたびに全文検索の索引を書き直さないため。前回の内容のハッシュは DO の `meta` の `index_hash` に持つ
+- 検索とリンクに関わる内容（表示名、テキスト、リンク先）が前回の反映から変わっていなければ、`pages` の `note_count`、`updated_at`、`parent`、`layout`、`color` だけを書く。付箋の移動や色の変更のたびに全文検索の索引を書き直さないため。前回の内容のハッシュは DO の `meta` の `index_hash` に持つ
 - alarm が設定済みかどうかは `ctx.storage.getAlarm()` で確かめる（メモリには持たない）
 - 絶対 URL のリンクを拾うには `wrangler.jsonc` の `vars` の `SITE_ORIGIN` を設定する。空のときは相対 URL（`/p/<slug>`）だけを拾う
 - `ops` は 30 日以内か直近 1000 件のどちらかに収まっていれば残す
@@ -196,8 +197,8 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | メソッドとパス | 内容 |
 | --- | --- |
 | `GET /api/session` | 認証が有効かの確認用。`{ "actor": "user:<email>" }` を返す |
-| `GET /api/index` | 一覧のボード用。ルートのページ（表示名、本文の冒頭、更新日時、子ページの数）と、ルート同士のリンクをまとめて返す。新しい順に 500 ページまで。子ページと孫ページは返さない。ページが 1 つもなければ、最初のページを作ってから返す（1 回だけ。「画面」の節） |
-| `POST /api/pages-info` | ページの概要（表示名、付箋の数、親、付箋の配置）をまとめて返す（本文は `{ "names": [...] }`、200 件まで）。子ページの付箋の表示に使う。まだ索引にないページ（作ったばかり）は DO から補い、付箋の配置は null で返す。存在しないページは結果に入らない |
+| `GET /api/index` | 一覧のボード用。ルートのページ（表示名、色、本文の冒頭、更新日時、子ページの数）と、ルート同士のリンクをまとめて返す。新しい順に 500 ページまで。子ページと孫ページは返さない。ページが 1 つもなければ、最初のページを作ってから返す（1 回だけ。「画面」の節） |
+| `POST /api/pages-info` | ページの概要（表示名、色、付箋の数、親、付箋の配置）をまとめて返す（本文は `{ "names": [...] }`、200 件まで）。子ページの付箋の表示に使う。まだ索引にないページ（作ったばかり）は DO から補い、付箋の配置は null で返す。存在しないページは結果に入らない |
 | `GET /api/pages/<slug>/ancestors` | 先祖のページを、ルートから順に返す（パンくず用） |
 | `GET /api/pages?limit=&updated_after=` | ページ一覧（D1）。更新の新しい順 |
 | `POST /api/pages/<slug>` | ページの新規作成（本文は `{ "title": "..." }`。表示名は省略できる）。すでにあれば 409 を返し、何も変えない |
@@ -209,6 +210,7 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | `PUT /api/bookmarks/<slug>` | ブックマークを付ける。すでに付いていれば何もしない。ページがなければ 404、1 人 100 件を超えると 400 |
 | `DELETE /api/bookmarks/<slug>` | ブックマークを外す。付いていなくても成功を返す |
 | `PUT /api/pages/<slug>/title` | 表示名の変更（本文は `{ "title": "..." }`）。空文字で未設定に戻す。書き込みのないページに対して呼ぶとページが作られる。本文に `"mustExist": true` を付けると、作らずに 404 を返す（一覧の画面が使う。古い一覧に残った削除済みのページを作り直さないため） |
+| `PUT /api/pages/<slug>/color` | ページの色の変更（本文は `{ "color": "#BBDEFB" }`）。`src/shared/api.ts` の `PAGE_COLORS` のどれか。null で、付けていない状態に戻す。ほかの値と、`color` のない本文は 400。ページがなければ 404（作らない） |
 | `POST /api/pages/<slug>/notes` | 他のページから移す（写す）付箋を置く（本文は `{ "clientId", "opId", "from", "notes", "edges" }`。`from` は付箋が元あったページのスラッグ）。互いの位置関係を保って、今ある付箋の下に置く。同じ `opId` で送り直しても二重には置かない。置いた後のページの概要（`page`。`POST /api/pages-info` と同じ形で、索引への反映を待たない）を返す。ページがなければ 404（作らない） |
 | `POST /api/images` | 画像のアップロード（本文は画像のバイト列、`Content-Type` は png / jpeg / gif / webp / avif）。`{ "url": "/img/<key>" }` を返す。10MB まで |
 | `GET /img/<key>` | 画像の取得（R2） |
@@ -221,6 +223,11 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 - URL は `/p/<slug>`。スラッグは `^[a-z0-9][a-z0-9-]{0,63}$` で、作成時に決めて後から変えない
 - DO は `idFromName(slug)` で引く
 - 表示名（タイトル）はスラッグとは別に DO の `meta` に持ち、D1 の `pages.title` に反映する。タイトルの変更は `applyOps` とは別の DO メソッドで行う
+- **ページの色**も、表示名と同じ持ち方をする（DO の `meta` の `color` が正、D1 の `pages.color` が索引。変更は `setColor`、ブラウザへは `meta` のメッセージで届ける。ops には記録しないので、Undo と取り消しの対象にならない）。表示名と違い、**まだ作られていないページには付けない**（色を選んだだけでページを作らない。削除されたページを、古いタブから作り直さない）
+  - 色は、wema の付箋の 8 色（`src/shared/api.ts` の `PAGE_COLORS`）か、なし（null）。**サーバーは、この一覧にない値を断る。画面は、届いた色をそのままスタイルに入れているので、検査を緩めないこと**
+  - 使うのは 3 か所。ページの画面のヘッダーの地の色、親ページにある子ページの付箋の色、一覧の付箋の色。選ぶのは、ページの画面の表示名の後ろのボタン（`src/web/toolbar.ts` の `pageColorPicker`）
+  - 子ページの付箋は、付箋そのものの色（`note.color`）を変えずに、上から塗る（`src/web/child-notes.ts` と、`style.css` の `.child-note.page-colored::before`）。**親ページの DO の付箋を書き換えて色を合わせないこと**（子ページの変更のたびに、親ページへの書き込みが要る）。子ページの色を外すと、付箋の色に戻る
+  - 子ページの付箋と一覧の色は、D1 の索引から読むので、変更の数秒後に変わる（表示名と同じ）
 
 ## ページの階層
 
@@ -280,8 +287,8 @@ type ClientMsg =
 
 // Server → Client
 type ServerMsg =
-  | { type: 'snapshot'; seq: number; title: string | null; epoch: string | null; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] } }
-  | { type: 'meta'; title: string | null; epoch: string | null }   // 表示名が変わった、またはページができた。seq は進まない
+  | { type: 'snapshot'; seq: number; title: string | null; color: string | null; epoch: string | null; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] } }
+  | { type: 'meta'; title: string | null; color: string | null; epoch: string | null }   // 表示名かページの色が変わった、またはページができた。seq は進まない
   | { type: 'ops'; seq: number; actor: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
       reverts?: number;           // 取り消しなら、取り消した対象の seq（「取り消し」の節を参照）
       fixups?: HistoryDelta[] }   // fixups は送信元にだけ付ける（後述）
@@ -294,7 +301,7 @@ type ServerMsg =
 
 - 接続先は `/ws/<slug>`
 - 接続時に `hello` を送る。`lastSeq` が `ops` に残っていれば差分の `ops` を、なければ `snapshot` を返す。クライアントは `snapshot.data` を `importData()` で読み込む
-  - 差分を返すときは、先に `meta`（表示名の現在値）を送る。表示名の変更は `seq` を進めず、差分に出ないため。`lastSeq` が最新なら `meta` だけを返す
+  - 差分を返すときは、先に `meta`（表示名とページの色の現在値）を送る。表示名とページの色の変更は `seq` を進めず、差分に出ないため。`lastSeq` が最新なら `meta` だけを返す
   - 差分が 500 件か合計 4MB を超えるとき、または書き込みのないページでは `snapshot` を返す
   - 差分のうち自分の `clientId` の `ops` には `fixups` を付ける（確定を受け取る前に切断していた場合のため）
   - `hello` を送るまでは配信の対象にならず、`ops` を送ると接続を閉じられる

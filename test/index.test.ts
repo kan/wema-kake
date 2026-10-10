@@ -208,13 +208,83 @@ describe('ページの API', () => {
     expect(await env.DB.prepare(`SELECT title, note_count FROM pages WHERE name = ?`).bind(slug).first())
       .toEqual({ title: '新しい表示名', note_count: 0 });
     // ページができた通知（表示名はまだない）に続いて、表示名の変更が届く
-    expect(await browser.nextMeta()).toEqual({ type: 'meta', title: null, epoch: expect.any(String) });
+    expect(await browser.nextMeta()).toEqual({ type: 'meta', title: null, color: null, epoch: expect.any(String) });
     expect(await browser.nextMeta()).toMatchObject({ type: 'meta', title: '新しい表示名' });
 
     // 空文字で未設定に戻す
     expect(await (await put('')).json()).toEqual({ ok: true, title: null });
     expect(await browser.nextMeta()).toMatchObject({ type: 'meta', title: null });
     browser.close();
+  });
+
+  it('ページの色を変えると、スナップショット、概要、索引に反映され、接続中のブラウザに届く', async () => {
+    const slug = 'color-page';
+    await env.PAGE.getByName(slug).createPage('色のページ');
+    const browser = await join(slug, 'c1');
+    const put = (color: unknown) =>
+      api(`/api/pages/${slug}/color`, { method: 'PUT', body: JSON.stringify({ color }) });
+    const info = async () => {
+      const res = await api('/api/pages-info', { method: 'POST', body: JSON.stringify({ names: [slug] }) });
+      return (await res.json<{ pages: { color: string | null }[] }>()).pages[0];
+    };
+
+    expect(await (await api(`/api/pages/${slug}`)).json()).toMatchObject({ color: null });
+    const res = await put('#BBDEFB');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, color: '#BBDEFB' });
+    expect(await browser.nextMeta()).toMatchObject({ type: 'meta', title: '色のページ', color: '#BBDEFB' });
+    expect(await (await api(`/api/pages/${slug}`)).json()).toMatchObject({ color: '#BBDEFB', seq: 0 });
+    // 索引への反映の前は、DO から補う
+    expect(await info()).toMatchObject({ color: '#BBDEFB' });
+
+    await runDurableObjectAlarm(env.PAGE.getByName(slug));
+    expect(await env.DB.prepare(`SELECT color FROM pages WHERE name = ?`).bind(slug).first()).toEqual({
+      color: '#BBDEFB',
+    });
+    expect(await info()).toMatchObject({ color: '#BBDEFB' });
+
+    // 色だけを変えたとき（検索とリンクに関わる内容は同じ）も、索引の色が変わる
+    expect(await (await put('#C8E6C9')).json()).toEqual({ ok: true, color: '#C8E6C9' });
+    await runDurableObjectAlarm(env.PAGE.getByName(slug));
+    expect(await info()).toMatchObject({ color: '#C8E6C9' });
+
+    // null で、付けていない状態に戻す
+    expect(await (await put(null)).json()).toEqual({ ok: true, color: null });
+    expect((await browser.nextMeta())).toMatchObject({ type: 'meta', color: '#C8E6C9' });
+    expect(await browser.nextMeta()).toMatchObject({ type: 'meta', color: null });
+
+    // 決まった色のほかは、断る。`color` のない本文を、色を外す指定として扱わない
+    await put('#FFCDD2');
+    for (const bad of ['#123456', '#ffcdd2', 'red', 'url(x)', 1, undefined]) {
+      const rejected = await put(bad);
+      expect(rejected.status).toBe(400);
+      expect(await rejected.json()).toEqual({ error: 'invalid color' });
+    }
+    expect(await (await api(`/api/pages/${slug}`)).json()).toMatchObject({ color: '#FFCDD2' });
+    browser.close();
+  });
+
+  it('同じ色を選び直しても、索引の更新日時は変わらない', async () => {
+    const slug = 'color-same';
+    const stub = env.PAGE.getByName(slug);
+    await stub.createPage('同じ色');
+    await stub.setColor('#BBDEFB');
+    await runDurableObjectAlarm(stub);
+    const updatedAt = () => env.DB.prepare(`SELECT updated_at FROM pages WHERE name = ?`).bind(slug).first();
+    const before = await updatedAt();
+
+    expect(await stub.setColor('#BBDEFB')).toEqual({ ok: true, color: '#BBDEFB' });
+    // 索引の更新は、予約されていない
+    expect(await runDurableObjectAlarm(stub)).toBe(false);
+    expect(await updatedAt()).toEqual(before);
+  });
+
+  it('ページの色の変更は、ページがなければ作らずに断る', async () => {
+    const slug = 'color-missing';
+    const res = await api(`/api/pages/${slug}/color`, { method: 'PUT', body: JSON.stringify({ color: null }) });
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ error: 'page not found' });
+    expect(await (await api(`/api/pages/${slug}`)).json()).toMatchObject({ epoch: null });
   });
 
   it('mustExist を付けた表示名の変更は、ページがなければ作らずに断る', async () => {
@@ -292,7 +362,7 @@ describe('ページの新規作成', () => {
   it('表示名なしでも作れる', async () => {
     expect((await create('new-untitled', {})).status).toBe(201);
     expect(await (await api('/api/pages/new-untitled')).json()).toMatchObject({
-      title: null, epoch: expect.any(String),
+      title: null, color: null, epoch: expect.any(String),
     });
   });
 
@@ -319,7 +389,7 @@ describe('ページの削除', () => {
     expect(await browser.closed).toMatchObject({ code: 4410 });
 
     expect(await stub.getSnapshot()).toEqual({
-      seq: 0, title: null, epoch: null, data: { version: 1, notes: [], edges: [] },
+      seq: 0, title: null, color: null, epoch: null, data: { version: 1, notes: [], edges: [] },
     });
     const tables = await runInDurableObject(stub, (_do, state) =>
       state.storage.sql.exec(`SELECT count(*) AS c FROM sqlite_master`).one().c,

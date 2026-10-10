@@ -172,7 +172,7 @@ export function buildIndexBoard(
     searchText.set(id, search.toLowerCase());
   };
   for (const page of pages) {
-    addNote(page.name, pageHtml(page, formatDate), PAGE_COLOR, `${page.title ?? ''}\n${page.name}`);
+    addNote(page.name, pageHtml(page, formatDate), page.color ?? PAGE_COLOR, `${page.title ?? ''}\n${page.name}`);
   }
 
   const edges: WemaEdge[] = [];

@@ -104,6 +104,10 @@ export class ChildNotes {
     });
 
     container.classList.add('child-note');
+    // 子ページに色が付いていれば、付箋の色の代わりに、その色で塗る（付箋の色は、変えずに残す）。
+    // サーバーが PAGE_COLORS のどれかであることを確かめた値
+    container.classList.toggle('page-colored', !!info?.color);
+    container.style.setProperty('--page-color', info?.color ?? null);
     container.append(title, el('div', { className: 'child-meta', textContent: this.describe(child, info) }));
     if (info) container.append(layoutPreview(parseLayout(info.layout)));
     return true;

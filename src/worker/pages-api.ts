@@ -41,7 +41,7 @@ pagesApi.get('/index', async (c) => {
     db.batch([
       db
         .prepare(
-          `SELECT name, title, note_count, updated_at, substr(plain_text, 1, ?) AS excerpt,
+          `SELECT name, title, color, note_count, updated_at, substr(plain_text, 1, ?) AS excerpt,
                   (SELECT count(*) FROM pages c WHERE c.parent = pages.name) AS child_count
            FROM pages WHERE parent IS NULL ORDER BY updated_at DESC LIMIT ?`,
         )
@@ -76,7 +76,7 @@ pagesApi.post('/pages-info', async (c) => {
     return c.json({ error: 'invalid names' }, 400);
   }
   const { results } = await c.env.DB.prepare(
-    `SELECT name, title, note_count, parent, layout FROM pages WHERE name IN (SELECT value FROM json_each(?))`,
+    `SELECT name, title, color, note_count, parent, layout FROM pages WHERE name IN (SELECT value FROM json_each(?))`,
   )
     .bind(JSON.stringify(names))
     .all<PageSummary>();
@@ -86,7 +86,10 @@ pagesApi.post('/pages-info', async (c) => {
   for (const name of new Set(names)) {
     if (indexed.has(name)) continue;
     const ref = await c.env.PAGE.getByName(name).getPageRef();
-    if (ref) results.push({ name, title: ref.title, note_count: ref.noteCount, parent: ref.parent, layout: null });
+    if (ref) {
+      const { title, color, parent } = ref;
+      results.push({ name, title, color, note_count: ref.noteCount, parent, layout: null });
+    }
   }
   return c.json({ pages: results });
 });
@@ -258,6 +261,19 @@ pagesApi.put('/pages/:slug/title', validSlug, async (c) => {
   const result = await c.env.PAGE.getByName(c.req.param('slug')).setTitle(body?.title, {
     mustExist: body?.mustExist === true,
   });
+  if (result.ok) return c.json(result);
+  return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
+});
+
+/**
+ * ページの色の変更（本文は `{ "color": "#BBDEFB" }`。`PAGE_COLORS` のどれか。null で、付けていない
+ * 状態に戻す）。ページがなければ 404（作らない）
+ */
+pagesApi.put('/pages/:slug/color', validSlug, async (c) => {
+  const body = await c.req.json<{ color?: unknown }>().catch(() => null);
+  // `color` のない本文を、「付けていない状態に戻す」として扱わない
+  if (body?.color === undefined) return c.json({ error: 'invalid color' }, 400);
+  const result = await c.env.PAGE.getByName(c.req.param('slug')).setColor(body.color);
   if (result.ok) return c.json(result);
   return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
 });

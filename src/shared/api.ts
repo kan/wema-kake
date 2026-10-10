@@ -9,6 +9,13 @@ export const INDEX_DELAY_MS = 5000;
 /** 表示名の長さの上限 */
 export const MAX_TITLE_LENGTH = 200;
 
+/**
+ * ページに付けられる色。wema の付箋の色と同じ並び（子ページの付箋と、一覧の付箋の色になる）。
+ * 付けていないページは null
+ */
+export const PAGE_COLORS = ['#FFF9C4', '#FFCDD2', '#FFE0B2', '#E1BEE7', '#BBDEFB', '#B2DFDB', '#C8E6C9', '#F5F5F5'] as const;
+export type PageColor = (typeof PAGE_COLORS)[number];
+
 /** 検索語の長さの上限 */
 export const MAX_QUERY_LENGTH = 200;
 
@@ -22,6 +29,8 @@ export const INDEX_EXCERPT_LENGTH = 60;
 export interface IndexPage {
   name: string;
   title: string | null;
+  /** ページの色（PAGE_COLORS のどれか）。付けていなければ null */
+  color: string | null;
   note_count: number;
   updated_at: number;
   /** 本文の冒頭（INDEX_EXCERPT_LENGTH 文字まで） */
@@ -34,6 +43,8 @@ export interface IndexPage {
 export interface PageSummary {
   name: string;
   title: string | null;
+  /** ページの色（PAGE_COLORS のどれか）。付けていなければ null */
+  color: string | null;
   note_count: number;
   /** 親ページのスラッグ。ルートのページなら null */
   parent: string | null;

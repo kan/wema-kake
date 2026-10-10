@@ -2,7 +2,8 @@
 //
 // ヘッダーは 1 行で、3 つの区画に分ける。
 //   左: 今いる場所   中央: 付箋の操作   右: Wiki の機能
-import { jaLabels, type WemaBoard, type WemaLabels } from '@kanf/wema';
+import { enLabels, jaLabels, type WemaBoard, type WemaLabels } from '@kanf/wema';
+import { PAGE_COLORS, type PageColor } from '../shared/api';
 import { type Child, el } from './dom';
 import { LANG_COOKIE } from '../shared/i18n';
 import { lang, otherLang, t } from './i18n';
@@ -101,6 +102,59 @@ export function modal(className: string, ...children: Child[]): HTMLDialogElemen
     if (!inside) dialog.close();
   });
   return dialog;
+}
+
+/** `PAGE_COLORS` の色の名前（wema の文言のキー） */
+const COLOR_LABELS: Record<PageColor, Extract<keyof WemaLabels, `color${string}`>> = {
+  '#FFF9C4': 'colorButter',
+  '#FFCDD2': 'colorRose',
+  '#FFE0B2': 'colorPeach',
+  '#E1BEE7': 'colorLavender',
+  '#BBDEFB': 'colorSky',
+  '#B2DFDB': 'colorMint',
+  '#C8E6C9': 'colorSage',
+  '#F5F5F5': 'colorGray',
+};
+
+/**
+ * ページの色を選ぶボタン。押すと、色の一覧が開く。選んだら `pick` を呼ぶ（null は「色なし」）。
+ * 今の色は、`show` で渡す（ボタンと、一覧の印に出す）
+ */
+export function pageColorPicker(pick: (color: string | null) => void): {
+  root: HTMLElement;
+  show(color: string | null): void;
+} {
+  const names = lang === 'ja' ? jaLabels : enLabels;
+  const trigger = el('button', {
+    type: 'button',
+    className: 'color-button',
+    title: t('page.color'),
+    ariaLabel: t('page.color'),
+  });
+  const panel = el('div', { className: 'color-panel' });
+  const picker = popover(trigger, panel);
+  const swatches = new Map<string | null, HTMLButtonElement>();
+  const swatch = (color: string | null, label: string) => {
+    const button = el('button', { type: 'button', className: 'color-swatch', title: label, ariaLabel: label });
+    // 色は PAGE_COLORS の固定の値
+    if (color !== null) button.style.backgroundColor = color;
+    button.addEventListener('click', () => {
+      pick(color);
+      picker.close();
+    });
+    swatches.set(color, button);
+    panel.append(button);
+  };
+  for (const color of PAGE_COLORS) swatch(color, names[COLOR_LABELS[color]]);
+  swatch(null, t('page.colorNone'));
+  return {
+    root: picker.root,
+    show(color) {
+      // サーバーが PAGE_COLORS のどれかであることを確かめた値
+      trigger.style.backgroundColor = color ?? '';
+      for (const [value, button] of swatches) button.classList.toggle('active', value === color);
+    },
+  };
 }
 
 /** メニューの項目 1 つ */

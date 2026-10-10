@@ -57,6 +57,8 @@ export interface SyncHooks {
   /** 最初の同期が済み、ボードを編集できる状態になった */
   onReady?(): void;
   onTitle?(title: string | null): void;
+  /** ページの色。付けていなければ null */
+  onColor?(color: string | null): void;
   /** 認証の期限が切れた。再接続はできないので、ページを読み込み直して認証し直す */
   onAuthExpired?(): void;
   /**
@@ -235,11 +237,13 @@ export class BoardSync {
         // 全体を入れ替えたので、未確定の操作は手元から消えている
         for (const op of this.pending) op.applied = false;
         this.hooks.onTitle?.(msg.title);
+        this.hooks.onColor?.(msg.color);
         this.synced();
         break;
       case 'meta':
         this.epoch = msg.epoch ?? undefined;
         this.hooks.onTitle?.(msg.title);
+        this.hooks.onColor?.(msg.color);
         // 差分で追いつく場合は、最初に meta が届く
         this.synced();
         break;
