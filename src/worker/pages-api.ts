@@ -6,7 +6,7 @@ import { requestLang } from '../shared/i18n';
 import { isValidSlug } from '../shared/slug';
 import type { AuthEnv } from './access';
 import { createFirstPage } from './first-page';
-import type { RevertFailure } from './page-do';
+import { REASON_PAGE_NOT_FOUND, type RevertFailure } from './page-do';
 import { listPages, searchPages, searchRoots } from './page-queries';
 
 const REVERT_STATUS = {
@@ -221,6 +221,29 @@ pagesApi.post('/pages/:slug/ops/:seq/revert', validSlug, async (c) => {
 });
 
 /**
+ * 他のページから移す（写す）付箋を置く。本文は `{ clientId, opId, from, notes, edges }`
+ * （`from` は、付箋が元あったページ。同じ `opId` で送り直しても、二重には置かない）。
+ * 今ある付箋の下に置く。ページがなければ 404（作らない）
+ */
+pagesApi.post('/pages/:slug/notes', validSlug, async (c) => {
+  const body = await c.req
+    .json<{ clientId?: unknown; opId?: unknown; from?: unknown; notes?: unknown; edges?: unknown }>()
+    .catch(() => null);
+  const from = body?.from;
+  if (typeof from !== 'string' || !isValidSlug(from)) return c.json({ error: 'invalid from' }, 400);
+  const result = await c.env.PAGE.getByName(c.req.param('slug')).receiveNotes({
+    actor: c.get('actor'),
+    clientId: String(body?.clientId ?? ''),
+    opId: String(body?.opId ?? ''),
+    from,
+    notes: body?.notes,
+    edges: body?.edges,
+  });
+  if (result.ok) return c.json({ ok: true, seq: result.seq });
+  return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
+});
+
+/**
  * 表示名の変更。まだ書き込みのないページに対して呼ぶと、ページが作られる。
  * 本文に `"mustExist": true` があれば、作らずに 404 を返す
  */
@@ -230,5 +253,5 @@ pagesApi.put('/pages/:slug/title', validSlug, async (c) => {
     mustExist: body?.mustExist === true,
   });
   if (result.ok) return c.json(result);
-  return c.json({ error: result.reason }, result.reason === 'page not found' ? 404 : 400);
+  return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
 });

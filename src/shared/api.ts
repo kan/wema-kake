@@ -3,6 +3,9 @@
 /** ページの一覧で 1 回に返す件数の上限 */
 export const MAX_LIST_LIMIT = 500;
 
+/** ページを変更してから、D1 の索引へ反映するまでの時間 */
+export const INDEX_DELAY_MS = 5000;
+
 /** 表示名の長さの上限 */
 export const MAX_TITLE_LENGTH = 200;
 

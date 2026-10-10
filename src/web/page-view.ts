@@ -28,6 +28,7 @@ import {
   type Transition,
   viewSignal,
 } from './navigation';
+import { dropOntoChildPages } from './note-drop';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
 import {
   centerOnNotes,
@@ -100,6 +101,8 @@ function summaryText(op: OpSummary): string {
       return t('ops.summary.childRemoved', system.page);
     case 'revert':
       return t('ops.summary.revert', system.seq);
+    case 'notesReceived':
+      return t('ops.summary.notesReceived', system.page);
     default:
       return op.summary;
   }
@@ -349,10 +352,21 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   });
   sync.start();
 
+  // 付箋を、子ページの付箋の上へドラッグして放すと、その子ページへ移す（Ctrl / Cmd で写す）
+  const drops = dropOntoChildPages(board, container, {
+    slug,
+    clientId: sync.clientId,
+    titleOf: (child) => childNotes.titleOf(child),
+    notify,
+    onSent: () => childNotes.contentChanged(),
+  });
+
   // 読み込みなしで他のページへ切り替わるときの後始末。保存中の変更を送り終えるのを少し待ってから、
   // 同期を止めて、ボードを破棄する
   setBeforeLeave(async () => {
     const deadline = Date.now() + LEAVE_WAIT_MS;
+    // 子ページへ送っている途中の付箋があれば、送り終えて、このページから消すところまで待つ
+    await Promise.race([drops.settled(), new Promise((resolve) => setTimeout(resolve, LEAVE_WAIT_MS))]);
     while (sync.pendingCount > 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 50));
     }

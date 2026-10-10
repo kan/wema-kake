@@ -31,6 +31,7 @@ export const ja = {
   'failed.revert': (reason: string) => `取り消しに失敗しました（${reason}）`,
   'failed.delete': (reason: string) => `削除に失敗しました（${reason}）`,
   'failed.create': (reason: string) => `作成に失敗しました（${reason}）`,
+  'failed.transfer': (reason: string) => `子ページへ付箋を送れませんでした（${reason}）`,
 
   // --- ヘッダーの部品 ---
   'zoom.reset': '等倍に戻す',
@@ -127,6 +128,7 @@ export const ja = {
   'ops.summary.childRemoved': (page: string) => `子ページ ${page} の削除`,
   'ops.summary.revert': (seq: number) => `#${seq} の取り消し`,
   'ops.summary.revertUnknown': '取り消し',
+  'ops.summary.notesReceived': (page: string) => `ページ ${page} から付箋を受け取り`,
 
   // 取り消しの結果。`why` は、`revert.reasons` で作った理由（なければ空文字）
   'revert.done': '取り消しました',
@@ -155,6 +157,9 @@ export const ja = {
   /** `why` は、下の `child.reject.*`。`kept` は、「作成して置く」で作ったページが残っているか */
   'child.rejected': (why: string, kept: boolean) =>
     `子ページとして置けませんでした（${why}）${kept ? '。作成したページは、ルートのページとして一覧に残っています' : ''}`,
+  // 付箋を、子ページの付箋の上へドラッグして放したとき（src/web/note-drop.ts）
+  'transfer.moved': (notes: number, page: string) => `付箋 ${notes} 枚を「${page}」へ移動しました`,
+  'transfer.copied': (notes: number, page: string) => `付箋 ${notes} 枚を「${page}」へコピーしました`,
   // 子ページとして置けない理由（ChildRejectCode）
   'child.reject.not-found': 'ページが見つかりません',
   'child.reject.self': '自分自身は置けません',

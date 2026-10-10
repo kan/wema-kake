@@ -130,6 +130,7 @@ const TEXTS: Record<Lang, GuideText> = {
         [
           '「子ページを置く」 → 中にページを作る',
           '子ページの表示名をクリック → 中へ入る',
+          '付箋を子ページへドラッグ → 中へ移動（Ctrl でコピー）',
           '/p/ページ名 へのリンク → 他のページへ移る',
           '左上の表示名をクリック → 名前を変える',
         ],
@@ -216,6 +217,7 @@ const TEXTS: Record<Lang, GuideText> = {
         [
           '“Place a child page” → a page inside this one',
           'Click a child page’s title → go inside',
+          'Drag a note onto a child page → move it inside (Ctrl: copy)',
           'A link to /p/page-name → go to that page',
           'Click the title at the top left → rename',
         ],

@@ -1,6 +1,12 @@
 import { DurableObject } from 'cloudflare:workers';
-import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome } from '../shared/api';
-import { type BoardContent, type HistoryDelta, invertDeltas, type Snapshot } from '../shared/delta';
+import { INDEX_DELAY_MS, MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome } from '../shared/api';
+import {
+  type BoardContent,
+  type HistoryDelta,
+  invertDeltas,
+  type Snapshot,
+  type WemaNote,
+} from '../shared/delta';
 import { systemSummary } from '../shared/op-summary';
 import {
   CLOSE_AUTH_EXPIRED,
@@ -53,8 +59,6 @@ import {
 const MAX_SUMMARY_LENGTH = 500;
 const DEFAULT_LIST_OPS = 50;
 const MAX_LIST_OPS = 200;
-/** 変更してから D1 へ反映するまでの時間 */
-const INDEX_DELAY_MS = 5000;
 /** ops を残す期間と件数。どちらかに収まっていれば残す（再接続時の差分、履歴、取り消しに使う） */
 const OPS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
 const OPS_RETENTION_COUNT = 1000;
@@ -98,6 +102,34 @@ export interface ApplyInput {
   summary?: string;
   /** ページがまだ作られていなければ、適用せずに断る（MCP のツールはページを作らない） */
   mustExist?: boolean;
+}
+
+/** ページがないときの `reason`。Worker は、これを 404 にする */
+export const REASON_PAGE_NOT_FOUND = 'page not found';
+
+export interface ReceiveInput extends Pick<ApplyInput, 'actor' | 'clientId' | 'opId'> {
+  /** 置く付箋と、その間の接続線。外から来た値をそのまま渡す。検証は receiveNotes が行う */
+  notes: unknown;
+  edges: unknown;
+  /** 付箋が元あったページ（操作の履歴の要約に出す） */
+  from: string;
+}
+
+/** 受け取った付箋と、今ある付箋の間に空ける幅 */
+const RECEIVE_GAP = 40;
+
+/**
+ * 受け取る付箋を、互いの位置関係を保ったまま、今ある付箋の下へずらす（左端は、今ある付箋にそろえる）。
+ * `existing` は、今ある付箋の左端と下端。付箋がなければ、どちらも null
+ */
+function placeBelow(incoming: WemaNote[], existing: { left: number | null; bottom: number | null }): void {
+  const dx = (existing.left ?? 0) - Math.min(...incoming.map((n) => n.x));
+  const top = existing.bottom === null ? 0 : existing.bottom + RECEIVE_GAP;
+  const dy = top - Math.min(...incoming.map((n) => n.y));
+  for (const note of incoming) {
+    note.x += dx;
+    note.y += dy;
+  }
 }
 
 export type ApplyResult =
@@ -314,10 +346,10 @@ export class PageDO extends DurableObject<Env> {
   setTitle(
     input: unknown,
     options: { mustExist?: boolean } = {},
-  ): { ok: true; title: string | null } | { ok: false; reason: 'invalid title' | 'page not found' } {
+  ): { ok: true; title: string | null } | { ok: false; reason: 'invalid title' | typeof REASON_PAGE_NOT_FOUND } {
     const title = parseTitle(input);
     if (title === undefined) return { ok: false, reason: 'invalid title' };
-    if (options.mustExist && this.version === 0) return { ok: false, reason: 'page not found' };
+    if (options.mustExist && this.version === 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
     this.migrate();
     this.setMeta('title', title);
     this.broadcast(this.metaJson());
@@ -700,6 +732,44 @@ export class PageDO extends DurableObject<Env> {
     return this.write(() => this.applyOpsInOrder(input), { ok: false, reason: REASON_PAGE_DELETED });
   }
 
+  /**
+   * 他のページから移す（写す）付箋と、その間の接続線を受け取って置く。互いの位置関係は保ち、
+   * 今ある付箋の下に置く（送る側は、このページの付箋の位置を知らない）。
+   * ページがまだ作られていなければ、作らずに断る。
+   */
+  receiveNotes(input: ReceiveInput): Promise<ApplyResult> {
+    return this.write(
+      async () => {
+        const { notes, edges, from, ...sender } = input;
+        if (!Array.isArray(notes) || !Array.isArray(edges)) {
+          return { ok: false, reason: 'notes and edges must be arrays' };
+        }
+        return this.applyOpsInOrder(
+          {
+            ...sender,
+            deltas: [
+              ...notes.map((note: unknown) => ({ type: 'note:create', note })),
+              ...edges.map((edge: unknown) => ({ type: 'edge:create', edge })),
+            ],
+            summary: systemSummary.notesReceived(from),
+            mustExist: true,
+          },
+          (deltas) =>
+            placeBelow(
+              deltas.flatMap((d) => (d.type === 'note:create' ? [d.note] : [])),
+              this.sql
+                .exec<{ left: number | null; bottom: number | null }>(
+                  `SELECT min(x) AS left, max(y + height) AS bottom FROM notes`,
+                )
+                .one(),
+            ),
+        );
+      },
+      // 呼び出し側（Worker）は、ページがないときと同じに扱う
+      { ok: false, reason: REASON_PAGE_NOT_FOUND },
+    );
+  }
+
   /** 前の書き込みが終わってから `run` を始める */
   private inOrder<T>(run: () => Promise<T>): Promise<T> {
     const result = this.applyQueue.then(run);
@@ -762,7 +832,14 @@ export class PageDO extends DurableObject<Env> {
     return { seq, deliver };
   }
 
-  private async applyOpsInOrder(input: ApplyInput): Promise<ApplyResult> {
+  /**
+   * @param prepare 検証の済んだデルタを、適用する前に書き換える（今あるボードに合わせた位置決めなど）。
+   *   同じ操作の再送（適用済み）では、呼ばない
+   */
+  private async applyOpsInOrder(
+    input: ApplyInput,
+    prepare?: (deltas: HistoryDelta[]) => void,
+  ): Promise<ApplyResult> {
     let deltas: HistoryDelta[];
     let sanitized: Sanitized;
     try {
@@ -777,7 +854,7 @@ export class PageDO extends DurableObject<Env> {
       throw e;
     }
 
-    if (input.mustExist && this.version === 0) return { ok: false, reason: 'page not found' };
+    if (input.mustExist && this.version === 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
     this.migrate();
 
     // 再接続後の再送。適用済みの結果をそのまま返す
@@ -791,6 +868,8 @@ export class PageDO extends DurableObject<Env> {
         broadcast: false,
       };
     }
+
+    prepare?.(deltas);
 
     const apply = (): ApplyResult => {
       let deliver: (() => void) | undefined;

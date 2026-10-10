@@ -14,12 +14,15 @@ export const systemSummary = {
   childRemoved: (page: string) => `${PREFIX}child-removed:${page}`,
   /** 操作 `seq` を取り消した（要約を付けずに取り消したとき） */
   revert: (seq: number) => `${PREFIX}revert:${seq}`,
+  /** ページ `page` から移した（写した）付箋を置いた */
+  notesReceived: (page: string) => `${PREFIX}notes-received:${page}`,
 };
 
 export type SystemSummary =
   | { kind: 'pageCreated' }
   | { kind: 'childRemoved'; page: string }
-  | { kind: 'revert'; seq: number };
+  | { kind: 'revert'; seq: number }
+  | { kind: 'notesReceived'; page: string };
 
 /** 要約が、サーバーの付けた符号なら、その中身を返す。符号でなければ（知らない符号も）null */
 export function parseSystemSummary(summary: string): SystemSummary | null {
@@ -29,5 +32,6 @@ export function parseSystemSummary(summary: string): SystemSummary | null {
   if (kind === 'page-created' && value === '') return { kind: 'pageCreated' };
   if (kind === 'child-removed' && value !== '') return { kind: 'childRemoved', page: value };
   if (kind === 'revert' && /^\d+$/.test(value)) return { kind: 'revert', seq: Number(value) };
+  if (kind === 'notes-received' && value !== '') return { kind: 'notesReceived', page: value };
   return null;
 }

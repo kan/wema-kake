@@ -3,7 +3,7 @@
 // 本文の代わりに、子ページの表示名、付箋の枚数、付箋の配置の簡易な再現を出す（wema の renderNote）。
 // 表示名を押すと、子ページへ入る。階層の決まりは src/shared/hierarchy.ts と docs/plan.md のフェーズ 6.6。
 import type { WemaBoard, WemaNote } from '@kanf/wema';
-import type { PageSummary } from '../shared/api';
+import { INDEX_DELAY_MS, type PageSummary } from '../shared/api';
 import { type ChildRejectCode, childPageOf, MAX_DEPTH, parseChildRejection } from '../shared/hierarchy';
 import * as api from './api';
 import { el, failureMessage, isPlainClick, textInput } from './dom';
@@ -17,6 +17,8 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 const LAYOUT_PADDING = 40;
 /** 概要のない子ページの付箋が続けて現れるときに、まとめて 1 回だけ取りに行くための待ち時間 */
 const REFRESH_DELAY_MS = 300;
+/** 子ページの変更が、索引（付箋の枚数と配置）に反映されるのを待つ時間 */
+const INDEXING_WAIT_MS = INDEX_DELAY_MS + 2000;
 
 /** 子ページの付箋の大きさ。配置の再現が入るよう、ふつうの付箋より少し大きくする */
 export const CHILD_NOTE_SIZE = { width: 240, height: 180 };
@@ -65,6 +67,8 @@ export class ChildNotes {
   private readonly pages = new Map<string, PageSummary | null>();
   private board: WemaBoard | undefined;
   private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 子ページの中身を変えた後の、索引への反映を待つ取り直し */
+  private indexedTimer: ReturnType<typeof setTimeout> | undefined;
 
   /**
    * @param slug 今のページ（親ページ）のスラッグ
@@ -120,8 +124,21 @@ export class ChildNotes {
     onViewEnd(() => {
       // 画面が切り替わったら、ボードは破棄される。予約してある取り直しも止める
       clearTimeout(this.refreshTimer);
+      clearTimeout(this.indexedTimer);
       this.board = undefined;
     });
+  }
+
+  /** 子ページの表示名。まだ分からなければ、スラッグ */
+  titleOf(child: string): string {
+    return this.pages.get(child)?.title ?? child;
+  }
+
+  /** このページから、子ページの中身を変えた（付箋を移した）。索引への反映を待って、概要を取り直す */
+  contentChanged(): void {
+    // ふつうの取り直しの予約とは、別に持つ（間に取り直しが入っても、反映の後の取り直しを残す）
+    clearTimeout(this.indexedTimer);
+    this.indexedTimer = setTimeout(() => void this.refresh(), INDEXING_WAIT_MS);
   }
 
   /** 置いてある子ページの概要を、取り直す。予約が重なったら、1 回にまとめる */

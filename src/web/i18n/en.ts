@@ -26,6 +26,7 @@ export const en = {
   'failed.revert': (reason) => `Could not revert the operation (${reason})`,
   'failed.delete': (reason) => `Could not delete the page (${reason})`,
   'failed.create': (reason) => `Could not create the page (${reason})`,
+  'failed.transfer': (reason) => `Could not send the notes to the child page (${reason})`,
 
   'zoom.reset': 'Reset to 100%',
   'zoom.out': 'Zoom out',
@@ -109,6 +110,7 @@ export const en = {
   'ops.summary.childRemoved': (page) => `Child page ${page} removed`,
   'ops.summary.revert': (seq) => `Reverted #${seq}`,
   'ops.summary.revertUnknown': 'Revert',
+  'ops.summary.notesReceived': (page) => `Notes received from page ${page}`,
 
   'revert.done': 'Reverted',
   'revert.none': (why) => `There was nothing to revert${why}`,
@@ -132,6 +134,8 @@ export const en = {
   'child.elsewhere': (parent) => `Placed in “${parent}”`,
   'child.rejected': (why, kept) =>
     `Could not place it as a child page (${why})${kept ? '. The page you created remains in the list as a root page' : ''}`,
+  'transfer.moved': (notes, page) => `Moved ${count(notes, 'note')} to “${page}”`,
+  'transfer.copied': (notes, page) => `Copied ${count(notes, 'note')} to “${page}”`,
   'child.reject.not-found': 'Page not found',
   'child.reject.self': 'A page cannot be placed in itself',
   'child.reject.other-parent': 'It is already a child of another page',
