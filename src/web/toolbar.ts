@@ -154,7 +154,7 @@ const ZOOM_STEP = 1.25;
  * wema の `centerContent()` は、全体がボードに収まらないときに左上を表示するので、ここで計算する。
  * 画面上の位置から求めるので、倍率にも絞り込みにも左右されない
  */
-function centerOnNotes(board: WemaBoard, container: HTMLElement): void {
+export function centerOnNotes(board: WemaBoard, container: HTMLElement): void {
   const rects = [...container.querySelectorAll<HTMLElement>('.wema-note')]
     .filter((note) => note.offsetParent !== null)
     .map((note) => note.getBoundingClientRect());

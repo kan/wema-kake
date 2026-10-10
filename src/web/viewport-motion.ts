@@ -22,7 +22,7 @@ const ease = (t: number) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
  * 表示位置と倍率を、`to` まで動かす。動かし終えるか、画面が切り替わったら解決する。
  * 倍率は比で補間する（等速で拡大しているように見せる）
  */
-function animateViewport(board: WemaBoard, to: WemaViewport): Promise<void> {
+function animateViewport(board: WemaBoard, to: WemaViewport, superseded: () => boolean): Promise<void> {
   if (reducedMotion()) {
     board.setViewport(to);
     return Promise.resolve();
@@ -33,7 +33,8 @@ function animateViewport(board: WemaBoard, to: WemaViewport): Promise<void> {
   return new Promise((resolve) => {
     const step = (now: number) => {
       // 画面が切り替わったら、ボードはもう破棄されている
-      if (signal.aborted) return resolve();
+      // 同じボードで次の演出が始まったら、そちらに任せる（2 つが交互に動かすと、表示が揺れる）
+      if (signal.aborted || superseded()) return resolve();
       const t = Math.min(1, (now - start) / DURATION_MS);
       const k = ease(t);
       board.setViewport({
@@ -80,28 +81,57 @@ const scaledBy = (board: WemaBoard, factor: number) =>
 export function zoomTransitions(board: WemaBoard, onStart?: () => void) {
   /** 演出つきで、他の画面へ切り替えている途中か。途中でもう一度押されても、何もしない */
   let leaving = false;
-  const go = async (destination: () => WemaViewport | undefined, url: string, transition: Transition) => {
-    if (leaving) return;
+  /** 始めた演出の数。入ってきた演出の途中で、離れる演出が始まったら、古いほうを止める */
+  let animations = 0;
+  const animate = (to: WemaViewport) => {
+    const mine = ++animations;
+    return animateViewport(board, to, () => mine !== animations);
+  };
+  /** 離れる前の演出をして、切り替え先へ渡す手がかりを返す。すでに離れている途中なら undefined */
+  const depart = async (
+    destination: () => WemaViewport | undefined,
+    transition: Transition,
+  ): Promise<Transition | undefined> => {
+    if (leaving) return undefined;
     leaving = true;
-    const signal = viewSignal();
-    const count = navigationCount();
     onStart?.();
     // 行き先は、onStart の後に求める（求めるときに、表示位置を一度動かして戻すため）
     const to = destination();
-    if (to) await animateViewport(board, to);
+    if (to) await animate(to);
+    return transition;
+  };
+  const go = async (destination: () => WemaViewport | undefined, url: string, transition: Transition) => {
+    const signal = viewSignal();
+    const count = navigationCount();
+    const arrival = await depart(destination, transition);
     // 演出の途中で、他の切り替え（「戻る」など）が始まっていたら、そちらを優先する
     // （保存中の変更を待っている間は、まだ画面が終わっていないので、数でも確かめる）
-    if (!signal.aborted && count === navigationCount()) navigate(url, transition);
+    if (arrival && !signal.aborted && count === navigationCount()) navigate(url, arrival);
   };
+  /** 付箋 `noteId` へ寄った表示位置 */
+  const onNote = (noteId: string) => () => {
+    const note = board.getNote(noteId);
+    return note && focusedOn(board, note);
+  };
+  const shrunk = () => scaledBy(board, LEAVE_SCALE);
   return {
     /** 付箋 `noteId` へ寄ってから、`url`（その付箋が表すページ）へ入る */
     enter(noteId: string, url: string): Promise<void> {
-      const note = board.getNote(noteId);
-      return go(() => note && focusedOn(board, note), url, { kind: 'enter' });
+      return go(onNote(noteId), url, { kind: 'enter' });
     },
     /** 全体を縮めてから、`url`（上の階層）へ戻る。`from` は、戻り先に付箋として出ているページ */
     leave(url: string, from: string): Promise<void> {
-      return go(() => scaledBy(board, LEAVE_SCALE), url, { kind: 'leave', from });
+      return go(shrunk, url, { kind: 'leave', from });
+    },
+    /**
+     * ブラウザの「戻る」と「進む」で離れるときの演出。`enter` / `leave` と同じ動きをするが、
+     * 切り替えは呼ぶ側（navigation.ts）が行うので、切り替え先へ渡す手がかりを返すだけにする
+     */
+    enterOnPop(noteId: string): Promise<Transition | undefined> {
+      return depart(onNote(noteId), { kind: 'enter' });
+    },
+    leaveOnPop(from: string): Promise<Transition | undefined> {
+      return depart(shrunk, { kind: 'leave', from });
     },
     /**
      * 切り替わってきた直後の演出。今の表示位置を、落ち着く位置として、そこまで動かす。
@@ -118,7 +148,7 @@ export function zoomTransitions(board: WemaBoard, onStart?: () => void) {
       } else {
         return;
       }
-      await animateViewport(board, target);
+      await animate(target);
     },
   };
 }

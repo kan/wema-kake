@@ -19,7 +19,15 @@ import {
 } from './dom';
 import { t } from './i18n';
 import type { IconName } from './icons';
-import { navigate, onViewEnd, setBeforeLeave, type Transition, viewSignal } from './navigation';
+import {
+  navigate,
+  onViewEnd,
+  pageSlugOf,
+  setBeforeLeave,
+  setPopLeave,
+  type Transition,
+  viewSignal,
+} from './navigation';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
 import {
   header,
@@ -131,11 +139,12 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   });
   childNotes.attach(board);
 
-  // 表示位置と倍率は、ページごとにブラウザへ保存する（次に開いたときと、子ページから戻ったときに使う）
-  const viewport = rememberViewport(board, slug);
+  // 倍率は、ページごとにブラウザへ保存する（次に開いたときと、子ページから戻ったときに使う）。
+  // 表示位置は覚えず、開くたびに付箋全体の中央から始める
+  const viewport = rememberViewport(board, slug, container);
 
   // --- 階層を移るときの、ズームの演出（子ページへ入る、親ページや一覧へ戻る） ---
-  // 演出で動かした位置を、このページの見ていた場所として保存しない
+  // 演出で変えた倍率を、このページの見ていた倍率として保存しない
   const zoom = zoomTransitions(board, viewport.freeze);
   /** 上の階層（先祖のページか、一覧）へのリンクを、縮んでから切り替わるようにする */
   const leaveOnClick = (link: HTMLAnchorElement, from: () => string) => {
@@ -146,13 +155,29 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     });
     return link;
   };
-  /** このページのルート（一覧に付箋として出ているページ）。先祖が分かるまでは、このページ自身 */
-  let root = slug;
+  /** このボードに置いてある、子ページ `page` の付箋 */
+  const childNote = (page: string) => board.getNotes().find((note) => childPageOf(note) === page);
+  /** ルートからこのページまでの道筋（このページを含む）。先祖が分かるまでは、このページだけ */
+  let lineage = [slug];
+  /** このページのルート（一覧に付箋として出ているページ） */
+  const root = () => lineage[0];
+  // ブラウザの「戻る」と「進む」でも、階層を移るなら、同じ演出を入れる
+  setPopLeave((path) => {
+    if (path === '/') return zoom.leaveOnPop(root());
+    const target = pageSlugOf(path);
+    if (target === undefined || target === slug) return undefined;
+    // 先祖のページへ戻る。戻り先に置いてあるのは、道筋の上で 1 つ下のページ
+    const at = lineage.indexOf(target);
+    if (at >= 0) return zoom.leaveOnPop(lineage[at + 1]);
+    // このボードに置いてある子ページへ入る
+    const note = childNote(target);
+    return note && zoom.enterOnPop(note.id);
+  });
   /** 最初の表示位置を決める。入ってきたときは小さい状態から、戻ってきたときは子ページの付箋から広げる */
   const arrive = async () => {
     viewport.restore();
-    await zoom.arrive(arrival, (page) => board.getNotes().find((note) => childPageOf(note) === page));
-    // 表示位置の保存は、演出が済んでから始める（演出の途中の位置を、見ていた場所として保存しない）
+    await zoom.arrive(arrival, childNote);
+    // 倍率の保存は、演出が済んでから始める（演出の途中の倍率を、見ていた倍率として保存しない）
     viewport.start();
   };
 
@@ -251,7 +276,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   app.append(
     header(
       // 一覧へ戻るときは、このページのルートの付箋へ縮む
-      [leaveOnClick(el('a', { href: '/', textContent: t('list') }), () => root), crumbs, title, star, status],
+      [leaveOnClick(el('a', { href: '/', textContent: t('list') }), root), crumbs, title, star, status],
       [
         el('span', { className: 'tool-group' }, undoButton, redoButton),
         separator(),
@@ -268,10 +293,10 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   api
     .getAncestors(slug)
     .then(({ ancestors }) => {
-      root = ancestors[0]?.name ?? slug;
+      lineage = [...ancestors.map((page) => page.name), slug];
       ancestors.forEach((page, i) => {
         // 戻り先のページに置いてあるのは、道筋の上で 1 つ下のページ
-        const child = ancestors[i + 1]?.name ?? slug;
+        const child = lineage[i + 1];
         const link = el('a', { href: `/p/${page.name}`, textContent: page.title ?? page.name });
         crumbs.append(leaveOnClick(link, () => child), '›');
       });
@@ -285,7 +310,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       board.setReadOnly(false);
       // 参照モードは、サーバーの内容を読み込んだ後に入る（入った時点の位置を wema が覚えるため）
       if (settings.get(VIEW_ONLY_KEY) === '1') board.setViewOnly(true);
-      // 前に見ていた場所があればそこへ、なければ全体が収まる倍率にする
+      // 付箋全体の中央から始める。倍率は、前に見ていた倍率か、なければ全体が収まる倍率
       void arrive();
     },
     onStatus(state, pending) {

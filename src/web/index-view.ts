@@ -17,7 +17,7 @@ import {
 import { t } from './i18n';
 import { attachNoteActions } from './index-actions';
 import { buildIndexBoard, descendantHitsHtml, type IndexBoard } from './index-board';
-import { navigate, onViewEnd, type Transition, viewSignal } from './navigation';
+import { navigate, onViewEnd, pageSlugOf, setPopLeave, type Transition, viewSignal } from './navigation';
 import { checkedSlug, pageFields } from './page-form';
 import { header, langButton, popover, separator, toast, WEMA_LABELS, zoomControls } from './toolbar';
 import { zoomTransitions } from './viewport-motion';
@@ -134,6 +134,11 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
   /** 最後に始めた絞り込み。古い検索の結果が後から届いても使わない */
   let latest = 0;
 
+  /**
+   * この一覧の URL の検索の部分。離れるときに `location.search` を読むと、ブラウザの「戻る」と「進む」
+   * では、もう行き先の URL に変わっている
+   */
+  let ownSearch = location.search;
   /** 最後に絞り込んだ検索語。同じ語でもう一度検索しない */
   let applied: string | undefined;
 
@@ -166,6 +171,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
     if (q === applied) return;
     applied = q;
     history.replaceState(null, '', q ? `/?q=${encodeURIComponent(q)}` : '/');
+    ownSearch = location.search;
     const request = ++latest;
     if (q === '') {
       matched = null;
@@ -318,9 +324,16 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
       const remember = () => {
         if (remembered) return;
         remembered = true;
-        lastSeen = { search: location.search, viewport: created.getViewport() };
+        lastSeen = { search: ownSearch, viewport: created.getViewport() };
       };
       const zoom = zoomTransitions(board, remember);
+      // ブラウザの「進む」で、一覧に出ているページへ入るときも、付箋へ寄ってから切り替える
+      // （付箋の id は、ページのスラッグ。絞り込みで隠れている付箋へは寄らない）
+      setPopLeave((path) => {
+        const target = pageSlugOf(path);
+        if (target === undefined || !created.getNote(target) || matched?.has(target) === false) return undefined;
+        return zoom.enterOnPop(target);
+      });
       // 付箋のリンクからページへは、読み込みなしで切り替わる。そのときに、ボードを破棄する
       // 待っている検索や、改名と削除の応答が、破棄したボードを触らないよう、変数も空にする
       // （applyFilter、showMatched、rebuild は、ボードがなければ何もしない）

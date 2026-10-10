@@ -4,7 +4,7 @@ import { isValidSlug } from '../shared/slug';
 import { openHelp } from './help-view';
 import { lang, t } from './i18n';
 import { openIndex } from './index-view';
-import { startRouter } from './navigation';
+import { pageSlugOf, startRouter } from './navigation';
 import { openPage } from './page-view';
 
 const app = document.getElementById('app')!;
@@ -12,7 +12,7 @@ const app = document.getElementById('app')!;
 document.documentElement.lang = lang;
 
 startRouter((path, initial, arrival) => {
-  const slug = /^\/p\/([^/]+)\/?$/.exec(path)?.[1];
+  const slug = pageSlugOf(path);
   const isPage = slug !== undefined && isValidSlug(slug);
   if (isPage || path === '/' || path === '/help') {
     app.replaceChildren();

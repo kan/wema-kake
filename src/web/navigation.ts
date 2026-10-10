@@ -26,6 +26,20 @@ export function setBeforeLeave(run: () => Promise<void>): void {
 }
 
 /**
+ * ブラウザの「戻る」と「進む」で今の画面を離れる前の演出。行き先のパスを受け取り、階層を移るなら、
+ * 演出を済ませてから、切り替え先へ渡す手がかりを返す。階層を移らないなら、何もせずに undefined を返す。
+ * 画面ごとに 1 つ
+ */
+type PopLeave = (path: string) => Promise<Transition | undefined> | undefined;
+let popLeave: PopLeave | undefined;
+export function setPopLeave(run: PopLeave): void {
+  popLeave = run;
+}
+
+/** パスがページ（/p/<slug>）なら、そのスラッグ。スラッグの形は確かめない */
+export const pageSlugOf = (path: string): string | undefined => /^\/p\/([^/]+)\/?$/.exec(path)?.[1];
+
+/**
  * パスを画面にする。`initial` は、ページを読み込んだ直後の、最初の画面かどうか。
  * `arrival` は、演出つきで切り替わってきたときの手がかり。
  * 読み込みなしで切り替えられないパスなら false を返す
@@ -46,6 +60,7 @@ async function show(path: string, arrival?: Transition): Promise<void> {
   // 続けると、後から描いた古い行き先が残り、URL と画面が食い違う
   if (current !== generation) return;
   beforeLeave = undefined;
+  popLeave = undefined;
   view.abort();
   view = new AbortController();
   if (!render(path, false, arrival)) location.reload();
@@ -64,7 +79,20 @@ export async function reloadPage(): Promise<void> {
 export function startRouter(renderPath: Render): void {
   render = renderPath;
   render(location.pathname, true);
-  window.addEventListener('popstate', () => void show(location.pathname));
+  window.addEventListener('popstate', () => void pop(location.pathname));
+}
+
+/** 「戻る」と「進む」で、`path` の画面を出す。階層を移るなら、今の画面の演出を先に済ませる */
+async function pop(path: string): Promise<void> {
+  // 演出の間に、次の切り替えが始まったら、そちらに任せる。先に始めていた切り替えは、ここで止まる
+  const current = ++generation;
+  let arrival: Transition | undefined;
+  try {
+    arrival = await popLeave?.(path);
+  } catch {
+    // 演出に失敗しても、切り替えは行う（URL はもう変わっているので、止めると画面と食い違う）
+  }
+  if (current === generation) await show(path, arrival);
 }
 
 /**
