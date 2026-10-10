@@ -136,6 +136,10 @@ export const en = {
     `Could not place it as a child page (${why})${kept ? '. The page you created remains in the list as a root page' : ''}`,
   'transfer.moved': (notes, page) => `Moved ${count(notes, 'note')} to “${page}”`,
   'transfer.copied': (notes, page) => `Copied ${count(notes, 'note')} to “${page}”`,
+  'transfer.confirmMoveLinked': (notes) =>
+    `Also move the ${count(notes, 'note')} connected by lines?\nChoose “Cancel” to move only the notes you dragged`,
+  'transfer.confirmCopyLinked': (notes) =>
+    `Also copy the ${count(notes, 'note')} connected by lines?\nChoose “Cancel” to copy only the notes you dragged`,
   'child.reject.not-found': 'Page not found',
   'child.reject.self': 'A page cannot be placed in itself',
   'child.reject.other-parent': 'It is already a child of another page',

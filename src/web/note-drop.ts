@@ -1,10 +1,12 @@
 // 付箋を、子ページの付箋の上へドラッグして放すと、その子ページへ移す。
 // Ctrl / Cmd を押したまま放すと、移さずに写す（元の付箋は、動かす前の位置へ戻る）。
+// 運んだ付箋と接続線でつながっている付箋があれば、一緒に送るかを尋ねる。
 //
 // wema には、付箋を放したことを知らせるイベントがない。付箋の上で押し始めたポインターが離れた
 // ときに、位置だけを変える操作が確定したら（history:commit）、ドラッグの終わりとして扱う。
 import type { WemaBoard, WemaNote } from '@kanf/wema';
 import type { PageSummary } from '../shared/api';
+import { connectedNotes } from '../shared/connected';
 import { childPageOf } from '../shared/hierarchy';
 import * as api from './api';
 import { failureMessage } from './dom';
@@ -55,6 +57,10 @@ export function dropOntoChildPages(
     const note = board.getNote(id);
     return note !== undefined && childPageOf(note) !== undefined;
   };
+  /** 送っている途中の付箋（見えないだけで、送り終えるまでボードに残っている） */
+  const inFlight = new Set<string>();
+  /** 子ページへ送れる付箋か。子ページの付箋は、送れない（ページの親を変えることになる） */
+  const sendable = (id: string) => board.getNote(id) !== undefined && !isChildNote(id) && !inFlight.has(id);
 
   /**
    * 画面の位置で、運んでいる付箋（`carried`）のすぐ下に見えている付箋が、子ページの付箋なら、
@@ -133,61 +139,92 @@ export function dropOntoChildPages(
     }
     const target = board.getNote(targetAt(drop.x, drop.y, new Set(before.keys()))?.dataset.noteId ?? '');
     const child = target && childPageOf(target);
-    // 子ページの付箋は、移さない（ページの親を変えることになる）。一緒に運んでいたら、元の位置へ戻す
-    const ids = [...before.keys()].filter((id) => board.getNote(id) !== undefined && !isChildNote(id));
+    // 子ページの付箋は、移さない。一緒に運んでいたら、元の位置へ戻す
+    const ids = [...before.keys()].filter(sendable);
     if (child === undefined || ids.length === 0) return;
     const sending = send(child, ids, before, drop.copy).finally(() => pending.delete(sending));
     pending.add(sending);
   });
 
-  /** 付箋 `ids` を、子ページ `child` へ送る。送り終えたら、このページの付箋を消す（写すときは残す） */
-  async function send(child: string, ids: string[], before: Map<string, Position>, copy: boolean): Promise<void> {
-    // 送り先での id。同じ付箋を 2 回写しても、重ならない
-    const newIds = new Map(ids.map((id) => [id, crypto.randomUUID()]));
-    const notes = ids.map((id) => ({ ...board.getNote(id)!, id: newIds.get(id)! }));
-    // 送る付箋どうしをつなぐ接続線は、一緒に送る。残る付箋との接続線は、送らない
-    const edges = board
-      .getEdges()
-      .filter((edge) => newIds.has(edge.from) && newIds.has(edge.to))
-      .map((edge) => ({ ...edge, id: crypto.randomUUID(), from: newIds.get(edge.from)!, to: newIds.get(edge.to)! }));
-    const body = { clientId: options.clientId, opId: crypto.randomUUID(), from: options.slug, notes, edges };
-
+  /** 運んだ付箋 `dragged` を、子ページ `child` へ送る。送り終えたら、このページの付箋を消す（写すときは残す） */
+  async function send(child: string, dragged: string[], before: Map<string, Position>, copy: boolean): Promise<void> {
     /** `which` に合う付箋を、動かす前の位置へ戻す */
     const putBack = (which: (id: string) => boolean) => {
       const back = [...before].filter(([id]) => which(id) && board.getNote(id) !== undefined);
       if (back.length > 0) board.batch(() => back.forEach(([id, position]) => board.updateNote(id, position)));
     };
-    // 操作の確定（history:commit）を処理している途中では、ボードを書き換えない
-    await Promise.resolve();
-    // 応答を待たずに、見た目を先に済ませる。移す付箋は、送り終えるまで見えなくしておく（消すのは、
-    // 送れてから）。残る付箋（写す付箋、一緒に運んでいた子ページの付箋）は、動かす前の位置へ戻す
-    const moving = (id: string) => !copy && newIds.has(id);
-    const leaving = ids.filter(moving).flatMap((id) => noteElement(id) ?? []);
-    for (const el of leaving) el.classList.add(LEAVING_CLASS);
-    putBack((id) => !moving(id));
+    /** 送っている途中の付箋。移す付箋は、送り終えるまで見えなくしておく（消すのは、送れてから） */
+    const sent: string[] = [];
+    const leaving: HTMLElement[] = [];
+    const take = (ids: string[]) => {
+      sent.push(...ids);
+      for (const id of ids) inFlight.add(id);
+      if (copy) return;
+      const elements = ids.flatMap((id) => noteElement(id) ?? []);
+      for (const el of elements) el.classList.add(LEAVING_CLASS);
+      leaving.push(...elements);
+    };
+    try {
+      // 操作の確定（history:commit）を処理している途中では、ボードを書き換えない
+      await Promise.resolve();
+      // 応答を待たずに、見た目を先に済ませる。残る付箋（写す付箋、一緒に運んでいた子ページの付箋）は、
+      // 動かす前の位置へ戻す
+      take(dragged);
+      putBack((id) => copy || !dragged.includes(id));
 
-    const result = await api
-      .sendNotes(child, body)
-      .catch((error: unknown) => {
-        // 断られたのなら、送り直さない。応答を受け取れなかっただけなら、置かれたかどうかが分からない
-        // ので、同じ opId でもう一度だけ送る（置かれていれば、サーバーは二重には置かない）
-        if (error instanceof api.ApiError) throw error;
-        return api.sendNotes(child, body);
-      })
-      .catch((error: unknown) => ({ error }));
-    // 待っている間に、画面が切り替わっていたら、ボードは破棄されている
-    if (signal.aborted) return;
-    if ('error' in result) {
-      // 送れなかった付箋は、見えるようにして、動かす前の位置へ戻す
-      for (const el of leaving) el.classList.remove(LEAVING_CLASS);
-      putBack(moving);
-      options.notify(failureMessage('failed.transfer', result.error));
-      return;
+      // 運んだ付箋と接続線でつながっている付箋も、一緒に送るかを尋ねる（断ったら、運んだ付箋だけを送る）。
+      // 子ページの付箋と、送っている途中の付箋は送れないので、その先へはたどらない
+      const boardEdges = board.getEdges();
+      const linked = connectedNotes(dragged, boardEdges, sendable);
+      if (linked.length > 0) {
+        // confirm は、閉じるまで画面の処理を止める。ポインターのイベントの処理の外へ出て、上の見た目が
+        // 描かれてから尋ねる
+        await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve)));
+        if (signal.aborted) return;
+        if (confirm(t(copy ? 'transfer.confirmCopyLinked' : 'transfer.confirmMoveLinked', linked.length))) {
+          // 尋ねる前に数えた付箋が、待っている間に消えていることがある
+          take(linked.filter(sendable));
+        }
+      }
+      // 送り先での id。同じ付箋を 2 回写しても、重ならない
+      const newIds = new Map(sent.map((id) => [id, crypto.randomUUID()]));
+      // 運んだ付箋は、動かす前の位置で送る（運んでいない付箋との位置関係を保つ。送り先での位置は、
+      // サーバーが決める）
+      const notes = sent.flatMap((id) => {
+        const note = board.getNote(id);
+        return note ? { ...note, ...before.get(id), id: newIds.get(id)! } : [];
+      });
+      // 送る付箋どうしをつなぐ接続線は、一緒に送る。残る付箋との接続線は、送らない
+      const edges = boardEdges
+        .filter((edge) => newIds.has(edge.from) && newIds.has(edge.to))
+        .map((edge) => ({ ...edge, id: crypto.randomUUID(), from: newIds.get(edge.from)!, to: newIds.get(edge.to)! }));
+      const body = { clientId: options.clientId, opId: crypto.randomUUID(), from: options.slug, notes, edges };
+
+      const result = await api
+        .sendNotes(child, body)
+        .catch((error: unknown) => {
+          // 断られたのなら、送り直さない。応答を受け取れなかっただけなら、置かれたかどうかが分からない
+          // ので、同じ opId でもう一度だけ送る（置かれていれば、サーバーは二重には置かない）
+          if (error instanceof api.ApiError) throw error;
+          return api.sendNotes(child, body);
+        })
+        .catch((error: unknown) => ({ error }));
+      // 待っている間に、画面が切り替わっていたら、ボードは破棄されている
+      if (signal.aborted) return;
+      if ('error' in result) {
+        // 送れなかった付箋は、見えるようにして、動かす前の位置へ戻す
+        for (const el of leaving) el.classList.remove(LEAVING_CLASS);
+        putBack(() => !copy);
+        options.notify(failureMessage('failed.transfer', result.error));
+        return;
+      }
+      const gone = copy ? [] : sent.filter((id) => board.getNote(id) !== undefined);
+      if (gone.length > 0) board.batch(() => gone.forEach((id) => board.deleteNote(id)));
+      options.notify(t(copy ? 'transfer.copied' : 'transfer.moved', notes.length, options.titleOf(child)));
+      if (result.page) options.onSent(result.page);
+    } finally {
+      for (const id of sent) inFlight.delete(id);
     }
-    const gone = ids.filter((id) => moving(id) && board.getNote(id) !== undefined);
-    if (gone.length > 0) board.batch(() => gone.forEach((id) => board.deleteNote(id)));
-    options.notify(t(copy ? 'transfer.copied' : 'transfer.moved', ids.length, options.titleOf(child)));
-    if (result.page) options.onSent(result.page);
   }
 
   return { settled: () => Promise.allSettled(pending).then(() => {}) };

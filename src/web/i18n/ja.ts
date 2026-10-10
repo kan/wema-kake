@@ -160,6 +160,11 @@ export const ja = {
   // 付箋を、子ページの付箋の上へドラッグして放したとき（src/web/note-drop.ts）
   'transfer.moved': (notes: number, page: string) => `付箋 ${notes} 枚を「${page}」へ移動しました`,
   'transfer.copied': (notes: number, page: string) => `付箋 ${notes} 枚を「${page}」へコピーしました`,
+  /** 「キャンセル」でも、ドラッグした付箋は送る */
+  'transfer.confirmMoveLinked': (notes: number) =>
+    `線でつながっている付箋 ${notes} 枚も一緒に移動しますか？\n「キャンセル」を選ぶと、ドラッグした付箋だけを移動します`,
+  'transfer.confirmCopyLinked': (notes: number) =>
+    `線でつながっている付箋 ${notes} 枚も一緒にコピーしますか？\n「キャンセル」を選ぶと、ドラッグした付箋だけをコピーします`,
   // 子ページとして置けない理由（ChildRejectCode）
   'child.reject.not-found': 'ページが見つかりません',
   'child.reject.self': '自分自身は置けません',
