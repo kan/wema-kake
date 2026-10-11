@@ -196,6 +196,19 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 
 /* 幅が狭いときは、整列とズームのボタンを隠す（ズームは Ctrl + ホイールでできる） */
 @media (max-width: 760px) {
-  .optional { display: none; }
+  .optional, .separator:has(+ .optional) { display: none; }
   .index-search { width: 9em; }
+}
+
+/* スマートフォンの幅では、ヘッダーを 2 行にする（1 行目: 今いる場所、2 行目: 操作）。
+   1 行のままだと、左右の区画の中身が、中央の区画に重なる */
+@media (max-width: 640px) {
+  .page-header { flex-wrap: wrap; height: auto; row-gap: 0; }
+  .zone { height: 40px; }
+  .zone-left { flex: 1 0 100%; }
+  .zone-tools { flex: 1 1 auto; }
+  .zone-right { flex: none; }
+  /* 一覧の検索欄は、右の区画の残りの幅に収める（入力欄の既定の幅を取らせない） */
+  .zone-tools:has(.index-search) { flex: 1 1 0; }
+  .index-search { flex: 1 1 0; width: auto; min-width: 4em; }
 }
