@@ -12,6 +12,8 @@ describe('sanitizeHtml（wema の tests/sanitize.test.ts と同じケース）',
     '<img src="/img/00000000-0000-0000-0000-000000000000.png" alt="test">',
     '<iframe src="https://example.com" width="560" height="315"></iframe>',
     '<ul><li><b>bold item</b></li></ul>',
+    // 引用ボタンが作る付箋の本文（wema 0.12.0）
+    '<blockquote>引用した<b>文字</b></blockquote><div><br></div>',
     'Hello world',
     '5 < 10 and 10 > 5',
     'a &lt;b&gt; &amp; c',

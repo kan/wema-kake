@@ -8,6 +8,8 @@
 const ALLOWED_TAGS = new Set([
   'b', 'strong', 'i', 'em', 'u', 's', 'br', 'span',
   'ul', 'ol', 'li', 'a', 'input', 'img', 'iframe', 'video', 'audio', 'div', 'p',
+  // 文字のツールバーの引用ボタンが作る付箋（wema 0.12.0）
+  'blockquote',
 ]);
 
 /** class と style はどのタグでも許可する */

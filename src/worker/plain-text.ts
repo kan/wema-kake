@@ -70,7 +70,7 @@ export async function extractContent(
         });
       },
     })
-    .on('br, div, p, li, ul, ol', {
+    .on('br, div, p, li, ul, ol, blockquote', {
       element(el) {
         parts.push('\n');
         if (el.tagName !== 'br') el.onEndTag(() => void parts.push('\n'));

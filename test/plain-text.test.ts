@@ -20,6 +20,11 @@ describe('extractContent', () => {
     expect((await extractContent(html)).text).toBe('1 行目\n2 行目\n3 行目\na\nb & c');
   });
 
+  it('引用（blockquote）の前後も改行にする', async () => {
+    const html = '<blockquote>引用した文字</blockquote>感想<div><br></div>';
+    expect((await extractContent(html)).text).toBe('引用した文字\n感想');
+  });
+
   it('タグのない text はエンティティだけ復号する', async () => {
     expect(await extractContent('5 &lt; 10')).toEqual({ text: '5 < 10', hrefs: [] });
   });
