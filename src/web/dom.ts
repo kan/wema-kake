@@ -74,8 +74,14 @@ export function textInput(props: Partial<HTMLInputElement> = {}): HTMLInputEleme
 
 /** スラッグの初期値。短い乱数（小文字の英数字） */
 export function randomSlug(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(6));
-  return [...bytes].map((b) => (b % 36).toString(36)).join('');
+  let slug = '';
+  while (slug.length < 6) {
+    const byte = crypto.getRandomValues(new Uint8Array(1))[0];
+    // 252（36 の倍数）以上は捨てる。そのまま余りを取ると、0〜3 が他より出やすくなる
+    if (byte >= 252) continue;
+    slug += (byte % 36).toString(36);
+  }
+  return slug;
 }
 
 /** ページの削除を確かめる（ページの画面と一覧の画面で、同じ文言を出す） */
