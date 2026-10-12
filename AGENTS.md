@@ -36,6 +36,15 @@ MCP クライアント ──/mcp──> MCP ┘          │
  (claude.ai / ChatGPT)                     └──> 接続中のブラウザへブロードキャスト
 ```
 
+## ローカルでの開発プレビュー
+
+- roji が使える環境では、開発プレビュー（ローカルのサーバーを起動して、画面や API を確かめること）に `npm run dev:roji` を使う。**その環境では、`npm run dev` や、`wrangler dev` の直接の実行で起動しないこと**
+  - 理由: `npm run dev` はポートを固定しておらず、他のプロジェクトの `wrangler dev` が動いていると、別のポートへずれる。`roji run` は空いているポートを選び、`https://wema-kake.<roji のドメイン>` という決まった URL を付ける
+  - roji が使えるかは、`command -v roji` が成功し、`roji health` が「正常」を返すことで確かめる。バージョンは 1.5.0 以降（`roji version`）
+  - 開く URL は、起動時に出る `roji: https://... -> localhost:<ポート>` の行で確かめる。roji のドメインは環境ごとに違うので、URL を決め打ちしない
+- roji が入っていない、動いていない、または 1.5.0 より前の環境では、`npm run dev` を使う
+- `dev:roji` の `wrangler dev` に渡している引数の理由と、ローカルと見なすホスト名は、下の「認証」にある
+
 ## デプロイ
 
 - **このリポジトリは公開している。デプロイ先ごとの値を、git に入れるファイルへ書かないこと。** 対象は、Worker の名前、ホスト名、D1 と KV の ID、Access のチームドメインと AUD タグ、`SITE_ORIGIN`。文書（`docs/`、この `AGENTS.md`）にも、実際のホスト名や ID を書かない
