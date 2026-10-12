@@ -123,6 +123,8 @@ const TEXTS: Record<Lang, GuideText> = {
           'Ctrl + ホイール、ピンチ → 拡大と縮小',
           'Ctrl + Z → 元に戻す（自分の操作だけ）',
           'メニューの「参照モード」 → 読むだけにする',
+          '狭い画面では、縦 1 列に並べて表示する',
+          '並んでいる間は、動かせず、線も出ない',
         ],
       ],
       pages: [
@@ -210,6 +212,8 @@ const TEXTS: Record<Lang, GuideText> = {
           'Ctrl + wheel, or pinch → zoom',
           'Ctrl + Z → undo (your own changes only)',
           '“View-only mode” in the menu → read only',
+          'A narrow screen shows the notes in one column',
+          'There, notes do not move and lines are hidden',
         ],
       ],
       pages: [
@@ -251,7 +255,7 @@ const LAYOUT: Record<Key, { color: string; column: number; row: number; height: 
   notes: { color: '#BBDEFB', column: 0, row: 1, height: 220 },
   text: { color: '#FFE0B2', column: 1, row: 1, height: 170 },
   edges: { color: '#C8E6C9', column: 2, row: 1, height: 150 },
-  view: { color: '#FFCDD2', column: 0, row: 2, height: 170 },
+  view: { color: '#FFCDD2', column: 0, row: 2, height: 210 },
   pages: { color: '#E1BEE7', column: 1, row: 2, height: 170 },
   llm: { color: '#B2DFDB', column: 2, row: 2, height: 150 },
 };
@@ -267,6 +271,9 @@ const EDGES: [from: Key, to: Key][] = [
 ];
 
 const noteId = (key: Key) => `guide-${key}`;
+
+/** 案内の付箋の id。付箋を縦に積む画面で、先頭に並べるのに使う（src/web/stacked-view.ts） */
+export const GUIDE_INTRO_ID = noteId('intro');
 
 /** 使い方の付箋と接続線。`intro` で、案内の付箋の文面を選ぶ */
 export function guideBoard(intro: keyof GuideText['intro'], lang: Lang): BoardContent {

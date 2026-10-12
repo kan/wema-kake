@@ -3,10 +3,11 @@
 // サーバーには保存せず、同期もしない。付箋を動かしたり書き換えたりして試せて、画面を離れると
 // 消える。ページとして置くと、ページの内容として保存されて、他の人にも見えてしまう。
 import { WemaBoard } from '@kanf/wema';
-import { guideBoard } from '../shared/guide';
+import { GUIDE_INTRO_ID, guideBoard } from '../shared/guide';
 import { appLink, el, openInternalLink } from './dom';
 import { lang, t } from './i18n';
 import { onViewEnd } from './navigation';
+import { stackOnNarrow } from './stacked-view';
 import { header, historyButtons, langButton, separator, WEMA_LABELS, zoomControls } from './toolbar';
 
 export function openHelp(app: HTMLElement): void {
@@ -24,6 +25,9 @@ export function openHelp(app: HTMLElement): void {
     emptyDrag: 'pan',
   });
   onViewEnd(() => board.destroy());
+  // ページの画面と同じく、スマートフォンの幅では、付箋を縦 1 列に積んで表示する。
+  // 案内の付箋は、配置の上では装飾の見本の右にあるので、先頭に並べる
+  stackOnNarrow(board, container, { first: [GUIDE_INTRO_ID] }).start();
 
   const { undo, redo } = historyButtons(board);
   const updateTools = () => {
@@ -33,10 +37,13 @@ export function openHelp(app: HTMLElement): void {
   board.on('history:change', updateTools);
   updateTools();
 
+  // ズームのボタンは、ページの画面と同じく、幅が狭いときは隠す
+  const zoomTools = zoomControls(board, container);
+  zoomTools.classList.add('optional');
   app.prepend(
     header(
       [appLink('/', t('list')), el('h1', { textContent: t('help') })],
-      [undo, redo, separator(), zoomControls(board, container)],
+      [undo, redo, separator(), zoomTools],
       [el('span', { className: 'help-note', textContent: t('help.unsaved') }), langButton()],
     ),
   );

@@ -51,27 +51,34 @@ const SAVE_DELAY_MS = 300;
  *   開いたときに、収まる倍率を取り直す）
  * - `freeze`: 今の倍率を保存して、以後は保存しない（後から `start` を呼んでも、再開しない）。
  *   画面を切り替える演出の前に呼ぶ
+ *
+ * `paused` が true を返す間の倍率の変更は、保存しない。付箋を縦に積んでいる間（stacked-view.ts）は
+ * 等倍に固定されるので、その倍率で、覚えている倍率を上書きしないようにする
  */
 export function rememberViewport(
   board: WemaBoard,
   slug: string,
   container: HTMLElement,
+  paused: () => boolean = () => false,
 ): { restore: () => void; start: () => void; freeze: () => void } {
   /** idle: まだ保存を始めていない。saving: 倍率の変更を保存する。frozen: もう保存しない */
   let state: 'idle' | 'saving' | 'frozen' = 'idle';
   /** 最後に見た倍率。パンだけの動きでは保存しない */
   let zoom = board.getViewport().zoom;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  /** 保存を待っている倍率。保存するときのボードの倍率は使わない（待つ間に縦積みへ入ると、等倍に変わっている） */
+  let pending = zoom;
   const flush = () => {
     if (timer === undefined) return;
     clearTimeout(timer);
     timer = undefined;
-    saveZoom(slug, board.getViewport().zoom);
+    saveZoom(slug, pending);
   };
   board.on('viewport:change', (viewport) => {
     const changed = viewport.zoom !== zoom;
     zoom = viewport.zoom;
-    if (state !== 'saving' || !changed) return;
+    if (state !== 'saving' || !changed || paused()) return;
+    pending = zoom;
     clearTimeout(timer);
     timer = setTimeout(flush, SAVE_DELAY_MS);
   });

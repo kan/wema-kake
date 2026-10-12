@@ -1,5 +1,5 @@
 // ページの画面（/p/<slug>）。wema のボードと、見出し（表示名、バックリンク、操作の履歴、削除）。
-import { WemaBoard } from '@kanf/wema';
+import { WemaBoard, type WemaNote } from '@kanf/wema';
 import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type SkipReason } from '../shared/api';
 import { CHILD_PAGE_KEY, childPageOf } from '../shared/hierarchy';
 import { parseSystemSummary } from '../shared/op-summary';
@@ -29,6 +29,7 @@ import {
   viewSignal,
 } from './navigation';
 import { dropOntoChildPages } from './note-drop';
+import { stackOnNarrow } from './stacked-view';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
 import {
   centerOnNotes,
@@ -150,11 +151,18 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   // 倍率は、ページごとにブラウザへ保存する（次に開いたときと、子ページから戻ったときに使う）。
   // 表示位置は覚えず、開くたびに付箋全体の中央から始める
-  const viewport = rememberViewport(board, slug, container);
+  // スマートフォンの幅では、付箋を縦 1 列に積んで表示する。その間は等倍で、倍率を覚えない。
+  // 幅を広げて配置へ戻ったら、最初に開いたときと同じ位置と倍率にする
+  const stack = stackOnNarrow(board, container, {
+    onChange(stacked) {
+      if (!stacked) viewport.restore();
+    },
+  });
+  const viewport = rememberViewport(board, slug, container, stack.isStacked);
 
   // --- 階層を移るときの、ズームの演出（子ページへ入る、親ページや一覧へ戻る） ---
   // 演出で変えた倍率を、このページの見ていた倍率として保存しない
-  const zoom = zoomTransitions(board, viewport.freeze);
+  const zoom = zoomTransitions(board, viewport.freeze, stack.isStacked);
   /** 上の階層（先祖のページか、一覧）へのリンクを、縮んでから切り替わるようにする */
   const leaveOnClick = (link: HTMLAnchorElement, from: () => string) => {
     link.addEventListener('click', (e) => {
@@ -184,7 +192,14 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   });
   /** 最初の表示位置を決める。入ってきたときは小さい状態から、戻ってきたときは子ページの付箋から広げる */
   const arrive = async () => {
-    viewport.restore();
+    if (stack.isStacked()) {
+      // 積んでいる間は、表示位置と倍率を動かせない（演出は zoom が省く）。列の先頭から始める。
+      // 子ページから戻ってきたときは、その子ページの付箋が見える位置までスクロールする
+      const from = arrival?.kind === 'leave' ? childNote(arrival.from) : undefined;
+      if (from) board.revealNotes([from.id]);
+    } else {
+      viewport.restore();
+    }
     await zoom.arrive(arrival, childNote);
     // 倍率の保存は、演出が済んでから始める（演出の途中の倍率を、見ていた倍率として保存しない）
     viewport.start();
@@ -217,19 +232,30 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   // --- ヘッダーの中央: 付箋の操作 ---
   const { undo: undoButton, redo: redoButton } = historyButtons(board);
-  /** 新しい付箋を置く位置。見えている範囲の左上の近くで、続けて置いても重ならないよう、少しずつずらす */
+  /**
+   * 新しい付箋を置く位置。見えている範囲の左上の近くで、続けて置いても重ならないよう、少しずつずらす。
+   * 積んでいる間は、位置を渡さない（wema が、データの上では既存の付箋の左下に置く。列では最後に並び、
+   * 広い画面で開いても、他の付箋と重ならない）
+   */
   const nextNotePosition = () => {
+    if (stack.isStacked()) return {};
     const offset = (board.getNotes().length % 10) * 20;
     const viewport = board.getViewport();
     return { x: (120 + offset - viewport.x) / viewport.zoom, y: (80 + offset - viewport.y) / viewport.zoom };
   };
-  const addButton = iconButton('add', t('note.add'), () => board.addNote(nextNotePosition()));
+  /** 付箋を足す。積んでいる間は列の最後に入るので、見える位置までスクロールする */
+  const addNote = (params: Parameters<WemaBoard['addNote']>[0] = {}) => {
+    // 型の上では必ず付箋が返るが、編集できないとき（ロック、参照モード）は、何も作らず undefined が返る
+    const note = board.addNote({ ...nextNotePosition(), ...params }) as WemaNote | undefined;
+    if (note && stack.isStacked()) board.revealNotes([note.id]);
+  };
+  const addButton = iconButton('add', t('note.add'), () => addNote());
 
   // 子ページを置く。新しく作るか、既存のルートのページを選ぶ
   const childForm = childPageForm(slug, (child) => {
     // 本文は持たせない。置けるかどうか（親は 1 つだけ、輪にならない、深さ）は、サーバーが確かめる。
     // 断られたら、同期が付箋を取り消して、理由を通知する
-    board.addNote({ ...nextNotePosition(), ...CHILD_NOTE_SIZE, text: '', meta: { [CHILD_PAGE_KEY]: child } });
+    addNote({ ...CHILD_NOTE_SIZE, text: '', meta: { [CHILD_PAGE_KEY]: child } });
     childPopover.close();
   });
   const childButton = iconButton('childPage', t('child.place'));
@@ -334,6 +360,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       board.setReadOnly(false);
       // 参照モードは、サーバーの内容を読み込んだ後に入る（入った時点の位置を wema が覚えるため）
       if (settings.get(VIEW_ONLY_KEY) === '1') board.setViewOnly(true);
+      // 縦積みの切り替えは、付箋を読み込んでから始める
+      stack.start();
       // 付箋全体の中央から始める。倍率は、前に見ていた倍率か、なければ全体が収まる倍率
       void arrive();
     },

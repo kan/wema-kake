@@ -19,6 +19,7 @@ import { attachNoteActions } from './index-actions';
 import { buildIndexBoard, descendantHitsHtml, type IndexBoard } from './index-board';
 import { navigate, onViewEnd, pageSlugOf, setPopLeave, type Transition, viewSignal } from './navigation';
 import { checkedSlug, pageFields } from './page-form';
+import { stackOnNarrow } from './stacked-view';
 import { header, langButton, popover, separator, toast, WEMA_LABELS, zoomControls } from './toolbar';
 import { zoomTransitions } from './viewport-motion';
 
@@ -92,9 +93,10 @@ function highlightLinksOnHover(canvas: HTMLElement): void {
 /**
  * 最後に一覧を離れたときの、絞り込み（URL の検索の部分）と表示位置。ページから戻ってきたときに、
  * 見ていた場所から始めるのに使う。ページを読み込み直すと消える（一覧の並びは、ページの増減で変わるので、
- * ブラウザには保存しない）
+ * ブラウザには保存しない）。付箋を縦に積んでいる間（stacked-view.ts）は、表示位置の代わりに、
+ * スクロールの位置（`scrollTop`）を覚える
  */
-let lastSeen: { search: string; viewport: WemaViewport } | undefined;
+let lastSeen: { search: string; viewport?: WemaViewport; scrollTop?: number } | undefined;
 
 /** `arrival` は、どのように切り替わってきたか（ページから戻ってきたなら、そのページの付箋から広げる） */
 export function openIndex(app: HTMLElement, arrival?: Transition): void {
@@ -120,6 +122,9 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
   );
   // ボードを置く要素。大きさは表示領域に固定し、はみ出した付箋へは wema のパンで移動する
   const canvas = el('div', { className: 'index-canvas' });
+  // ボードは、canvas いっぱいの内側の要素に置く。付箋を縦に積んでいる間（stacked-view.ts）は、この要素の
+  // 中がスクロールする。canvas に重ねる通知と付箋の上のボタンは、スクロールで流れない
+  const boardHost = el('div', { className: 'index-board' });
   app.append(
     header(
       [el('h1', { textContent: 'wema-kake' })],
@@ -298,11 +303,12 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
         canvas.append(el('p', { className: 'empty', textContent: t('index.empty') }));
         return;
       }
+      canvas.append(boardHost);
       index = build();
       // 参照モード: 編集の UI は出ず、付箋はドラッグできるが、保存はしない。
       // 空いている場所のドラッグとホイールで、表示位置を動かせる
       board = new WemaBoard({
-        container: canvas,
+        container: boardHost,
         data: index.data,
         viewOnly: true,
         labels: WEMA_LABELS,
@@ -320,13 +326,26 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
         },
       });
       // 離れるときに見ていた場所を覚える。演出つきで離れるときは、演出で動かす前の位置を覚える
+      const created = board;
       let remembered = false;
       const remember = () => {
         if (remembered) return;
         remembered = true;
-        lastSeen = { search: ownSearch, viewport: created.getViewport() };
+        // 積んでいる間の表示位置は、原点と等倍に固定されていて、見ていた場所ではない
+        lastSeen = stack.isStacked()
+          ? { search: ownSearch, scrollTop: boardHost.scrollTop }
+          : { search: ownSearch, viewport: created.getViewport() };
       };
-      const zoom = zoomTransitions(board, remember);
+      // スマートフォンの幅では、付箋を縦 1 列に積んで表示する（接続線は出ない）。配置へ戻ったときは
+      // 原点と等倍になっているので、絞り込んでいれば、残った付箋が収まる位置と倍率にし直す
+      const stack = stackOnNarrow(board, boardHost, {
+        onChange(stacked) {
+          hideActions();
+          if (!stacked && matched) created.fitToContent();
+        },
+      });
+      stack.start();
+      const zoom = zoomTransitions(board, remember, stack.isStacked);
       // ブラウザの「進む」で、一覧に出ているページへ入るときも、付箋へ寄ってから切り替える
       // （付箋の id は、ページのスラッグ。絞り込みで隠れている付箋へは寄らない）
       setPopLeave((path) => {
@@ -337,7 +356,6 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
       // 付箋のリンクからページへは、読み込みなしで切り替わる。そのときに、ボードを破棄する
       // 待っている検索や、改名と削除の応答が、破棄したボードを触らないよう、変数も空にする
       // （applyFilter、showMatched、rebuild は、ボードがなければ何もしない）
-      const created = board;
       onViewEnd(() => {
         remember();
         clearTimeout(timer);
@@ -348,13 +366,20 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
       highlightLinksOnHover(canvas);
       // 表示位置や倍率が動いたら、付箋の上のボタンは位置がずれるので隠す
       board.on('viewport:change', hideActions);
+      // 積んでいる間は、表示位置の代わりに、ボードを置いた要素の中がスクロールする
+      boardHost.addEventListener('scroll', hideActions, { signal });
       // 絞り込みで最初の表示位置が決まる。ページから戻ってきたときは、そのページの付箋から、
       // そこまで広げる（付箋の id は、ページのスラッグ）
       // 同じ絞り込みの一覧へ戻ってきたときは、前に見ていた場所から始める
-      const seen = lastSeen?.search === location.search ? lastSeen.viewport : undefined;
+      const seen = lastSeen?.search === location.search ? lastSeen : undefined;
       void applyFilter().then(() => {
         if (signal.aborted) return;
-        if (seen) created.setViewport(seen);
+        // 覚えたときと同じ表示のときだけ使う（積んでいる間に覚えた位置を、広い画面では使わない。逆も同じ）
+        if (stack.isStacked()) {
+          if (seen?.scrollTop !== undefined) boardHost.scrollTop = seen.scrollTop;
+        } else if (seen?.viewport) {
+          created.setViewport(seen.viewport);
+        }
         return zoom.arrive(arrival, (page) => created.getNote(page));
       });
     })

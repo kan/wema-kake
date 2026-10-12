@@ -97,6 +97,11 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
    これがないと、ヘッダーのパネルや通知の上に出る */
 .board { flex: 1; min-width: 0; isolation: isolate; }
 
+/* スマートフォンの幅で、付箋を縦 1 列に積んでいる間（stacked-view.ts）。ボードは付箋の分だけ下へ
+   伸びるので、ボードを置いた要素の中を縦にスクロールさせる。要素の大きさは、表示領域のまま変えない。
+   スクロールバーの幅は先に取っておく（出たり消えたりすると、列の幅が変わって積み直しになる） */
+.board.stacked, .index-board.stacked { overflow: hidden auto; scrollbar-width: thin; scrollbar-gutter: stable; }
+
 /* パンくず（ルートから親までの道筋） */
 .crumbs { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #999; min-width: 0; flex: 0 1 auto; overflow: hidden; }
 .crumbs:empty { display: none; }
@@ -162,7 +167,9 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 /* --- 一覧の画面 --- */
 .index-search { width: 16em; min-width: 6em; height: 26px; box-sizing: border-box; font: inherit; font-size: 13px; }
 .index-count { font-size: 12px; color: #666; white-space: nowrap; }
-.index-canvas { flex: 1; min-height: 0; isolation: isolate; position: relative; overflow: hidden; }
+.index-canvas { flex: 1; min-height: 0; isolation: isolate; position: relative; overflow: hidden; display: flex; }
+/* ボードを置く要素。canvas いっぱいに広げる */
+.index-board { flex: 1; min-width: 0; }
 /* 付箋の上に重ねて出す操作（index-actions.ts）。wema のポップアップより前に出す */
 .note-actions, .note-rename {
   position: absolute; z-index: 20000; display: flex; align-items: center; gap: 2px;

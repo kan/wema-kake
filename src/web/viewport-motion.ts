@@ -77,8 +77,11 @@ const scaledBy = (board: WemaBoard, factor: number) =>
  *
  * `onStart` は、切り替えの演出を始める直前に呼ぶ（演出で動かした位置を、見ていた場所として
  * 保存しないようにする、など）
+ *
+ * `still` が true を返す間は、演出をせずに、すぐ切り替える。付箋を縦に積んでいる間
+ * （stacked-view.ts）は、ボードの表示位置を動かせないので、演出しても待つだけになる
  */
-export function zoomTransitions(board: WemaBoard, onStart?: () => void) {
+export function zoomTransitions(board: WemaBoard, onStart?: () => void, still?: () => boolean) {
   /** 演出つきで、他の画面へ切り替えている途中か。途中でもう一度押されても、何もしない */
   let leaving = false;
   /** 始めた演出の数。入ってきた演出の途中で、離れる演出が始まったら、古いほうを止める */
@@ -96,7 +99,7 @@ export function zoomTransitions(board: WemaBoard, onStart?: () => void) {
     leaving = true;
     onStart?.();
     // 行き先は、onStart の後に求める（求めるときに、表示位置を一度動かして戻すため）
-    const to = destination();
+    const to = still?.() ? undefined : destination();
     if (to) await animate(to);
     return transition;
   };
@@ -138,6 +141,7 @@ export function zoomTransitions(board: WemaBoard, onStart?: () => void) {
      * `noteOf` は、ページのスラッグから、そのページを表す付箋を探す
      */
     async arrive(arrival: Transition | undefined, noteOf: (page: string) => WemaNote | undefined): Promise<void> {
+      if (still?.()) return;
       const target = board.getViewport();
       if (arrival?.kind === 'enter') {
         board.zoomTo(target.zoom * ENTER_SCALE);
