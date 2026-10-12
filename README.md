@@ -95,6 +95,7 @@ npm run dev
 | コマンド | 内容 |
 | --- | --- |
 | `npm run dev` | 画面をビルドして、ローカルのサーバーを起動する |
+| `npm run dev:roji` | 同じサーバーを、[roji](https://github.com/kan/roji)（1.5.0 以降）を通して起動する。空いているポートを使い、`https://wema-kake.<roji のドメイン>` で開ける |
 | `npm test` | テストを実行する（Workers のランタイムの上で動く） |
 | `npm run lint` | 型チェック |
 | `npm run deploy` | ビルドしてデプロイする |

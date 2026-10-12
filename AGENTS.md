@@ -69,7 +69,8 @@ MCP クライアント ──/mcp──> MCP ┘          │
   - `src/worker/mcp/workers-oauth-utils.ts` はサンプルの無改変コピー（MIT）。**ここを直接編集しない**。上流の更新を取り込むときは丸ごと差し替える
 - **Worker でも Access の JWT（`Cf-Access-Jwt-Assertion`）を検証する**（`src/worker/access.ts`）。Access の設定を誤っても未認証のリクエストを通さないためと、変更の主体（`user:<email>`）を得るため。`app` に届くリクエストすべてに掛けてある（`src/worker/index.ts` の `app.use(requireAccess)`）。**認証なしで公開するパス（`/mcp` と OAuth 用）は、このアプリの外に置くこと。このミドルウェアを外したり、パスを列挙する形に戻したりしない**
   - 設定は `wrangler.jsonc` の `vars` の `ACCESS_TEAM_DOMAIN`（`https://<team>.cloudflareaccess.com`）と `ACCESS_AUD`（Access アプリケーションの AUD タグ）。両方が空なら 500 を返す
-  - ローカル開発は `.dev.vars` の `DEV_USER_EMAIL` を使う（`.dev.vars.example` を参照）。localhost へのリクエストでだけ有効で、Access の設定があれば無視される
+  - ローカル開発は `.dev.vars` の `DEV_USER_EMAIL` を使う（`.dev.vars.example` を参照）。ローカルのホスト名（`localhost`、`127.0.0.1`、`[::1]`、`.localhost` で終わる名前）へのリクエストでだけ有効で、Access の設定があれば無視される。**ローカルと見なすホスト名を、これより広げないこと**（`src/worker/access.ts` の `isLocalHost`。`.localhost` はループバック専用の予約名なので、デプロイ先のホスト名には当たらない）
+  - ローカルのリバースプロキシ [roji](https://github.com/kan/roji)（`{host}` の置き換えがある 1.5.0 以降）を使うなら `npm run dev:roji`。空いているポートで起動し、`https://wema-kake.<roji のドメイン>` で開ける。**`wrangler dev` の `--host {host} --upstream-protocol https` を外さないこと。** 外すと、Worker から見たオリジンが `http://<ホスト名>` になる。このオリジンでは `OAuthProvider` が例外を投げて、Worker が処理するパス（`/api`、`/.well-known/*` など）が 500 になる
 - WebSocket の接続要求は `Origin` を確かめ、他のオリジンからの接続を断る（WebSocket は同一オリジンの制約を受けず、Access の Cookie は他サイトからの接続にも付くため）
 - 主体はクライアントの自己申告を使わない。Worker が認証結果から決めて DO に渡す
 - `clientId` はクライアントの自己申告なので、**同じ送信元かどうかの判定（再送の判定、`fixups` の宛先）には主体も合わせて使う**

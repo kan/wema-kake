@@ -14,6 +14,13 @@ export type AuthEnv = {
 const LOCAL_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 /**
+ * ローカル開発のホスト名か。`.localhost` で終わる名前も含める（ローカルのリバースプロキシが
+ * 付ける `<名前>.localhost`）。`.localhost` はループバック専用の予約名（RFC 6761）なので、
+ * デプロイ先のホスト名がこれに当たることはない
+ */
+const isLocalHost = (hostname: string) => LOCAL_HOSTS.has(hostname) || hostname.endsWith('.localhost');
+
+/**
  * 取得済みの公開鍵（データ）を、鍵の取得元の URL ごとに isolate 内で使い回す。
  * createRemoteJWKSet そのものはリクエストごとに作る。使い回すと取得中の Promise が
  * リクエスト間で共有され、Workers では別のリクエストが作った Promise を待つと止まることがある。
@@ -64,7 +71,7 @@ export const requireAccess = createMiddleware<AuthEnv>(async (c, next) => {
     if (!verified) return c.json({ error: 'unauthorized' }, 401);
     c.set('actor', `user:${verified.email}`);
     c.set('authExpiresAt', verified.expiresAt);
-  } else if (devEmail && LOCAL_HOSTS.has(new URL(c.req.url).hostname)) {
+  } else if (devEmail && isLocalHost(new URL(c.req.url).hostname)) {
     c.set('actor', `user:${devEmail}`);
   } else {
     return c.json({ error: 'authentication is not configured' }, 500);

@@ -96,10 +96,15 @@ describe('requireAccess', () => {
     expect(res.status).toBe(401);
   });
 
-  it('Access が未設定のとき、DEV_USER_EMAIL は localhost でだけ有効', async () => {
+  it('Access が未設定のとき、DEV_USER_EMAIL はローカルのホスト名でだけ有効', async () => {
     const devEnv = { ...env, ACCESS_TEAM_DOMAIN: '', ACCESS_AUD: '', DEV_USER_EMAIL: 'dev@example.com' };
     expect((await app.request('http://localhost/api/pages/memo', {}, devEnv)).status).toBe(200);
+    // ローカルのリバースプロキシが付けるホスト名（<名前>.localhost）も、ローカルとして扱う
+    expect((await app.request('https://wema-kake.dev.localhost/api/pages/memo', {}, devEnv)).status).toBe(200);
     expect((await app.request('https://wiki.example.com/api/pages/memo', {}, devEnv)).status).toBe(500);
+    // 末尾が似ているだけの名前は、ローカルとして扱わない
+    expect((await app.request('https://evillocalhost/api/pages/memo', {}, devEnv)).status).toBe(500);
+    expect((await app.request('https://localhost.example.com/api/pages/memo', {}, devEnv)).status).toBe(500);
   });
 
   it('Access も DEV_USER_EMAIL も未設定なら拒否する', async () => {
