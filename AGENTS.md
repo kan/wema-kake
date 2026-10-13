@@ -56,7 +56,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
 - 最初のデプロイの手順
   1. D1、R2 バケットを作り、ID を `wrangler.deploy.jsonc` に書く。マイグレーションを適用して、デプロイする。**Access の値が空の間、`/api`、`/ws`、`/img`、`/mcp` は 500 を返す**（保護のない状態では、データを読み書きできない）
   2. Access アプリケーション（Self-hosted）を 1 つ作る。宛先はホスト名だけ（パスは空）、ポリシーは Allow。チームドメインと AUD タグを `wrangler.deploy.jsonc` に書いて、デプロイし直す。チームドメインは、末尾のスラッシュを付けない
-  3. MCP を使うなら、そのアプリケーションの Additional settings の「OAuth」で、**Managed OAuth** を有効にする。Allowed redirect URIs に、つなぐクライアントのコールバックを入れる。claude.ai は `https://claude.ai/api/mcp/auth_callback`、ChatGPT は `https://chatgpt.com/connector_platform_oauth_redirect`。手元のクライアント（Claude Code など）からつなぐなら、Allow localhost clients と Allow loopback clients も有効にする
+  3. MCP を使うなら、そのアプリケーションの Additional settings の「OAuth」で、**Managed OAuth** を有効にする。Allowed redirect URIs に、つなぐクライアントのコールバックを入れる。claude.ai は `https://claude.ai/api/mcp/auth_callback`、ChatGPT は `https://chatgpt.com/connector_platform_oauth_redirect`。手元のクライアント（Claude Code など）からつなぐなら、Allow localhost clients と Allow loopback clients も有効にする。Grant session duration（リフレッシュトークンの期限）は、定期タスクから使うなら 1 か月（上限）にする。既定のままだと、アプリケーションのセッションの長さで切れて、そのたびにコネクタの再認可が要る
   4. 未ログインの `curl` で確かめる。Managed OAuth を有効にしていれば、`/api/session` と `POST /mcp` は 401 を返し、`WWW-Authenticate` に `resource_metadata` が入る（有効にしていなければ、Access のログイン画面への 302）。ブラウザで開くと、どちらの場合もログイン画面へ転送される
   - **Worker 単位の保護（Worker の「Access」タブの「Protect this Worker behind Access」）は使わない。** WebSocket に対応していない
   - **`/mcp` を Bypass にするアプリケーションを作らない。** Access を通らないリクエストには JWT が付かないので、Worker が 401 を返す
