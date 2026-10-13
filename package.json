@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@kanf/wema": "^0.16.0",
-    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.3.1",
     "agents": "^0.28.0",
     "hono": "^4.13.13",
     "jose": "^6.2.12",
@@ -28,7 +28,7 @@
   },
   "devDependencies": {
     "@cloudflare/vitest-plugin": "^1.4.0",
-    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.3.1",
     "@types/node": "^26.6.5",
     "typescript": "^7.0.2",
     "vite": "^8.3.4",
