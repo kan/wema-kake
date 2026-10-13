@@ -4,6 +4,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      # agents は、@modelcontextprotocol/* を peer 依存で、ちょうどの版に固定している。
+      # 片方だけを上げると npm ci が ERESOLVE で失敗するので、1 つの PR でまとめて上げる
+      agents-mcp:
+        patterns:
+          - "agents"
+          - "@modelcontextprotocol/*"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
