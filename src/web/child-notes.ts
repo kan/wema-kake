@@ -75,10 +75,12 @@ export class ChildNotes {
   /**
    * @param slug 今のページ（親ページ）のスラッグ
    * @param open 子ページへ入る。修飾キーなしの左クリックで呼ぶ。`noteId` は、押された付箋
+   * @param refreshed 取り直した概要で、子ページの付箋 `noteId` の表示名が変わったときに、描き直した後に呼ぶ
    */
   constructor(
     private readonly slug: string,
     private readonly open: (child: string, noteId: string) => void,
+    private readonly refreshed?: (noteId: string) => void,
   ) {}
 
   /**
@@ -180,11 +182,19 @@ export class ChildNotes {
     // 待っている間に、画面が切り替わっていたら、何もしない
     if (this.board !== board) return;
     const byName = new Map(found.map((page) => [page.name, page]));
+    // 概要を全部入れてから、描き直す（描き直しの途中で、まだ概要のない付箋の render が呼ばれると、
+    // 取り直しがもう 1 回予約される）
+    const updated: { noteId: string; retitled: boolean }[] = [];
     for (const [name, noteId] of placed) {
       if (this.ahead.has(name)) continue;
+      const before = this.titleOf(name);
       this.pages.set(name, byName.get(name) ?? null);
+      updated.push({ noteId, retitled: this.titleOf(name) !== before });
+    }
+    for (const { noteId, retitled } of updated) {
       // 描き直す。概要が入ったので、ここからの render は、取り直しを予約しない
       board.refreshNote(noteId);
+      if (retitled) this.refreshed?.(noteId);
     }
   }
 }

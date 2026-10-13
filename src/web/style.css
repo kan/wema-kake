@@ -102,6 +102,26 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
    スクロールバーの幅は先に取っておく（出たり消えたりすると、列の幅が変わって積み直しになる） */
 .board.stacked, .index-board.stacked { overflow: hidden auto; scrollbar-width: thin; scrollbar-gutter: stable; }
 
+/* 付箋のつながりの印（note-link-footer.ts）。積んでいる間、接続線の代わりに、付箋の下に並べる。
+   wema が、付箋の枠のすぐ下に置く。付箋との間隔は、ここの余白で決める */
+.note-links { display: flex; flex-wrap: wrap; gap: 4px; padding-top: 6px; }
+/* 1 つの印は 1 行。収まらない分は、相手の付箋の冒頭を省略する */
+.note-link {
+  display: flex; align-items: baseline; gap: 4px; max-width: 100%; min-height: 28px; box-sizing: border-box;
+  padding: 4px 10px; border: 1px solid rgb(0 0 0 / 0.15); border-radius: 14px;
+  background: #fff; color: #333; font: inherit; font-size: 12px; line-height: 1.4; cursor: pointer;
+}
+.note-link:disabled { opacity: 0.5; cursor: default; }
+.note-link-arrow { flex: none; color: #2563eb; }
+.note-link-label { flex: none; max-width: 8em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #666; }
+.note-link-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 印を押したときの、相手の付箋の強調。すでに見えていてスクロールしないときも、相手が分かる */
+.wema-note.note-link-target { animation: note-link-target 1.4s ease-out; }
+@keyframes note-link-target {
+  0%, 60% { outline: 3px solid #2563eb; outline-offset: 2px; }
+  100% { outline: 3px solid rgb(37 99 235 / 0); outline-offset: 2px; }
+}
+
 /* パンくず（ルートから親までの道筋） */
 .crumbs { display: flex; align-items: center; gap: 6px; font-size: 12px; color: #999; min-width: 0; flex: 0 1 auto; overflow: hidden; }
 .crumbs:empty { display: none; }

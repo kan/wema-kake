@@ -124,7 +124,7 @@ const TEXTS: Record<Lang, GuideText> = {
           'Ctrl + Z → 元に戻す（自分の操作だけ）',
           'メニューの「参照モード」 → 読むだけにする',
           '狭い画面では、縦 1 列に並べて表示する',
-          '並んでいる間は、動かせず、線も出ない',
+          '並んでいる間は動かせず、線は印になる',
         ],
       ],
       pages: [
@@ -213,7 +213,7 @@ const TEXTS: Record<Lang, GuideText> = {
           'Ctrl + Z → undo (your own changes only)',
           '“View-only mode” in the menu → read only',
           'A narrow screen shows the notes in one column',
-          'There, notes do not move and lines are hidden',
+          'There, notes do not move; lines become chips',
         ],
       ],
       pages: [

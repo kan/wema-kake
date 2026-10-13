@@ -20,7 +20,7 @@
   },
   "dependencies": {
     "@cloudflare/workers-oauth-provider": "^1.2.3",
-    "@kanf/wema": "^0.13.2",
+    "@kanf/wema": "^0.14.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "agents": "^0.28.0",
     "hono": "^4.13.13",

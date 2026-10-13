@@ -7,6 +7,7 @@ import { GUIDE_INTRO_ID, guideBoard } from '../shared/guide';
 import { appLink, el, openInternalLink } from './dom';
 import { lang, t } from './i18n';
 import { onViewEnd } from './navigation';
+import { NoteLinkFooters } from './note-link-footer';
 import { stackOnNarrow } from './stacked-view';
 import { header, historyButtons, langButton, separator, WEMA_LABELS, zoomControls } from './toolbar';
 
@@ -16,14 +17,18 @@ export function openHelp(app: HTMLElement): void {
   // ボードを置く要素を、先に画面に出す。付箋の大きさは目安の値で、wema が読み込んだときに計測する。
   // 画面に出ていない要素の中では計測されず、接続線が、目安の大きさで引かれる
   app.append(el('div', { className: 'page-body' }, container));
+  // ページの画面と同じく、付箋を縦に積んでいる間は、つながっている相手を付箋の下に出す
+  const noteLinks = new NoteLinkFooters();
   const board = new WemaBoard({
     container,
     data: { version: 1, ...guideBoard('help', lang) },
     onLinkClick: openInternalLink,
+    renderNoteFooter: noteLinks.render,
     labels: WEMA_LABELS,
     // ページの画面と同じ操作にする
     emptyDrag: 'pan',
   });
+  noteLinks.attach(board);
   onViewEnd(() => board.destroy());
   // ページの画面と同じく、スマートフォンの幅では、付箋を縦 1 列に積んで表示する。
   // 案内の付箋は、配置の上では装飾の見本の右にあるので、先頭に並べる
