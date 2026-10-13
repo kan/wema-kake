@@ -1,18 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { textToHtml } from '../src/shared/note-text';
-import { decodeEntities, extractContent, linkedSlug } from '../src/worker/plain-text';
+import { extractContent, linkedSlug } from '../src/worker/plain-text';
 import { sanitizeHtml } from '../src/worker/sanitize';
-
-describe('decodeEntities', () => {
-  it.each([
-    ['a &amp; b &lt;c&gt; &quot;d&quot; &#39;e&#x27;', `a & b <c> "d" 'e'`],
-    ['a&nbsp;b', 'a b'],
-    ['&#x3042;&#12356;', 'あい'],
-    ['&unknown; &#0; &#x110000; &amp', '&unknown; &#0; &#x110000; &amp'],
-  ])('%s → %s', (input, expected) => {
-    expect(decodeEntities(input)).toBe(expected);
-  });
-});
 
 describe('extractContent', () => {
   it('タグを除き、ブロックの区切りを改行にする', async () => {

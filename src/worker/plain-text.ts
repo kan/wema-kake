@@ -1,24 +1,6 @@
+import { BLOCK_TAGS, decodeEntities } from '../shared/note-html';
 import { pageLink, TRAILING_PUNCTUATION, URL_CHARS } from '../shared/note-text';
 import { isValidSlug } from '../shared/slug';
-
-const NAMED_ENTITIES: Record<string, string> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-  nbsp: ' ',
-};
-
-/** HTMLRewriter はテキストと属性値のエンティティを復号しないので、ここで復号する */
-export function decodeEntities(s: string): string {
-  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, entity: string) => {
-    if (entity[0] !== '#') return NAMED_ENTITIES[entity.toLowerCase()] ?? whole;
-    const hex = entity[1] === 'x' || entity[1] === 'X';
-    const code = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
-    return code > 0 && code <= 0x10ffff ? String.fromCodePoint(code) : whole;
-  });
-}
 
 export interface NoteContent {
   /** タグを除いたテキスト。ブロックの区切りは改行にする */
@@ -70,7 +52,7 @@ export async function extractContent(
         });
       },
     })
-    .on('br, div, p, li, ul, ol, blockquote', {
+    .on(BLOCK_TAGS.join(', '), {
       element(el) {
         parts.push('\n');
         if (el.tagName !== 'br') el.onEndTag(() => void parts.push('\n'));
