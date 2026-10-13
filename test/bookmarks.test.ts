@@ -20,15 +20,16 @@ describe('ブックマーク', () => {
     expect((await put('bm-b')).status).toBe(200);
     expect((await put('bm-a')).status).toBe(200);
     expect((await put('bm-b')).status).toBe(200);
+    // 更新の時刻も、索引から返す
     expect(await bookmarks()).toEqual([
-      { name: 'bm-b', title: 'ページ B' },
-      { name: 'bm-a', title: 'ページ A' },
+      { name: 'bm-b', title: 'ページ B', updated_at: expect.any(Number) },
+      { name: 'bm-a', title: 'ページ A', updated_at: expect.any(Number) },
     ]);
 
     expect((await remove('bm-b')).status).toBe(200);
     // 付いていなくても、成功として返す
     expect((await remove('bm-b')).status).toBe(200);
-    expect(await bookmarks()).toEqual([{ name: 'bm-a', title: 'ページ A' }]);
+    expect(await bookmarks()).toEqual([{ name: 'bm-a', title: 'ページ A', updated_at: expect.any(Number) }]);
     await remove('bm-a');
   });
 
@@ -38,10 +39,10 @@ describe('ブックマーク', () => {
     expect(await bookmarks()).toEqual([]);
   });
 
-  it('索引への反映の前のページにも付けられる（表示名は null で返る）', async () => {
+  it('索引への反映の前のページにも付けられる（表示名と更新の時刻は null で返る）', async () => {
     await env.PAGE.getByName('bm-fresh').setTitle('作ったばかり');
     expect((await put('bm-fresh')).status).toBe(200);
-    expect(await bookmarks()).toEqual([{ name: 'bm-fresh', title: null }]);
+    expect(await bookmarks()).toEqual([{ name: 'bm-fresh', title: null, updated_at: null }]);
     await remove('bm-fresh');
   });
 

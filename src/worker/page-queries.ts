@@ -10,17 +10,26 @@ const SEARCH_LIMIT = MAX_LIST_LIMIT;
 /** trigram の FTS が一致を返せる最短の検索語（文字数） */
 const MIN_FTS_QUERY_LENGTH = 3;
 
-/** ページ一覧（更新の新しい順）。`updatedAfter`（ミリ秒）より後に更新されたものに絞れる */
+/**
+ * ページ一覧（更新の新しい順）。`updatedAfter`（ミリ秒）より後に更新されたものに絞れる。
+ * `name` を渡すと、表示名かスラッグにその文字を含むページに絞る（本文は見ない。ページへ移るための
+ * 絞り込み用）。長すぎる分は、先頭だけを使う
+ */
 export async function listPages(
   db: D1Database,
-  options: { updatedAfter?: unknown; limit?: unknown },
+  options: { updatedAfter?: unknown; limit?: unknown; name?: unknown },
 ): Promise<PageInfo[]> {
+  const name = typeof options.name === 'string' ? options.name.trim().slice(0, MAX_QUERY_LENGTH) : '';
+  // LIKE は使わない（D1 は、LIKE のパターンを 50 バイトまでに限っていて、日本語の 16 文字で超える）。
+  // lower() は、LIKE と同じく、英字だけを小文字にする
   const { results } = await db
     .prepare(
       `SELECT name, title, note_count, updated_at, parent FROM pages
-       WHERE updated_at > ? ORDER BY updated_at DESC LIMIT ?`,
+       WHERE updated_at > ?1
+         AND (?3 = '' OR instr(lower(name), lower(?3)) > 0 OR instr(lower(title), lower(?3)) > 0)
+       ORDER BY updated_at DESC LIMIT ?2`,
     )
-    .bind(Number(options.updatedAfter) || 0, clampLimit(options.limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT))
+    .bind(Number(options.updatedAfter) || 0, clampLimit(options.limit, DEFAULT_LIST_LIMIT, MAX_LIST_LIMIT), name)
     .all<PageInfo>();
   return results;
 }

@@ -5,7 +5,7 @@ import { CHILD_PAGE_KEY, childPageOf } from '../shared/hierarchy';
 import { parseSystemSummary } from '../shared/op-summary';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import * as api from './api';
-import { bookmarkStar, bookmarksMenu, pageLinks, recentPagesMenu } from './bookmarks';
+import { bookmarkStar, pageLinks, pageNavMenu } from './bookmarks';
 import { CHILD_NOTE_SIZE, ChildNotes, childPageForm } from './child-notes';
 import {
   confirmDeletePage,
@@ -340,7 +340,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       separator(),
       el('span', { className: 'tool-group optional' }, layout.root, separator(), zoomControls(board, container)),
     ],
-    [popover(backlinksButton, backlinksPanel, { align: 'right' }).root, bookmarksMenu(), recentPagesMenu(), menu.root],
+    [popover(backlinksButton, backlinksPanel, { align: 'right' }).root, pageNavMenu(), menu.root],
   );
   app.append(pageHeader, body);
   const showColor = (color: string | null) => {

@@ -21,6 +21,9 @@ export const UNSET_PAGE_COLOR: PageColor = '#FFF9C4';
 /** 検索語の長さの上限 */
 export const MAX_QUERY_LENGTH = 200;
 
+/** 1 人が付けられるブックマークの数 */
+export const MAX_BOOKMARKS = 100;
+
 /**
  * 一覧のボードの付箋に出す、本文の冒頭の長さ（文字数）。
  * 付箋の大きさ（src/web/index-board.ts）に収まる量にしてある

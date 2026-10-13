@@ -3,7 +3,7 @@
 import { WemaBoard, type WemaViewport } from '@kanf/wema';
 import { type IndexLink, type IndexPage, MAX_QUERY_LENGTH } from '../shared/api';
 import * as api from './api';
-import { bookmarksMenu, recentPagesMenu } from './bookmarks';
+import { pageNavMenu } from './bookmarks';
 import {
   appLink,
   confirmDeletePage,
@@ -129,7 +129,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
     header(
       [el('h1', { textContent: 'wema-kake' })],
       [search, count, zoomSlot],
-      [bookmarksMenu(), recentPagesMenu(), langButton(), newPage.root],
+      [pageNavMenu(), langButton(), newPage.root],
     ),
     canvas,
   );

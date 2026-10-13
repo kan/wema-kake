@@ -88,6 +88,14 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 /* 表示名の右に薄く出す文字（更新日時など） */
 .link-detail { flex: none; font-size: 11px; color: #999; }
 .link-list .empty { padding: 6px 10px; font-size: 12px; }
+.link-list hr { flex: none; border: none; border-top: 1px solid #e5e5e5; margin: 4px 0; width: 100%; }
+/* ブックマークしたページの印。表示名の前に、小さく出す */
+.link-star { flex: none; align-self: center; display: inline-flex; color: #d97706; margin-right: -6px; }
+.link-star svg { width: 12px; height: 12px; }
+/* 他のページへ移るための一覧（bookmarks.ts）。上に、ページ名で絞り込む入力欄を置く */
+.page-nav { display: flex; flex-direction: column; gap: 4px; width: 280px; max-width: calc(100vw - 16px); }
+.page-nav .link-list { min-width: 0; max-width: none; }
+.nav-filter { height: 28px; box-sizing: border-box; font: inherit; font-size: 13px; }
 /* ブックマークの ★ は、表示名のすぐ後ろに置く */
 .zone-left > .icon-button { margin-left: -4px; }
 

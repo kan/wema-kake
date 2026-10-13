@@ -41,12 +41,14 @@ export const ja = {
   'zoom.fit': '全体が収まるように縮小',
   'zoom.center': '付箋全体の中央へ移動（倍率はそのまま）',
 
-  // --- ページへの一覧（ブックマーク、最近の変更） ---
+  // --- ページへの一覧（ブックマーク、最近の変更、名前での絞り込み） ---
   'links.loadFailed': (reason: string) => `取得できませんでした（${reason}）`,
-  'recent.title': '最近の変更',
-  'recent.empty': 'ページはありません',
-  'bookmarks.title': 'ブックマークしたページ',
-  'bookmarks.empty': 'ブックマークはありません',
+  'nav.title': 'ページへ移る（ブックマーク、最近の変更）',
+  'nav.filter': 'ページ名で絞り込む',
+  'nav.bookmarked': 'ブックマークしたページ',
+  'nav.empty': 'ページはありません',
+  'nav.noMatch': '一致するページはありません',
+  'nav.more': 'ほかにもあります。文字を足して絞り込めます',
   'bookmark.add': 'このページをブックマークする',
   'bookmark.remove': 'ブックマークを外す',
   'bookmark.unwritten': 'まだ何も書かれていないページには、付けられません',

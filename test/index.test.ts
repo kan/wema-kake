@@ -152,6 +152,27 @@ describe('ページの API', () => {
     expect((await api('/api/pages?limit=abc')).status).toBe(200);
   });
 
+  it('一覧を、name で、表示名かスラッグに含む文字で絞れる。本文は見ない', async () => {
+    await seed('nav-alpha', ['本文に Gamma と書いた'], '買い物のメモ');
+    await seed('nav-beta', ['b'], 'Alpha の続き');
+    await seed('nav-gamma', ['d'], '100% の達成');
+    const found = async (name: string) =>
+      (await names(await api(`/api/pages?name=${encodeURIComponent(name)}`))).filter((n) => n.startsWith('nav-')).sort();
+
+    // スラッグと表示名のどちらかに含めば一致する。英字の大文字と小文字は区別しない
+    expect(await found('ALPHA')).toEqual(['nav-alpha', 'nav-beta']);
+    expect(await found('買い物')).toEqual(['nav-alpha']);
+    // 本文だけに含む文字では、一致しない
+    expect(await found('と書いた')).toEqual([]);
+    // LIKE の記号は、文字として扱う
+    expect(await found('100%')).toEqual(['nav-gamma']);
+    expect(await found('_')).toEqual([]);
+    // 長い文字でも、エラーにしない（D1 の LIKE は、パターンが 50 バイトを超えると失敗する）
+    expect(await found('買い物のメモ'.repeat(5))).toEqual([]);
+    // 空と空白だけは、絞らない
+    expect(await found(' ')).toEqual(['nav-alpha', 'nav-beta', 'nav-gamma']);
+  });
+
   it('3 文字以上は全文検索、3 文字未満は部分一致で探す', async () => {
     await seed('search-a', ['神社の境内にある絵馬掛所のメモ']);
     await seed('search-b', ['別の話題'], '境内の整理');

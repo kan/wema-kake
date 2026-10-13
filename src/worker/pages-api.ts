@@ -1,7 +1,7 @@
 // ページの一覧、検索、バックリンクは D1 の索引から返す。ページの中身と表示名は DO から返す。
 import { Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
-import { INDEX_EXCERPT_LENGTH, MAX_LIST_LIMIT, type PageSummary } from '../shared/api';
+import { INDEX_EXCERPT_LENGTH, MAX_BOOKMARKS, MAX_LIST_LIMIT, type PageSummary } from '../shared/api';
 import { requestLang } from '../shared/i18n';
 import { isValidSlug } from '../shared/slug';
 import type { AuthEnv } from './access';
@@ -101,11 +101,15 @@ pagesApi.get('/pages/:slug/ancestors', validSlug, async (c) => {
   return c.json({ ancestors: ancestors.reverse() });
 });
 
-/** ページ一覧。`updated_after`（ミリ秒）より後に更新されたものに絞れる */
+/**
+ * ページ一覧。`updated_after`（ミリ秒）より後に更新されたものに絞れる。`name` を渡すと、表示名か
+ * スラッグにその文字を含むページに絞る
+ */
 pagesApi.get('/pages', async (c) => {
   const pages = await listPages(c.env.DB, {
     updatedAfter: c.req.query('updated_after'),
     limit: c.req.query('limit'),
+    name: c.req.query('name'),
   });
   return c.json({ pages });
 });
@@ -139,16 +143,13 @@ pagesApi.delete('/pages/:slug', validSlug, async (c) => {
   return c.json({ ok: true });
 });
 
-/** 1 人が付けられるブックマークの数 */
-const MAX_BOOKMARKS = 100;
-
 /**
- * 自分のブックマーク（付けた順）。表示名は索引から取るので、作ったばかりのページ（索引への
- * 反映の前）は null になる
+ * 自分のブックマーク（付けた順）。表示名と更新の時刻は索引から取るので、作ったばかりのページ
+ * （索引への反映の前）は null になる
  */
 pagesApi.get('/bookmarks', async (c) => {
   const { results } = await c.env.DB.prepare(
-    `SELECT b.page AS name, p.title FROM bookmarks b LEFT JOIN pages p ON p.name = b.page
+    `SELECT b.page AS name, p.title, p.updated_at FROM bookmarks b LEFT JOIN pages p ON p.name = b.page
      WHERE b.actor = ? ORDER BY b.created_at, b.page`,
   )
     .bind(c.get('actor'))

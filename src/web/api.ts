@@ -57,18 +57,22 @@ export const getAncestors = (slug: string) =>
 export const createPage = (slug: string, title: string) =>
   request<{ ok: true }>('POST', `/api/pages/${slug}`, { title });
 
-/** 自分のブックマーク（付けた順） */
-export async function getBookmarks(): Promise<PageLink[]> {
-  return (await request<{ pages: PageLink[] }>('GET', '/api/bookmarks')).pages;
+/** 自分のブックマーク（付けた順）。索引への反映の前のページは、表示名と更新の時刻が null */
+export async function getBookmarks(): Promise<(PageLink & { updated_at: number | null })[]> {
+  return (await request<{ pages: (PageLink & { updated_at: number | null })[] }>('GET', '/api/bookmarks')).pages;
 }
 
 /** ブックマークを付ける（`on` が false なら外す） */
 export const setBookmark = (slug: string, on: boolean) =>
   request<{ ok: true }>(on ? 'PUT' : 'DELETE', `/api/bookmarks/${slug}`);
 
-/** 最近変更されたページ（新しい順）。子ページも含む */
-export async function getRecentPages(limit: number): Promise<(PageLink & { updated_at: number })[]> {
-  return (await request<{ pages: (PageLink & { updated_at: number })[] }>('GET', `/api/pages?limit=${limit}`)).pages;
+/**
+ * 最近変更されたページ（新しい順）。子ページも含む。`name` を渡すと、表示名かスラッグにその文字を
+ * 含むページに絞る
+ */
+export async function getRecentPages(limit: number, name = ''): Promise<(PageLink & { updated_at: number })[]> {
+  const query = new URLSearchParams({ limit: String(limit), ...(name === '' ? {} : { name }) });
+  return (await request<{ pages: (PageLink & { updated_at: number })[] }>('GET', `/api/pages?${query}`)).pages;
 }
 
 export const getBacklinks = (slug: string) =>
