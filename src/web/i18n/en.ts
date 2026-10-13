@@ -76,8 +76,7 @@ export const en = {
   'index.missing': 'Not created',
 
   'note.add': 'Add a note',
-  'author.agent': 'AI',
-  'author.agentTitle': (name) => `Note made by AI (${name}). Press to show the author and when it was last updated`,
+  'author.agentTitle': (name) => `Note made by AI (${name})`,
   'author.detail': (name, date) => `${name} · ${date}`,
   'layout.title': 'Align and arrange',
   'align.left': 'Align left edges',

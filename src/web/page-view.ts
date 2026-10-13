@@ -145,7 +145,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     // 他のページへのリンク（Wiki リンク）は、同じタブで開く
     onLinkClick: openInternalLink,
     renderNote: childNotes.render,
-    // 付箋の下に、作成者と更新日時を出す（wema 0.16.0）。AI が作った付箋には、印が常に出る
+    // 付箋の下に、作成者と更新日時を出す（wema 0.16.0）。出るのは、ホバーしたときと、付箋を選んだとき
     renderNoteAccessory: noteAuthors.render,
     // 付箋を縦に積んでいる間は、接続線の代わりに、つながっている相手を付箋の下に出す（wema 0.15.0）。
     // 相手が子ページの付箋なら、本文（空）の代わりに、子ページの表示名を出す。表示名が後から

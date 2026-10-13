@@ -132,26 +132,32 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 /* 余白は、中の要素の側に付ける（要素を出さないときに、領域の高さが残らないように） */
 .wema-note-accessory > * { margin: 8px 0 4px; }
 .note-agent, .note-author {
-  box-sizing: border-box; height: 18px; border-radius: 9px; padding: 0 7px;
-  font: inherit; font-size: 11px; line-height: 16px; white-space: nowrap;
-}
-.note-agent {
-  border: 1px solid #fff; background: #6d28d9; color: #fff; font-weight: 600; cursor: pointer;
-  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
-}
-.note-author {
-  border: 1px solid rgb(0 0 0 / 0.15); background: #fff; color: #555;
-  max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  box-sizing: border-box; height: 18px; border: 1px solid rgb(0 0 0 / 0.15); border-radius: 9px;
+  background: #fff;
   /* 出し入れは visibility で行う。display で切り替えると高さが変わり、縦に積んでいる間は、
      ホバーのたびに列が積み直されて、付箋がポインタの下で動く */
   visibility: hidden;
 }
-.wema-note:hover .note-author, .wema-note-selected .note-author, .note-author-open { visibility: visible; }
+.note-author {
+  padding: 0 7px; color: #555; font-size: 11px; line-height: 16px; white-space: nowrap;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+}
+/* AI のアイコン。色は、それぞれのロゴの色 */
+.note-agent { flex: none; width: 18px; align-items: center; justify-content: center; color: #555; }
+.note-agent svg { width: 12px; height: 12px; }
+.note-agent-claude { color: #d97757; }
+.note-agent-openai { color: #000; }
+.wema-note:hover :is(.note-agent, .note-author),
+.wema-note-selected :is(.note-agent, .note-author) { visibility: visible; }
+/* 出している間は、付箋ごと手前へ上げる（下の領域が、後から触った付箋に隠れないように）。付箋は
+   それぞれが重なりの単位なので、下の領域だけを上げることはできない。wema が付箋の要素に直接書く
+   z-index に勝たせるため、!important を付ける。値は、wema の範囲選択の枠（9999）より下にする */
+.wema-note-has-accessory:is(:hover, .wema-note-selected) { z-index: 9998 !important; }
 /* 縦に積んでいる間は、隠している分の高さを空けない（すべての付箋の間隔が広がるため）。ホバーのない
-   画面なので、出すのは、付箋を選んだときと、印を押したとき。高さが変わり、列が積み直される */
-.wema-board.wema-stacked .note-author { display: none; }
-.wema-board.wema-stacked .wema-note-selected .note-author,
-.wema-board.wema-stacked .note-author-open { display: block; }
+   画面なので、出すのは、付箋を選んだときだけ。高さが変わり、列が積み直される */
+.wema-board.wema-stacked :is(.note-agent, .note-author) { display: none; }
+.wema-board.wema-stacked .wema-note-selected .note-author { display: block; }
+.wema-board.wema-stacked .wema-note-selected .note-agent { display: inline-flex; }
 /* 運んでいる付箋を放すと、中へ移る子ページの付箋（note-drop.ts） */
 .wema-note.drop-target { outline: 3px solid #2563eb; outline-offset: 2px; }
 /* 子ページへ送っている途中の付箋。放した直後から見えなくし、送り終えたら消す */
