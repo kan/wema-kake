@@ -2,6 +2,7 @@
 // ボードの操作の確定（history:commit）を ops として送り、受信した ops を applyRemote() で反映する。
 // DOM には依存しない（ボードとソケットは引数で受け取る）ので、テストからも動かせる。
 import { type BoardData, type HistoryDelta, invertDeltas } from '../shared/delta';
+import { applyOpToInfos, type NoteInfo } from '../shared/note-info';
 import {
   CLOSE_AUTH_EXPIRED,
   CLOSE_PAGE_DELETED,
@@ -70,6 +71,11 @@ export interface SyncHooks {
   onDeleted?(): void;
   /** 自分の操作がサーバーに拒否され、手元の変更を巻き戻した */
   onReject?(reason: string): void;
+  /**
+   * 付箋の付加情報（`noteInfo()`）が、確定した操作で変わった。`noteIds` には、削除された付箋も入る。
+   * スナップショットで全体が入れ替わったときは呼ばない（ボードが、すべての付箋を描き直す）
+   */
+  onNoteInfo?(noteIds: Set<string>): void;
 }
 
 const PING_INTERVAL_MS = 30_000;
@@ -115,6 +121,8 @@ export class BoardSync {
    */
   private epoch: string | undefined;
   private pending: Pending[] = [];
+  /** 付箋ごとの付加情報。自分が作って、まだ確定していない付箋のものは入っていない */
+  private infos = new Map<string, NoteInfo>();
   private socket: SyncSocket | undefined;
   private status: SyncStatus = 'connecting';
   private ready = false;
@@ -146,6 +154,11 @@ export class BoardSync {
   /** 未確定の操作の数 */
   get pendingCount(): number {
     return this.pending.length;
+  }
+
+  /** 付箋の付加情報（作成者、更新日時）。サーバーからまだ届いていなければ undefined */
+  noteInfo(noteId: string): NoteInfo | undefined {
+    return this.infos.get(noteId);
   }
 
   private setStatus(status: SyncStatus): void {
@@ -230,6 +243,9 @@ export class BoardSync {
     const msg = JSON.parse(data) as ServerMsg;
     switch (msg.type) {
       case 'snapshot':
+        // 付箋を描く処理が読めるよう、ボードを入れ替える前に更新する
+        // `info` を返さない古い Worker につながることがある（デプロイの途中）
+        this.infos = new Map(Object.entries(msg.info ?? {}));
         this.board.importData(msg.data);
         this.lastSeq = msg.seq;
         this.snapshotSeq = msg.seq;
@@ -293,7 +309,19 @@ export class BoardSync {
   }
 
   private onOps(msg: OpsMsg): void {
+    // すでに受け取った seq までの操作は、付加情報に反映してある（スナップショットに含まれていた操作、
+    // 再送への応答）。もう一度反映すると、更新日時が古い値に戻る。
+    // 付箋を描く処理が読めるよう、ボードに反映する前に更新する
+    const changed =
+      msg.createdAt !== undefined && msg.seq > (this.lastSeq ?? 0)
+        ? applyOpToInfos(this.infos, msg.actor, msg.createdAt, msg.deltas)
+        : undefined;
     this.lastSeq = Math.max(this.lastSeq ?? 0, msg.seq);
+    this.applyOps(msg);
+    if (changed?.size) this.hooks.onNoteInfo?.(changed);
+  }
+
+  private applyOps(msg: OpsMsg): void {
     // 取り消し（reverts）は API から行うので、自分の clientId でも手元には適用していない
     const own = msg.clientId === this.clientId && msg.reverts === undefined;
     if (!own) {

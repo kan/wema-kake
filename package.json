@@ -19,7 +19,7 @@
     "url": "git+https://github.com/kan/wema-kake.git"
   },
   "dependencies": {
-    "@kanf/wema": "^0.15.1",
+    "@kanf/wema": "^0.16.0",
     "@modelcontextprotocol/server": "^2.0.0",
     "agents": "^0.28.0",
     "hono": "^4.13.13",

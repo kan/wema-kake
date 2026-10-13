@@ -410,7 +410,7 @@ describe('ページの削除', () => {
     expect(await browser.closed).toMatchObject({ code: 4410 });
 
     expect(await stub.getSnapshot()).toEqual({
-      seq: 0, title: null, color: null, epoch: null, data: { version: 1, notes: [], edges: [] },
+      seq: 0, title: null, color: null, epoch: null, data: { version: 1, notes: [], edges: [] }, info: {},
     });
     const tables = await runInDurableObject(stub, (_do, state) =>
       state.storage.sql.exec(`SELECT count(*) AS c FROM sqlite_master`).one().c,

@@ -304,9 +304,11 @@ type ClientMsg =
 
 // Server → Client
 type ServerMsg =
-  | { type: 'snapshot'; seq: number; title: string | null; color: string | null; epoch: string | null; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] } }
+  | { type: 'snapshot'; seq: number; title: string | null; color: string | null; epoch: string | null; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] };
+      info: Record<NoteId, { createdBy: string | null; updatedAt: number }> }   // 付箋ごとの付加情報（後述）
   | { type: 'meta'; title: string | null; color: string | null; epoch: string | null }   // 表示名かページの色が変わった、またはページができた。seq は進まない
   | { type: 'ops'; seq: number; actor: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
+      createdAt?: number;         // 操作を記録した時刻。配信と、再接続のときの差分に付く。送信元にだけ返す確定（再送への応答など）には付かない
       reverts?: number;           // 取り消しなら、取り消した対象の seq（「取り消し」の節を参照）
       fixups?: HistoryDelta[] }   // fixups は送信元にだけ付ける（後述）
   | { type: 'reject'; opId: string; reason: string; fixups?: HistoryDelta[] }   // fixups はサーバーの現在値に合わせるデルタ
@@ -407,7 +409,25 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 - 書き込み系のツールは、記録した操作の番号（`operation`）を返す。LLM はこれを `revert_operation` に渡せる。**何も変わらなかった操作は番号を返さずにエラーにする**（`applyOps` は seq を進めないので、返すと別の操作の番号になる）
 - `revert_operation` が取り消せるのは、同じ主体（`agent:<client>`）の操作だけ。`operation` を省略すると、取り消しでない直近の自分の操作が対象になる
 - ツールが断る場合（ページがない、付箋がない、本文の競合など）は `ToolError` を投げ、MCP では `isError` の結果として返す。LLM が読んで直せるようにするため
-- アドバイスの付箋など agent が作った付箋を見分けられるよう、`created_by` を保存する。見た目での区別（専用の色、バッジ等）は未決定
+- アドバイスの付箋など agent が作った付箋を見分けられるよう、`created_by` を保存する。画面では、付箋の下に印を出す（下の「付箋ごとの付加情報」）
+
+### 付箋ごとの付加情報（作成者と更新日時）
+
+付箋の作成者（`created_by`）と、最後に更新した日時（`updated_at`）を、画面で付箋の近くに出す。AI（agent）が作った付箋には、印が常に出る。作成者と日時が出るのは、ホバーしたとき、付箋を選んだとき、印を押したときである。
+
+- **作成者と日時は、付箋のデータ（`WemaNote`、`meta`）に入れないこと。** サーバーが認証結果と時刻から決める値で、付箋のデータに入れると、クライアントが書き換えられる値になる。付箋の id ごとの「付加情報」として、付箋とは別に届ける（`src/shared/note-info.ts`）
+- 届け方は 2 つ。スナップショットには、付箋ごとの表（`info`）を載せる。操作の配信（`ops`）には、時刻（`createdAt`）だけを足す。画面は、操作の主体（`actor`）、`createdAt`、デルタの 3 つから、付加情報を組み立てる（`applyOpToInfos`）
+  - **`applyOpToInfos` の結果は、サーバーが付箋の行に書く値（`src/worker/apply-ops.ts` の `applyDeltas`）と同じにすること。** 作成で作成者と時刻が入り、更新で時刻だけが変わる。片方の規則を変えたら、もう片方も変える（合っているかは `test/sync.test.ts` が確かめている）
+  - 自分が作って、まだ確定していない付箋には、付加情報がない（何も描かない）。確定の `ops` が届いたときに入る
+- 表示は `src/web/note-authors.ts`。wema 0.16.0 の `renderNoteAccessory`（付箋の枠のすぐ下の領域）に描き、変わった付箋は `refreshNoteAccessory()` で描き直す（`BoardSync` の `onNoteInfo`）
+  - **`@kanf/wema` を 0.16.0 より前に下げないこと**（`renderNoteAccessory` がない）
+  - **領域（`container`）には、要素を直接入れること。行（`div`）で包まない。** ポインタを受けるのは直接入れた要素だけで、包むと、その行が幅いっぱいにクリックを受けて、広い画面で下の付箋を押せなくなる
+  - **ホバーでの出し入れは、`visibility` で書くこと。`display` で切り替えない。** 高さが変わると、縦に積んでいる間は、ホバーのたびに列が積み直されて、付箋がポインタの下で動く
+  - 縦に積んでいる間だけは、人の付箋の作成者と日時を `display: none` にしてある（隠した分の高さで、すべての付箋の間隔が広がるため）。出るのは、付箋を選んだときと、印を押したときで、そのとき列が積み直される。ホバーでは切り替えていないので、上の決まりとは食い違わない
+  - **要素を、付箋の枠に重ねないこと**（負の `margin-top` など）。右下の大きさを変えるハンドルと、下辺の中央のアンカーを覆って、押せなくなる
+  - 出るのはページの画面だけ。使い方の画面と一覧の画面には、作成者がいないので出さない
+- **この領域と経路は、付箋への反応（「いいね」など）にも使う前提で作ってある。** 項目を足すときは、`NoteInfo` に足して同じ経路で届け、`NoteAuthors` の `render` に要素を足す。履歴（`ops`）に積まない値は、`ops` とは別のメッセージで届ける
+- 付箋を消して Undo で戻すと、作成者は戻した人になる（サーバーは、付箋の作成のたびに、その操作の主体を作成者として書く）。AI の付箋を人が消して戻すと、印が消える
 
 ### 取り消し（revert）
 

@@ -101,8 +101,11 @@ export function failureMessage(key: FailureKey, e: unknown): string {
   return t(key, errorMessage(e));
 }
 
+// 付箋ごとに呼ばれる（作成者と更新日時の表示）ので、書式は 1 回だけ組み立てる
+const dateFormat = new Intl.DateTimeFormat(lang, {
+  year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+});
+
 export function formatDate(ms: number): string {
-  return new Date(ms).toLocaleString(lang, {
-    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
-  });
+  return dateFormat.format(ms);
 }

@@ -28,6 +28,7 @@ import {
   type Transition,
   viewSignal,
 } from './navigation';
+import { NoteAuthors } from './note-authors';
 import { dropOntoChildPages } from './note-drop';
 import { stackOnNarrow } from './stacked-view';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
@@ -135,6 +136,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   const body = el('div', { className: 'page-body' }, container);
   // 子ページの付箋は、本文の代わりに子ページの概要を出す。表示名を押すと、子ページへ入る
   const childNotes = new ChildNotes(slug, (child, noteId) => void zoom.enter(noteId, `/p/${child}`));
+  const noteAuthors = new NoteAuthors();
   const board = new WemaBoard({
     container,
     readOnly: true,
@@ -143,6 +145,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     // 他のページへのリンク（Wiki リンク）は、同じタブで開く
     onLinkClick: openInternalLink,
     renderNote: childNotes.render,
+    // 付箋の下に、作成者と更新日時を出す（wema 0.16.0）。AI が作った付箋には、印が常に出る
+    renderNoteAccessory: noteAuthors.render,
     // 付箋を縦に積んでいる間は、接続線の代わりに、つながっている相手を付箋の下に出す（wema 0.15.0）。
     // 相手が子ページの付箋なら、本文（空）の代わりに、子ページの表示名を出す。表示名が後から
     // 分かったときは、ChildNotes がその付箋を refreshNote() で描き直し、wema が相手の印も描き直す
@@ -364,6 +368,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   // --- 同期 ---
   const sync = new BoardSync(board, () => connect(slug), {
+    onNoteInfo: noteAuthors.refresh,
     // 最初の同期が済んだときに、1 回だけ呼ばれる
     onReady() {
       board.setReadOnly(false);
@@ -402,6 +407,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       );
     },
   });
+  noteAuthors.attach(board, (noteId) => sync.noteInfo(noteId));
   sync.start();
 
   // 付箋を、子ページの付箋の上へドラッグして放すと、その子ページへ移す（Ctrl / Cmd で写す）

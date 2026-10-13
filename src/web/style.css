@@ -125,6 +125,33 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
   display: flex; flex-direction: column; gap: 4px; box-sizing: border-box;
   padding: 6px 12px 12px; overflow: hidden;
 }
+/* 付箋の枠のすぐ下に出す、作成者と更新日時（note-authors.ts。wema の renderNoteAccessory の領域）。
+   右へ寄せる。付箋の枠には重ねない。重ねると、右下の大きさを変えるハンドルと、下辺の中央の
+   アンカー（枠から 6px はみ出す）を覆って、押せなくなる */
+.wema-note-accessory { justify-content: flex-end; padding-right: 2px; }
+/* 余白は、中の要素の側に付ける（要素を出さないときに、領域の高さが残らないように） */
+.wema-note-accessory > * { margin: 8px 0 4px; }
+.note-agent, .note-author {
+  box-sizing: border-box; height: 18px; border-radius: 9px; padding: 0 7px;
+  font: inherit; font-size: 11px; line-height: 16px; white-space: nowrap;
+}
+.note-agent {
+  border: 1px solid #fff; background: #6d28d9; color: #fff; font-weight: 600; cursor: pointer;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.25);
+}
+.note-author {
+  border: 1px solid rgb(0 0 0 / 0.15); background: #fff; color: #555;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  /* 出し入れは visibility で行う。display で切り替えると高さが変わり、縦に積んでいる間は、
+     ホバーのたびに列が積み直されて、付箋がポインタの下で動く */
+  visibility: hidden;
+}
+.wema-note:hover .note-author, .wema-note-selected .note-author, .note-author-open { visibility: visible; }
+/* 縦に積んでいる間は、隠している分の高さを空けない（すべての付箋の間隔が広がるため）。ホバーのない
+   画面なので、出すのは、付箋を選んだときと、印を押したとき。高さが変わり、列が積み直される */
+.wema-board.wema-stacked .note-author { display: none; }
+.wema-board.wema-stacked .wema-note-selected .note-author,
+.wema-board.wema-stacked .note-author-open { display: block; }
 /* 運んでいる付箋を放すと、中へ移る子ページの付箋（note-drop.ts） */
 .wema-note.drop-target { outline: 3px solid #2563eb; outline-offset: 2px; }
 /* 子ページへ送っている途中の付箋。放した直後から見えなくし、送り終えたら消す */

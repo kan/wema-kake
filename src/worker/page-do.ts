@@ -39,6 +39,7 @@ import {
   childPages,
   readBoard,
   readBoardWithAuthors,
+  readBoardWithInfos,
   readNotes,
   type Sanitized,
   sanitizeDeltas,
@@ -330,14 +331,14 @@ export class PageDO extends DurableObject<Env> {
 
   getSnapshot(): Snapshot {
     if (this.version === 0) {
-      return { seq: 0, title: null, color: null, epoch: null, data: { version: 1, notes: [], edges: [] } };
+      return { seq: 0, title: null, color: null, epoch: null, data: { version: 1, notes: [], edges: [] }, info: {} };
     }
     return {
       seq: this.getSeq(),
       title: this.getMeta('title'),
       color: this.getMeta('color'),
       epoch: this.getMeta('epoch'),
-      data: readBoard(this.sql),
+      ...readBoardWithInfos(this.sql),
     };
   }
 
@@ -968,7 +969,7 @@ export class PageDO extends DurableObject<Env> {
       seq, op.actor, op.clientId, op.opId, summary ?? null, op.reverts ?? null, now, body, fixupsJson,
     );
     const head: OpsHead = {
-      type: 'ops', seq, actor: op.actor, clientId: op.clientId, opId: op.opId, summary,
+      type: 'ops', seq, actor: op.actor, clientId: op.clientId, opId: op.opId, createdAt: now, summary,
       reverts: op.reverts,
     };
     const deliver = () => {
@@ -1223,7 +1224,7 @@ export class PageDO extends DurableObject<Env> {
     // 表示名の変更は seq を進めないので、切断中に変わっていても差分には出ない。現在値を送る
     send(ws, this.metaJson());
     const rows = this.sql.exec(
-      `SELECT seq, actor, client_id, op_id, summary, reverts, body, fixups FROM ops
+      `SELECT seq, actor, client_id, op_id, summary, reverts, created_at, body, fixups FROM ops
        WHERE seq > ? ORDER BY seq`,
       lastSeq,
     );
@@ -1234,6 +1235,7 @@ export class PageDO extends DurableObject<Env> {
         actor: row.actor as string,
         clientId: row.client_id as string,
         opId: row.op_id as string,
+        createdAt: row.created_at as number,
         summary: (row.summary as string | null) ?? undefined,
         reverts: (row.reverts as number | null) ?? undefined,
       };

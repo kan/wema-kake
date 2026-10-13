@@ -239,6 +239,7 @@ describe('revert', () => {
       actor: 'user:dev@example.com',
       clientId: 'browser-1',
       opId: 'rv',
+      createdAt: expect.any(Number),
       summary: `system:revert:${seq}`,
       reverts: seq,
       deltas: [{ type: 'note:delete', note: note('n1') }],

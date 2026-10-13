@@ -89,6 +89,11 @@ export const ja = {
 
   // --- ページの画面: 付箋の操作 ---
   'note.add': '付箋を追加',
+  /** AI（MCP のクライアント）が作った付箋の印 */
+  'author.agent': 'AI',
+  'author.agentTitle': (name: string) => `AI（${name}）が作った付箋。押すと、作成者と更新日時を出す`,
+  /** 付箋の作成者と、最後に更新した日時 */
+  'author.detail': (name: string, date: string) => `${name}・${date}`,
   'layout.title': '整列と配置',
   'align.left': '左端をそろえる',
   'align.center': '左右の中央をそろえる',

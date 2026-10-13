@@ -98,6 +98,8 @@ interface Client {
   statuses: SyncStatus[];
   titles: (string | null)[];
   rejects: string[];
+  /** 付加情報が変わったと通知された付箋の id */
+  infoChanges: string[];
   authExpired: boolean;
   /** 現在の接続をサーバー側から切る */
   drop(): Promise<void>;
@@ -123,6 +125,7 @@ function newClient(slug: string, connect?: () => Promise<SyncSocket>): Client {
     statuses: [],
     titles: [],
     rejects: [],
+    infoChanges: [],
     authExpired: false,
     drop: () =>
       runInDurableObject(env.PAGE.getByName(slug), (_do, state) => {
@@ -136,6 +139,7 @@ function newClient(slug: string, connect?: () => Promise<SyncSocket>): Client {
     onStatus: (status) => client.statuses.push(status),
     onTitle: (title) => client.titles.push(title),
     onReject: (reason) => client.rejects.push(reason),
+    onNoteInfo: (ids) => client.infoChanges.push(...ids),
     onAuthExpired: () => void (client.authExpired = true),
   };
   client.sync = new BoardSync(board, connect ?? (() => connectSocket(slug)), hooks);
@@ -191,6 +195,13 @@ describe('BoardSync', () => {
     expect(a.board.state()).toEqual(server);
     expect(b.board.state()).toEqual(server);
     expect(server.notes.map((n) => n.id)).toEqual(['n1']);
+    // 付箋の付加情報も、サーバーの付箋の行と同じ値になっている
+    const { info } = await env.PAGE.getByName(slug).getSnapshot();
+    expect(Object.keys(info)).toEqual(['n1']);
+    await until(() => a.sync.noteInfo('n1')?.updatedAt === info.n1.updatedAt);
+    expect(a.sync.noteInfo('n1')).toEqual(info.n1);
+    expect(b.sync.noteInfo('n1')).toEqual(info.n1);
+    expect(a.sync.noteInfo('n2')).toBeUndefined();
   });
 
   it('サーバーがサニタイズで変えた text を、送信元の手元にも反映する', async () => {
@@ -415,5 +426,52 @@ describe('BoardSync', () => {
     await until(() => a.authExpired);
     await new Promise((resolve) => setTimeout(resolve, 1200));
     expect(connections).toBe(1);
+  });
+
+  it('付箋の作成者と更新日時が、操作の確定とスナップショットで届く', async () => {
+    const slug = `sync-${++pageCount}`;
+    const DEV = 'user:dev@example.com';
+    const a = newClient(slug);
+    const b = newClient(slug);
+    await Promise.all([synced(a), synced(b)]);
+
+    // 人が作った付箋。送信元にも、確定で届く
+    a.board.act([createNote('n1')]);
+    expect(a.sync.noteInfo('n1')).toBeUndefined();
+    await synced(a);
+    await until(() => b.sync.noteInfo('n1') !== undefined && a.sync.noteInfo('n1') !== undefined);
+    expect(a.sync.noteInfo('n1')).toEqual(b.sync.noteInfo('n1'));
+    expect(b.sync.noteInfo('n1')?.createdBy).toBe(DEV);
+
+    // agent（MCP）が作った付箋を、人が動かす。作成者は agent のまま、時刻だけが進む
+    const stub = env.PAGE.getByName(slug);
+    await stub.applyOps({ actor: 'agent:claude.ai', clientId: 'mcp', opId: 'op1', deltas: [createNote('n2')] });
+    await until(() => a.sync.noteInfo('n2') !== undefined);
+    const created = a.sync.noteInfo('n2')!;
+    expect(created.createdBy).toBe('agent:claude.ai');
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    b.board.act([{ type: 'note:update', noteId: 'n2', before: { x: 10 }, after: { x: 300 } }]);
+    await synced(b);
+    await until(() => (a.sync.noteInfo('n2')?.updatedAt ?? 0) > created.updatedAt);
+    expect(a.sync.noteInfo('n2')?.createdBy).toBe('agent:claude.ai');
+
+    // 変わった付箋を通知し、手元の値はサーバーのスナップショットと一致する
+    expect(a.infoChanges).toEqual(expect.arrayContaining(['n1', 'n2']));
+    const { info } = await stub.getSnapshot();
+    expect(Object.keys(info).sort()).toEqual(['n1', 'n2']);
+    for (const id of ['n1', 'n2']) {
+      expect(a.sync.noteInfo(id)).toEqual(info[id]);
+      expect(b.sync.noteInfo(id)).toEqual(info[id]);
+    }
+
+    // 後から開いたクライアントは、スナップショットで受け取る
+    const c = newClient(slug);
+    await synced(c);
+    expect(c.sync.noteInfo('n2')).toEqual(info.n2);
+
+    // 削除で消える
+    a.board.act([{ type: 'note:delete', note: note('n1') }]);
+    await synced(a);
+    await until(() => b.sync.noteInfo('n1') === undefined && a.sync.noteInfo('n1') === undefined);
   });
 });

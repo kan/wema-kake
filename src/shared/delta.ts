@@ -1,4 +1,5 @@
 import type { HistoryDelta, WemaBoardData, WemaEdge, WemaNote } from '@kanf/wema';
+import type { NoteInfos } from './note-info';
 
 // 変更の単位は wema の HistoryDelta（Undo 1 回分を構成するデルタ）。
 // update の `after` にキーがなく `before` にあるものは「未設定に戻す」を表す。
@@ -43,4 +44,6 @@ export interface Snapshot {
    */
   epoch: string | null;
   data: BoardData;
+  /** 付箋ごとの付加情報（作成者、更新日時）。`data` の付箋と同じ id を持つ */
+  info: NoteInfos;
 }

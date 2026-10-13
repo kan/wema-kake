@@ -23,6 +23,7 @@ describe('GET /api/pages/:slug', () => {
       color: null,
       epoch: null,
       data: { version: 1, notes: [], edges: [] },
+      info: {},
     });
 
     const tables = await runInDurableObject(env.PAGE.getByName('first-page'), (_do, state) =>

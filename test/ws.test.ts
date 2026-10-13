@@ -16,6 +16,7 @@ describe('WebSocket', () => {
       color: null,
       epoch: null,
       data: { version: 1, notes: [], edges: [] },
+      info: {},
     });
   });
 
@@ -31,6 +32,7 @@ describe('WebSocket', () => {
       actor: 'user:dev@example.com',
       clientId: 'ca',
       opId: 'o1',
+      createdAt: expect.any(Number),
       deltas: [createNote('n1')],
     };
     expect(await a.next()).toEqual(expected);
@@ -116,6 +118,7 @@ describe('WebSocket', () => {
       actor: 'agent:claude',
       clientId: 'mcp',
       opId: 'o3',
+      createdAt: expect.any(Number),
       summary: 'add_notes',
       deltas: [createNote('n3')],
     });

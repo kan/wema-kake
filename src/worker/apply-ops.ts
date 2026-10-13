@@ -1,5 +1,6 @@
 import type { BoardData, HistoryDelta, WemaEdge, WemaNote } from '../shared/delta';
 import { CHILD_PAGE_KEY, childPageOf, childRejection } from '../shared/hierarchy';
+import type { NoteInfos } from '../shared/note-info';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import type { BoardState } from '../shared/tools';
 import { sanitizeHtml } from './sanitize';
@@ -163,6 +164,19 @@ const noteRows = (sql: SqlStorage) => sql.exec(`SELECT * FROM notes ORDER BY row
 export const readNotes = (sql: SqlStorage) => noteRows(sql).map(rowToNote);
 const readEdges = (sql: SqlStorage) => sql.exec(`SELECT * FROM edges ORDER BY rowid`).toArray().map(rowToEdge);
 
+/** ボードと、付箋ごとの付加情報（作成者、更新日時）。画面に渡す */
+export function readBoardWithInfos(sql: SqlStorage): { data: BoardData; info: NoteInfos } {
+  const rows = noteRows(sql);
+  // 代入で組み立てない。`__proto__` という id の付箋が、表から落ちる
+  const info: NoteInfos = Object.fromEntries(
+    rows.map((row) => [
+      row.id as string,
+      { createdBy: row.created_by as string | null, updatedAt: row.updated_at as number },
+    ]),
+  );
+  return { data: { version: 1, notes: rows.map(rowToNote), edges: readEdges(sql) }, info };
+}
+
 /** 付箋（作成者つき）と接続線。agent に渡す */
 export function readBoardWithAuthors(sql: SqlStorage): Pick<BoardState, 'notes' | 'edges'> {
   return {
@@ -171,9 +185,7 @@ export function readBoardWithAuthors(sql: SqlStorage): Pick<BoardState, 'notes' 
   };
 }
 
-export function readBoard(sql: SqlStorage): BoardData {
-  return { version: 1, notes: noteRows(sql).map(rowToNote), edges: readEdges(sql) };
-}
+export const readBoard = (sql: SqlStorage): BoardData => readBoardWithInfos(sql).data;
 
 export interface Sanitized {
   /** サニタイズで text が変わった付箋について、送信元の手元の状態を直すためのデルタ */

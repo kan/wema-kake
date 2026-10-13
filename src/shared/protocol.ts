@@ -1,4 +1,4 @@
-import type { BoardData, HistoryDelta } from './delta';
+import type { HistoryDelta, Snapshot } from './delta';
 
 /** 認証の期限が切れた接続を、サーバーが閉じるときのコード。クライアントは再読み込みして認証し直す */
 export const CLOSE_AUTH_EXPIRED = 4401;
@@ -32,6 +32,12 @@ export interface OpsMsg {
   actor: string;
   clientId: string;
   opId: string;
+  /**
+   * 操作を記録した時刻（UNIX ミリ秒）。付箋ごとの付加情報（src/shared/note-info.ts）の更新に使う。
+   * 配信と、再接続のときの差分に付く。配信しなかった結果を送信元にだけ返すとき（再送への応答、
+   * デルタをすべて捨てた操作）には付かない
+   */
+  createdAt?: number;
   /** サーバーが実際に適用したデルタ。送信元は自分の opId のものを適用しない */
   deltas: HistoryDelta[];
   summary?: string;
@@ -46,7 +52,7 @@ export interface OpsMsg {
 
 /** サーバー → ブラウザ */
 export type ServerMsg =
-  | { type: 'snapshot'; seq: number; title: string | null; color: string | null; epoch: string | null; data: BoardData }
+  | ({ type: 'snapshot' } & Snapshot)
   | OpsMsg
   /** 表示名か、ページの色が変わった。付箋の変更ではないので seq は進まない */
   | { type: 'meta'; title: string | null; color: string | null; epoch: string | null }
