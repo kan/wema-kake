@@ -179,17 +179,6 @@ export const ja = {
   'child.reject.ancestor': 'このページの先祖なので、輪になります',
   'child.reject.too-deep': (max: number) => `階層は ${max} 段までです`,
 
-  // --- 付箋のつながりの印（付箋を縦に積んでいる間、付箋の下に出す。読み上げ用の説明） ---
-  /** `note` は、相手の付箋の冒頭 */
-  'links.out': (note: string) => `つながり先: ${note}`,
-  'links.in': (note: string) => `つながり元: ${note}`,
-  'links.both': (note: string) => `相互のつながり: ${note}`,
-  'links.none': (note: string) => `つながり: ${note}`,
-  /** `link` は上の説明、`label` は接続線のラベル */
-  'links.labeled': (link: string, label: string) => `${link}（${label}）`,
-  /** 本文に文字のない付箋を、相手として出すとき */
-  'links.empty': '（本文なし）',
-
   // --- 使い方の画面 ---
   'help.unsaved': 'このボードは保存されません',
 };

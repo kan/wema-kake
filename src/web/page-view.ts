@@ -29,7 +29,6 @@ import {
   viewSignal,
 } from './navigation';
 import { dropOntoChildPages } from './note-drop';
-import { NoteLinkFooters } from './note-link-footer';
 import { stackOnNarrow } from './stacked-view';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
 import {
@@ -135,14 +134,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   const container = el('div', { className: 'board' });
   const body = el('div', { className: 'page-body' }, container);
   // 子ページの付箋は、本文の代わりに子ページの概要を出す。表示名を押すと、子ページへ入る
-  const childNotes = new ChildNotes(
-    slug,
-    (child, noteId) => void zoom.enter(noteId, `/p/${child}`),
-    // 子ページの表示名が分かったら、その付箋を相手にしている印も描き直す
-    (noteId) => noteLinks.refreshPeers(noteId),
-  );
-  // 付箋を縦に積んでいる間は、接続線の代わりに、つながっている相手を付箋の下に出す
-  const noteLinks = new NoteLinkFooters((child) => childNotes.titleOf(child));
+  const childNotes = new ChildNotes(slug, (child, noteId) => void zoom.enter(noteId, `/p/${child}`));
   const board = new WemaBoard({
     container,
     readOnly: true,
@@ -151,13 +143,20 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     // 他のページへのリンク（Wiki リンク）は、同じタブで開く
     onLinkClick: openInternalLink,
     renderNote: childNotes.render,
-    renderNoteFooter: noteLinks.render,
+    // 付箋を縦に積んでいる間は、接続線の代わりに、つながっている相手を付箋の下に出す（wema 0.15.0）。
+    // 相手が子ページの付箋なら、本文（空）の代わりに、子ページの表示名を出す。表示名が後から
+    // 分かったときは、ChildNotes がその付箋を refreshNote() で描き直し、wema が相手の印も描き直す
+    noteLinks: {
+      text(peer) {
+        const child = childPageOf(peer);
+        return child === undefined ? undefined : childNotes.titleOf(child);
+      },
+    },
     labels: WEMA_LABELS,
     // 空いている場所のドラッグは、表示位置を動かす。範囲で選ぶのは、Ctrl / Cmd か Shift + ドラッグ
     emptyDrag: 'pan',
   });
   childNotes.attach(board);
-  noteLinks.attach(board);
 
   // 倍率は、ページごとにブラウザへ保存する（次に開いたときと、子ページから戻ったときに使う）。
   // 表示位置は覚えず、開くたびに付箋全体の中央から始める

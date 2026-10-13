@@ -153,12 +153,5 @@ export const en = {
   'child.reject.ancestor': 'It is an ancestor of this page, so it would make a loop',
   'child.reject.too-deep': (max) => `Pages can be nested up to ${max} levels`,
 
-  'links.out': (note) => `Connects to: ${note}`,
-  'links.in': (note) => `Connected from: ${note}`,
-  'links.both': (note) => `Connected both ways: ${note}`,
-  'links.none': (note) => `Connected: ${note}`,
-  'links.labeled': (link, label) => `${link} (${label})`,
-  'links.empty': '(No text)',
-
   'help.unsaved': 'This board is not saved',
 } satisfies typeof ja;

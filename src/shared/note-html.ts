@@ -1,5 +1,5 @@
-// 付箋の text（HTML）からテキストを取り出すときに、Worker（検索の索引、LLM へ渡すテキスト。
-// src/worker/plain-text.ts）と、ブラウザ（付箋のつながりの印。src/web/note-links.ts）で共有するもの。
+// 付箋の text（HTML）からテキストを取り出すときに使うもの（検索の索引、LLM へ渡すテキスト。
+// src/worker/plain-text.ts）。HTMLRewriter に頼らないので、ブラウザの側からも使える。
 
 /** テキストにするときに、改行として扱うタグ */
 export const BLOCK_TAGS = ['br', 'div', 'p', 'li', 'ul', 'ol', 'blockquote'] as const;
