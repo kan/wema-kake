@@ -3,7 +3,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { createMcpHandler } from 'agents/mcp/server';
 import { type BoardAccess, TOOLS, ToolError } from '../../shared/tools';
-import type { McpProps } from './authorize';
 import { ServerBoardAccess } from './board-access';
 
 export function createMcpServer(access: BoardAccess): McpServer {
@@ -34,21 +33,12 @@ export function createMcpServer(access: BoardAccess): McpServer {
   return server;
 }
 
-/** 認証結果（OAuth で認可したときに保存した値）から、変更の主体を決める */
-export function actorFromProps(props: unknown): string {
-  const client = (props as Partial<McpProps> | undefined)?.client;
-  const name = typeof client === 'string' ? client.toLowerCase().replace(/[^a-z0-9.-]+/g, '-') : '';
-  return `agent:${name.replace(/^-+|-+$/g, '').slice(0, 64) || 'unknown'}`;
-}
-
 /**
- * `/mcp` のハンドラ。OAuthProvider の apiHandler として使う。アクセストークンの検証は
- * OAuthProvider が済ませていて、認可のときに保存した値が `ctx.props` に入っている。
+ * `/mcp` のハンドラ。認証は呼び出し側（`src/worker/index.ts`）が済ませていて、
+ * そこで決めた変更の主体（`agent:<client>`）を受け取る
  */
-export const mcpHandler = {
-  fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
-    const access = new ServerBoardAccess(env, actorFromProps(ctx.props));
-    // リクエストごとにサーバーを作る（MCP のサーバーは、同時に走るリクエストで共有できない）
-    return createMcpHandler(() => createMcpServer(access))(request, env, ctx);
-  },
-};
+export function handleMcp(request: Request, env: Env, ctx: ExecutionContext, actor: string): Promise<Response> {
+  const access = new ServerBoardAccess(env, actor);
+  // リクエストごとにサーバーを作る（MCP のサーバーは、同時に走るリクエストで共有できない）
+  return createMcpHandler(() => createMcpServer(access))(request, env, ctx);
+}

@@ -19,7 +19,6 @@
     "url": "git+https://github.com/kan/wema-kake.git"
   },
   "dependencies": {
-    "@cloudflare/workers-oauth-provider": "^1.2.3",
     "@kanf/wema": "^0.15.1",
     "@modelcontextprotocol/server": "^2.0.0",
     "agents": "^0.28.0",

@@ -79,7 +79,7 @@ src/
     note-text.ts   プレーンテキストから付箋の HTML への変換
     slug.ts        スラッグの検証
   worker/
-    index.ts       OAuthProvider の export、Hono アプリ、DO クラスの export
+    index.ts       Hono アプリ、DO クラスの export（2026-10-13 までは OAuthProvider の export も）
     access.ts      Access JWT の検証
     page-do.ts     PageDO（WebSocket、RPC、alarm）
     apply-ops.ts   検証と保存
@@ -89,7 +89,7 @@ src/
     indexer.ts     D1 への反映
     page-queries.ts  D1 の一覧と検索（HTTP API と MCP で共有）
     images.ts      R2 へのアップロードと配信
-    mcp/           createMcpHandler、ツールの実装、Access for SaaS のログイン処理
+    mcp/           createMcpHandler、ツールの実装（2026-10-13 までは、Access for SaaS のログイン処理も）
   web/             Vite でビルドし Static Assets で配信する
     main.ts        ルーティング（一覧、ページ）
     sync.ts        wema のイベントと WebSocket のメッセージの相互変換
@@ -252,11 +252,12 @@ wema のパンとズームの設計（kan/wema#52）には、次の 2 点を回�
 | パス | 保護 | 処理 |
 | --- | --- | --- |
 | `/`、`/p/*`、静的ファイル | Access | Static Assets |
-| `/api/*`、`/ws/*`、`/img/*` | Access | Worker。`Cf-Access-Jwt-Assertion` を `jose` で検証する |
-| `/mcp` | Bypass | Worker。OAuth のアクセストークンを検証する |
-| `/authorize`、`/token`、`/register`、`/callback`、`/.well-known/oauth-*` | Bypass | Worker（`OAuthProvider`） |
+| `/api/*`、`/ws/*`、`/img/*` | Access | Worker。`Cf-Access-Jwt-Assertion` を `jose` で検証する。人だけを通す |
+| `/mcp` | Access（Managed OAuth） | Worker。同じ JWT を検証する。agent だけを通す |
+| `/.well-known/oauth-*` と、認可やトークンのエンドポイント | Access | Access（Worker には届かない） |
 
-- Access アプリは、ホスト名全体を保護するものを 1 つと、Bypass するパスごとのものを作る
+- Access アプリは、ホスト名全体を保護するものを 1 つだけ作る
+- 2026-10-13 までは、`/mcp` と OAuth 用のパス（`/authorize`、`/token`、`/register`、`/callback`、`/.well-known/oauth-*`）を Bypass にして、Worker の `OAuthProvider` が処理していた。3.6 とフェーズ 6 の節の `OAuthProvider` の記述は、その頃のもの（フェーズ 6 の節の「MCP の認可を Managed OAuth に移す」を参照）
 - Worker で JWT を検証する目的は 2 つある。Access の設定を誤っても未認証のリクエストを通さないことと、`actor` に使う email を得ること
 - ローカル開発では Access がないので、開発用の変数で固定の email を使う。この変数は本番の設定には入れない
 
@@ -400,6 +401,48 @@ MCP の本文に、外部の URL へのリンクを書けるようにした（20
 - 押した先のサイトそのものの危険。これは、人が貼ったリンクと同じである
 
 スクリプトを実行させる手段にはならない。本文は、今までどおりサーバーのサニタイズを通り、スキームは許可リストで絞っている。
+
+#### MCP の認可を Managed OAuth に移す（2026-10-13、[#18](https://github.com/kan/wema-kake/issues/18)）
+
+上の構成（`OAuthProvider` と Access for SaaS）は、利用側に Access のアプリケーション 3 つ（画面用、Bypass、Access for SaaS）、secret 6 個、KV 1 つを作らせていた。Access の Managed OAuth に移して、アプリケーション 1 つと、設定の切り替え 1 つにした。
+
+Managed OAuth は、Self-hosted のアプリケーションの設定で、有効にすると Access がそのアプリケーションの OAuth 2.0 の認可サーバーになる。
+
+実装の前に、使い捨ての Worker（届いた JWT とヘッダーを返すだけのもの）を workers.dev に置いて確かめた。結果は次のとおり。
+
+| 確かめたこと | 結果 |
+| --- | --- |
+| 未認証の `POST /mcp` | 401。`WWW-Authenticate` の `resource_metadata` が `/.well-known/cloudflare-access-protected-resource/mcp` を指す |
+| `/.well-known/oauth-protected-resource/mcp`、`/.well-known/oauth-authorization-server` | Access が応答する。認可、トークン、登録、失効のエンドポイントは、チームドメインの `/cdn-cgi/access/oauth/` の下にある |
+| ブラウザらしいリクエスト（`Accept: text/html`） | これまでどおり、ログイン画面への 302 |
+| クライアントの動的な登録 | 通る。リダイレクト先は、Allowed redirect URIs か、localhost と loopback の許可に合うものだけ |
+| Worker に届くもの | `Cf-Access-Jwt-Assertion`。`Authorization` は届かない |
+| OAuth のトークンで届いたリクエストの JWT | ブラウザのときと同じ項目に加えて、`oauth: { client_id, client_redirect_uri }` が入る。クライアントが申告した名前は入らない |
+| `resource` に `/mcp` を指定して得たトークンで、別のパスを呼ぶ | 呼べる。Access はパスを区別しない |
+| トークンの期限と更新 | アクセストークンは 900 秒。更新のたびに、リフレッシュトークンが替わる。古いアクセストークンは、期限までは使える |
+| JWT の `exp` | 発行から 24 時間（アプリケーションのセッションの長さ）。アクセストークンの期限とは別 |
+| `ctx.access.getIdentity()` | ホスト名単位のアプリケーションでも、OAuth 経由でも使える。表示名、IdP のグループ、利用者の UUID が取れる |
+| claude.ai のコネクタ | つながり、ツールを呼べた。`client_redirect_uri` は `https://claude.ai/api/mcp/auth_callback` |
+
+確かめていないこと。
+
+- ChatGPT のコネクタ
+- Zero Trust の無料のプランで、Managed OAuth を有効にできるか（確かめたアカウントは、Workers の有料のプラン）
+- Grant session duration（リフレッシュトークンの期限。既定は、アプリケーションのセッションの長さと同じ）を、定期タスクで困らない長さにできるか
+
+この結果から、次のように決めた。
+
+- Worker の側の OAuth の処理（`OAuthProvider`、`/authorize`、`/callback`、サンプルから持ってきた `workers-oauth-utils.ts`、KV）を消す。同意の画面も Access が出す
+- 「リクエストから主体を返す」処理を 1 つにする（`src/worker/access.ts` の `authenticate`）。入口ごとに、人と agent のどちらを受け付けるかを渡す。Access がパスを区別しないので、この検査がないと、agent が画面用の API を呼べる
+- agent の主体は、認可のリダイレクト先のホスト名にする（`agent:claude.ai`）。それまでは、クライアントが申告した名前だった（`agent:claude`）。**移す前に agent が行った操作は、主体が違うので、MCP の `revert_operation` では取り消せない**（画面からは取り消せる）
+- 認可のたびに本人を確かめる形から、トークンの更新のたびに Access がポリシーを評価し直す形になった。「Access から外した人も、リフレッシュトークンの期限（30 日）までは MCP を使える」という制約はなくなった
+
+Managed OAuth は、ダッシュボードで「Beta」と表示されている。MCP がつながらなくなったときは、届いた JWT を確かめる。`Cf-Access-Jwt-Assertion` の中身（ペイロード）を、ログに出すか、同じような使い捨ての Worker で返して、`oauth` の項目の有無と形を見る。
+
+複数の利用者で使うようにするときのために、分かったことを残す。
+
+- Access から得られるのは「誰か」まで。JWT に `email` と `sub`、`getIdentity()` で表示名とグループ（IdP をつないだときだけ）。利用者の一覧、ページごとの権限、役割は、wema-kake の側に持つ
+- agent の JWT の `email` は、認可した人のもの。agent を、その人の代理として扱える。今は主体に入れていないので、2 人が同じクライアントを認可すると、どちらも `agent:claude.ai` になる
 
 ### セキュリティレビュー（フェーズ 6 の後）
 
@@ -965,8 +1008,8 @@ wema のロードマップにあった構想（付箋が子のボードのデー
 
 本番で使い始めてから出た要望を、このフェーズに足した（2026-10-04）。どれも、内容はまだ詰めていない。
 
-- MCP サーバーの設定を簡単にできないか、検討する
-  - 今は、Access のアプリケーションを 3 つ作り（画面用、MCP 用のパスの Bypass、Access for SaaS）、secret を 6 つ入れる。最初のデプロイでは、Access for SaaS のポリシーの付け忘れでつまずいた
+- MCP サーバーの設定を簡単にできないか、検討する（済み。2026-10-13 に、Access の Managed OAuth へ移した。フェーズ 6 の節の「MCP の認可を Managed OAuth に移す」）
+  - 移す前は、Access のアプリケーションを 3 つ作り（画面用、MCP 用のパスの Bypass、Access for SaaS）、secret を 6 つ入れる。最初のデプロイでは、Access for SaaS のポリシーの付け忘れでつまずいた
   - 案の 1 つは、OAuth のログインを自前で持つこと。Access for SaaS を使わなくなる分、設定は減る。本人確認を自分で実装することになるので、認証を Access に一元化する方針（`AGENTS.md` の「認証」）と比べて決める
 - MCP から、ページの作成などをできるようにする
   - フェーズ 6.6 では、LLM との連携を実際に使ってから決めることにしていた。使ってみた結果、やらせたいと判断した

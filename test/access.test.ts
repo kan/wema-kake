@@ -1,6 +1,7 @@
-import { env } from 'cloudflare:test';
+import { createExecutionContext, env } from 'cloudflare:test';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { agentActor } from '../src/worker/access';
 import { app } from '../src/worker/index';
 
 const TEAM = 'https://team.cloudflareaccess.com';
@@ -38,8 +39,9 @@ function token({
   iss = TEAM,
   aud = AUD,
   exp = '5m',
+  oauth = undefined as unknown,
 } = {}) {
-  return new SignJWT({ email })
+  return new SignJWT({ email, oauth })
     .setProtectedHeader({ alg: 'RS256', kid })
     .setIssuer(iss)
     .setAudience(aud)
@@ -72,25 +74,6 @@ describe('requireAccess', () => {
     expect(res.status).toBe(401);
   });
 
-  it('鍵のローテーション後は公開鍵を取り直す。ただし短い間隔では取り直さない', async () => {
-    const certs = mockCerts();
-    expect((await get({ 'Cf-Access-Jwt-Assertion': await token() })).status).toBe(200);
-    const fetched = certs.mock.calls.length;
-
-    const rotated = await generateKeyPair('RS256');
-    jwks = { keys: [{ ...(await exportJWK(rotated.publicKey)), kid: 'k2', alg: 'RS256' }] };
-    const newToken = await token({ key: rotated.privateKey, kid: 'k2' });
-
-    // 取得した直後は、知らない鍵 ID でも取り直さない
-    expect((await get({ 'Cf-Access-Jwt-Assertion': newToken })).status).toBe(401);
-    expect(certs.mock.calls.length).toBe(fetched);
-
-    const now = Date.now();
-    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000);
-    expect((await get({ 'Cf-Access-Jwt-Assertion': newToken })).status).toBe(200);
-    expect(certs.mock.calls.length).toBe(fetched + 1);
-  });
-
   it('JWT がなければ 401（DEV_USER_EMAIL があっても使わない）', async () => {
     const res = await get({}, { ...accessEnv, DEV_USER_EMAIL: 'dev@example.com' });
     expect(res.status).toBe(401);
@@ -119,5 +102,108 @@ describe('requireAccess', () => {
       accessEnv,
     );
     expect(res.status).toBe(401);
+  });
+});
+
+describe('agent と人の入口を分ける', () => {
+  /** Access の Managed OAuth のトークンで届いたリクエストの JWT に入る値 */
+  const CLAUDE = { client_id: 'c1', client_redirect_uri: 'https://claude.ai/api/mcp/auth_callback' };
+
+  const mcp = (headers: Record<string, string>, e: object = accessEnv) =>
+    app.request(
+      'https://wiki.example.com/mcp',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...headers },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+      },
+      e,
+      createExecutionContext(),
+    );
+
+  it('OAuth のトークンで届いたリクエストは、/mcp だけを通す', async () => {
+    mockCerts();
+    const jwt = await token({ oauth: CLAUDE });
+    expect((await mcp({ 'Cf-Access-Jwt-Assertion': jwt })).status).toBe(200);
+    expect((await get({ 'Cf-Access-Jwt-Assertion': jwt })).status).toBe(403);
+    const ws = await app.request(
+      'https://wiki.example.com/ws/memo',
+      { headers: { Upgrade: 'websocket', 'Cf-Access-Jwt-Assertion': jwt } },
+      accessEnv,
+    );
+    expect(ws.status).toBe(403);
+  });
+
+  it('oauth の中身が期待と違っても、人の入口は通さない', async () => {
+    mockCerts();
+    for (const oauth of [{}, null, 'x']) {
+      expect((await get({ 'Cf-Access-Jwt-Assertion': await token({ oauth }) })).status).toBe(403);
+    }
+  });
+
+  it('ブラウザのログインで届いたリクエストは、/mcp を通さない', async () => {
+    mockCerts();
+    expect((await mcp({ 'Cf-Access-Jwt-Assertion': await token() })).status).toBe(403);
+    expect((await mcp({})).status).toBe(401);
+  });
+
+  it('エンコードしたパスでも、/mcp は agent だけを通す', async () => {
+    mockCerts();
+    const encoded = (jwt: string) =>
+      app.request(
+        'https://wiki.example.com/%6dcp',
+        { method: 'POST', headers: { 'Cf-Access-Jwt-Assertion': jwt } },
+        accessEnv,
+        createExecutionContext(),
+      );
+    expect((await encoded(await token())).status).toBe(403);
+  });
+
+  it('/mcp も、他のオリジンからのリクエストを断る', async () => {
+    mockCerts();
+    const res = await mcp({
+      'Cf-Access-Jwt-Assertion': await token({ oauth: CLAUDE }),
+      Origin: 'https://evil.example.com',
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('Access が未設定のとき、/mcp もローカルのホスト名でだけ有効', async () => {
+    const devEnv = { ...env, ACCESS_TEAM_DOMAIN: '', ACCESS_AUD: '', DEV_USER_EMAIL: 'dev@example.com' };
+    expect((await mcp({}, devEnv)).status).toBe(500);
+  });
+
+  it('agent の主体は、認可のリダイレクト先のホスト名から決める', () => {
+    expect(agentActor(CLAUDE.client_redirect_uri)).toBe('agent:claude.ai');
+    expect(agentActor('https://ChatGPT.com/connector_platform_oauth_redirect')).toBe('agent:chatgpt.com');
+    expect(agentActor('http://localhost:8976/callback')).toBe('agent:localhost');
+    expect(agentActor('http://127.0.0.1:8976/callback')).toBe('agent:localhost');
+    expect(agentActor('http://[::1]:8976/callback')).toBe('agent:localhost');
+    expect(agentActor('com.example.app:/callback')).toBe('agent:com.example.app');
+    expect(agentActor('cursor://anysphere.cursor-mcp/oauth/callback')).toBe('agent:anysphere.cursor-mcp');
+    expect(agentActor('not a url')).toBe('agent:unknown');
+    expect(agentActor(undefined)).toBe('agent:unknown');
+  });
+});
+
+// 公開鍵を入れ替えるので、このファイルの最後に置く（後のテストが、古い鍵で署名できなくなる）
+describe('公開鍵のローテーション', () => {
+  it('ローテーション後は公開鍵を取り直す。ただし短い間隔では取り直さない', async () => {
+    const certs = mockCerts();
+    expect((await get({ 'Cf-Access-Jwt-Assertion': await token() })).status).toBe(200);
+    const fetched = certs.mock.calls.length;
+
+    const rotated = await generateKeyPair('RS256');
+    jwks = { keys: [{ ...(await exportJWK(rotated.publicKey)), kid: 'k2', alg: 'RS256' }] };
+    const newToken = await token({ key: rotated.privateKey, kid: 'k2' });
+
+    // 取得した直後は、知らない鍵 ID でも取り直さない
+    expect((await get({ 'Cf-Access-Jwt-Assertion': newToken })).status).toBe(401);
+    expect(certs.mock.calls.length).toBe(fetched);
+
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now + 60_000);
+    expect((await get({ 'Cf-Access-Jwt-Assertion': newToken })).status).toBe(200);
+    expect(certs.mock.calls.length).toBe(fetched + 1);
   });
 });

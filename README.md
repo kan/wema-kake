@@ -46,18 +46,18 @@ wema の側に要る機能は、wema へ依頼して入れてもらい、その�
 | ページの一覧と全文検索 | D1 |
 | 画像 | R2 |
 | 認証 | Cloudflare Access |
-| LLM との連携 | リモート MCP（OAuth 2.1。ログインは Access for SaaS） |
+| LLM との連携 | リモート MCP（認可は、Access の Managed OAuth） |
 
 ## デプロイ
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/kan/wema-kake)
 
-ボタンを押すと、リポジトリを自分のアカウントへ複製し、D1、KV、R2 を作って、Worker をデプロイします。ボタンからのデプロイは、作者の環境では試していません。うまくいかない場合は、下の「手動でのデプロイ」を使ってください。
+ボタンを押すと、リポジトリを自分のアカウントへ複製し、D1、R2 を作って、Worker をデプロイします。ボタンからのデプロイは、作者の環境では試していません。うまくいかない場合は、下の「手動でのデプロイ」を使ってください。
 
 **デプロイしただけでは、まだ使えません。** Cloudflare Access を設定するまで、データを読み書きする API は 500 を返します（保護のない状態で公開しないためです）。続けて、次を設定します。
 
-1. 画面用の Access アプリケーション（Self-hosted）を作り、チームドメインと AUD タグを、Worker の変数 `ACCESS_TEAM_DOMAIN` と `ACCESS_AUD` に入れる
-2. MCP を使う場合は、MCP 用のパスを Access から外し、Access for SaaS（OIDC）のアプリケーションを作って、secret を入れる
+1. Access アプリケーション（Self-hosted）を、ホスト名全体を宛先にして 1 つ作り、チームドメインと AUD タグを、Worker の変数 `ACCESS_TEAM_DOMAIN` と `ACCESS_AUD` に入れる
+2. MCP を使う場合は、そのアプリケーションの設定で Managed OAuth を有効にし、つなぐクライアントのリダイレクト先を許可する
 
 手順の詳細と、つまずきやすい点は、[AGENTS.md の「デプロイ」](AGENTS.md#デプロイ)に書いてあります。
 
@@ -72,7 +72,6 @@ npm install
 cp wrangler.jsonc wrangler.deploy.jsonc
 
 npx wrangler d1 create wema-kake
-npx wrangler kv namespace create OAUTH_KV
 npx wrangler r2 bucket create wema-kake-images
 # 表示された ID と、Access の値を wrangler.deploy.jsonc に書く
 

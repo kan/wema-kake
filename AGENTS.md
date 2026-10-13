@@ -18,8 +18,8 @@
 | リアルタイム通信 | WebSocket（DO の Hibernation API を使う） |
 | 横断索引 | D1（ページ一覧・検索・バックリンク） |
 | 画像 | R2 |
-| 認証 | Cloudflare Access（MCP は Access を上流 IdP にした OAuth） |
-| LLM 連携 | リモート MCP サーバー（Workers 上、`workers-oauth-provider`）。WebMCP は後から追加 |
+| 認証 | Cloudflare Access（MCP の認可は、Access の Managed OAuth） |
+| LLM 連携 | リモート MCP サーバー（Workers 上）。WebMCP は後から追加 |
 | フロント | `@kanf/wema` |
 
 役割分担の原則:
@@ -47,39 +47,38 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 ## デプロイ
 
-- **このリポジトリは公開している。デプロイ先ごとの値を、git に入れるファイルへ書かないこと。** 対象は、Worker の名前、ホスト名、D1 と KV の ID、Access のチームドメインと AUD タグ、`SITE_ORIGIN`。文書（`docs/`、この `AGENTS.md`）にも、実際のホスト名や ID を書かない
+- **このリポジトリは公開している。デプロイ先ごとの値を、git に入れるファイルへ書かないこと。** 対象は、Worker の名前、ホスト名、D1 の ID、Access のチームドメインと AUD タグ、`SITE_ORIGIN`。文書（`docs/`、この `AGENTS.md`）にも、実際のホスト名や ID を書かない
 - `wrangler.jsonc` は、ローカル開発とテストに使う。値は空のまま保つ
 - デプロイ用の設定は `wrangler.deploy.jsonc`（`.gitignore` 済み）。`wrangler.jsonc` をコピーして、デプロイ先の値を書く。**`wrangler.jsonc` のバインディングや `run_worker_first` を変えたら、`wrangler.deploy.jsonc` にも同じ変更を入れること**（wrangler は設定を継承できないので、丸ごとのコピーになっている）
 - デプロイは `npm run deploy`（`scripts/deploy.mjs`）。本番の D1 のマイグレーションを適用してから、Worker をデプロイする。設定は、`wrangler.deploy.jsonc` があればそれを、なければ `wrangler.jsonc` を使う（後者は、README の「Deploy to Cloudflare」ボタンからのデプロイのため。**`wrangler.deploy.jsonc` を消したまま `npm run deploy` を実行すると、`wrangler.jsonc` の名前で別の Worker ができる**）
 - マイグレーションだけを適用するには `npx wrangler d1 migrations apply DB --remote --config wrangler.deploy.jsonc`
-- secret は `npx wrangler secret put <名前> --config wrangler.deploy.jsonc` で入れる
+- secret は使っていない（Access の設定は `vars` の 2 つだけ）
 - 最初のデプロイの手順
-  1. D1、KV、R2 バケットを作り、ID を `wrangler.deploy.jsonc` に書く。マイグレーションを適用して、デプロイする。**Access の値が空の間、`/api`、`/ws`、`/img` は 500、`/authorize` は 503 を返す**（保護のない状態では、データを読み書きできない）
-  2. 画面用の Access アプリケーション（Self-hosted）を作り、チームドメインと AUD タグを `wrangler.deploy.jsonc` に書いて、デプロイし直す。チームドメインは、末尾のスラッシュを付けない
-  3. 同じホスト名で、Access アプリケーションをもう 1 つ作る。パスは `/mcp`、`/authorize`、`/callback`、`/token`、`/register`、`/.well-known/*`、ポリシーは Bypass（Everyone）
-  4. Access for SaaS（OIDC）のアプリケーションを作る。リダイレクト先は `https://<ホスト名>/callback`、スコープは `openid`、`email`、`profile`。**このアプリケーションにも、Allow のポリシーが要る**（画面用のアプリケーションとは別。ないと、ログインの後に「That account does not have access」と出る）。表示された値と、乱数で作った `COOKIE_ENCRYPTION_KEY` を、secret に入れる
-  5. 未ログインの `curl` で確かめる。保護したパスは Access のログイン画面へ転送され、`/mcp` は 401、`/authorize` はクライアントの登録後に 200 を返す
-  - ポリシーを直した後は、MCP のクライアントの側で、接続を最初からやり直す。Access のエラーの画面からログインし直すと、戻り先が失われて、App Launcher の案内が出る
+  1. D1、R2 バケットを作り、ID を `wrangler.deploy.jsonc` に書く。マイグレーションを適用して、デプロイする。**Access の値が空の間、`/api`、`/ws`、`/img`、`/mcp` は 500 を返す**（保護のない状態では、データを読み書きできない）
+  2. Access アプリケーション（Self-hosted）を 1 つ作る。宛先はホスト名だけ（パスは空）、ポリシーは Allow。チームドメインと AUD タグを `wrangler.deploy.jsonc` に書いて、デプロイし直す。チームドメインは、末尾のスラッシュを付けない
+  3. MCP を使うなら、そのアプリケーションの Additional settings の「OAuth」で、**Managed OAuth** を有効にする。Allowed redirect URIs に、つなぐクライアントのコールバックを入れる。claude.ai は `https://claude.ai/api/mcp/auth_callback`、ChatGPT は `https://chatgpt.com/connector_platform_oauth_redirect`。手元のクライアント（Claude Code など）からつなぐなら、Allow localhost clients と Allow loopback clients も有効にする
+  4. 未ログインの `curl` で確かめる。Managed OAuth を有効にしていれば、`/api/session` と `POST /mcp` は 401 を返し、`WWW-Authenticate` に `resource_metadata` が入る（有効にしていなければ、Access のログイン画面への 302）。ブラウザで開くと、どちらの場合もログイン画面へ転送される
+  - **Worker 単位の保護（Worker の「Access」タブの「Protect this Worker behind Access」）は使わない。** WebSocket に対応していない
+  - **`/mcp` を Bypass にするアプリケーションを作らない。** Access を通らないリクエストには JWT が付かないので、Worker が 401 を返す
 
 ## 認証
 
-- **ブラウザ向けの画面と WebSocket**: Cloudflare Access のアプリケーションで保護する
-- **MCP エンドポイント（`/mcp` と OAuth 用のパス）**: Access アプリケーションの保護対象から外し、Worker 自身が `@cloudflare/workers-oauth-provider` で OAuth 2.1 を処理する。ログインの実体は Access for SaaS（OIDC）に委ねるので、認証の仕組みは Access に一元化される
-- claude.ai / ChatGPT のコネクタはそれぞれのサーバーから接続してくるため、`/mcp` まで Access のログイン画面で塞ぐと接続できない。パスの切り分けを間違えないこと
-- 参考: Cloudflare 公式の「Secure MCP servers with Access for SaaS」とサンプル `cloudflare/ai/demos/remote-mcp-cf-access`
-- **Worker の入口は `OAuthProvider`**（`src/worker/index.ts`）。`/mcp` は Worker が発行したアクセストークンで保護し、`/token`、`/register`、`/.well-known/*` は `OAuthProvider` が処理する。`/authorize` と `/callback` は `src/worker/mcp/authorize.ts`、それ以外は下の Access の JWT 検証を掛けたアプリ（`app`）に届く
-  - Access for SaaS の設定は wrangler secret で入れる: `ACCESS_CLIENT_ID`、`ACCESS_CLIENT_SECRET`、`ACCESS_TOKEN_URL`、`ACCESS_AUTHORIZATION_URL`、`ACCESS_JWKS_URL`、`COOKIE_ENCRYPTION_KEY`。**1 つでも欠けていれば `/authorize` と `/callback` は 503 を返す**（認可を完了できないので、`/mcp` は誰も使えない）
-  - OAuth のデータ（クライアントの登録、認可コード、トークン）は KV（`OAUTH_KV`）に置く
-  - `/callback` では Access の ID トークンの署名、期限、宛先（`ACCESS_CLIENT_ID`）を `jose` で検証する。**サンプルの `verifyToken` は宛先を確かめないので使わない**
-  - **認可の state は、承認したブラウザに Cookie（`__Host-OAUTH_STATE`）で結び付ける。`/callback` はこの Cookie が state と対応しなければ断る。この検査を外さないこと**。クライアントの登録（`/register`）は誰でもできるので、検査がないと、攻撃者が自分のクライアントで承認まで済ませて Access のログインの URL を利用者に踏ませるだけで、利用者の権限のトークンを得られる
-  - 本人確認は認可のときの 1 回だけ。Access から外した人も、リフレッシュトークンの期限（`OAuthProvider` の既定で 30 日）までは MCP を使える。すぐに止めるには、KV（`OAUTH_KV`）からその人の認可を消す
-  - POST `/authorize` はフォームから認可要求を受け取る。**登録済みのクライアントとリダイレクト先かを確かめ直すこと**（`isRegisteredRequest`）
-  - 変更の主体は `agent:<OAuth クライアントの名前>`（`actorFromProps`）。認可のときに `props` に保存した値から決める。クライアントの名前は自己申告なので、権限の判定には使わない（誰が認可したかは `props.email`）
-  - `src/worker/mcp/workers-oauth-utils.ts` はサンプルの無改変コピー（MIT）。**ここを直接編集しない**。上流の更新を取り込むときは丸ごと差し替える
-- **Worker でも Access の JWT（`Cf-Access-Jwt-Assertion`）を検証する**（`src/worker/access.ts`）。Access の設定を誤っても未認証のリクエストを通さないためと、変更の主体（`user:<email>`）を得るため。`app` に届くリクエストすべてに掛けてある（`src/worker/index.ts` の `app.use(requireAccess)`）。**認証なしで公開するパス（`/mcp` と OAuth 用）は、このアプリの外に置くこと。このミドルウェアを外したり、パスを列挙する形に戻したりしない**
+- **画面と `/mcp` の両方を、Cloudflare Access のアプリケーション 1 つで保護する。** ホスト名全体を宛先にする。認証なしで公開するパスはない
+- **MCP のクライアントは、Access の Managed OAuth で認可する。** 2026-10-13 に、Access for SaaS と `@cloudflare/workers-oauth-provider` から移した。経緯は `docs/plan.md` の「MCP の認可を Managed OAuth に移す」にある
+  - クライアントの登録、同意の画面、トークンの発行と更新、`/.well-known/oauth-*` は、Access が処理する。**Worker には届かないので、Worker の側に OAuth の処理を足し直さないこと**
+  - ブラウザでないクライアントが未認証で届くと、Access は 401 と `WWW-Authenticate`（`resource_metadata`）を返す。ブラウザには、これまでどおりログイン画面への転送を返す
+  - Worker には、ブラウザのときと同じ `Cf-Access-Jwt-Assertion` が届く。**OAuth のトークンで届いたリクエストの JWT にだけ、`oauth`（`client_id` と `client_redirect_uri`）が入る**
+  - トークンを更新するたびに、Access がポリシーを評価し直す。Access から外した人の agent は、アクセストークンの期限（既定で 15 分）で使えなくなる
+  - Managed OAuth は、ダッシュボードで「Beta」と表示されている（2026-10-13 時点）。仕様が変わって MCP がつながらなくなったら、まず JWT の `oauth` の形を確かめる（確かめ方は `docs/plan.md` の同じ節）
+- **Worker でも Access の JWT を検証し、主体を決める**（`src/worker/access.ts` の `authenticate`）。Access の設定を誤っても未認証のリクエストを通さないためと、変更の主体を得るため。**画面からのリクエストと MCP の両方を、この 1 つの処理に通す。** `src/worker/index.ts` で、`app` が受けるリクエストすべてを対象にしてある。**このミドルウェアを外したり、認証を掛けるパスを列挙する形に戻したりしない**
+  - **Access はパスを区別しない。OAuth のトークンでも `/api` や `/ws` に届く。** 入口ごとに、受け付ける主体の種類（`PrincipalKind`）を宣言してある。`/mcp` は `requireAccess('agent')`（JWT に `oauth` がある）、それ以外は `app.use(requireAccess('user'))`（`oauth` がない）で、合わなければ 403 を返す
+  - **agent 向けの入口は、`app.use(requireAccess('user'))` より前に、ルートごとに `requireAccess('agent')` を付けて置く。** それより後ろに足したルートは、人だけを通す。**種類を、パスの文字列の比較で決める形にしないこと。** Hono はパスをデコードして照合するので、`/%6dcp` のようなパスで、判定とルーティングが食い違う
+  - 人の主体は `user:<email>`。agent の主体は `agent:<認可のリダイレクト先のホスト名>`（`agentActor`。claude.ai なら `agent:claude.ai`）。リダイレクト先は、Access の Allowed redirect URIs で許可したものに限られる。クライアントが登録のときに申告する名前は、JWT に入らない。手元のクライアント（リダイレクト先が localhost）は、どれも `agent:localhost` になる
+  - **人と agent を分けているのは、JWT の `oauth` の有無だけ。** Access がこの項目を出さなくなると、agent が人として扱われ、`/api` などを呼べる（`/mcp` は 403 になる）。Managed OAuth の仕様の変更を知ったら、最初にここを確かめる
+  - agent の JWT の `email` は、その agent を認可した人のもの（agent は、その人の代理）。今は記録していない。複数の利用者で使うようにするときに、主体に足す
   - 設定は `wrangler.jsonc` の `vars` の `ACCESS_TEAM_DOMAIN`（`https://<team>.cloudflareaccess.com`）と `ACCESS_AUD`（Access アプリケーションの AUD タグ）。両方が空なら 500 を返す
-  - ローカル開発は `.dev.vars` の `DEV_USER_EMAIL` を使う（`.dev.vars.example` を参照）。ローカルのホスト名（`localhost`、`127.0.0.1`、`[::1]`、`.localhost` で終わる名前）へのリクエストでだけ有効で、Access の設定があれば無視される。**ローカルと見なすホスト名を、これより広げないこと**（`src/worker/access.ts` の `isLocalHost`。`.localhost` はループバック専用の予約名なので、デプロイ先のホスト名には当たらない）
-  - ローカルのリバースプロキシ [roji](https://github.com/kan/roji)（`{host}` の置き換えがある 1.5.0 以降）を使うなら `npm run dev:roji`。空いているポートで起動し、`https://wema-kake.<roji のドメイン>` で開ける。**`wrangler dev` の `--host {host} --upstream-protocol https` を外さないこと。** 外すと、Worker から見たオリジンが `http://<ホスト名>` になる。このオリジンでは `OAuthProvider` が例外を投げて、Worker が処理するパス（`/api`、`/.well-known/*` など）が 500 になる
+  - ローカル開発は `.dev.vars` の `DEV_USER_EMAIL` を使う（`.dev.vars.example` を参照）。`/mcp` の主体は `agent:local` になる。ローカルのホスト名（`localhost`、`127.0.0.1`、`[::1]`、`.localhost` で終わる名前）へのリクエストでだけ有効で、Access の設定があれば無視される。**ローカルと見なすホスト名を、これより広げないこと**（`src/worker/access.ts` の `isLocalHost`。`.localhost` はループバック専用の予約名なので、デプロイ先のホスト名には当たらない）
+  - ローカルのリバースプロキシ [roji](https://github.com/kan/roji)（`{host}` の置き換えがある 1.5.0 以降）を使うなら `npm run dev:roji`。空いているポートで起動し、`https://wema-kake.<roji のドメイン>` で開ける。**`wrangler dev` の `--host {host} --upstream-protocol https` を外さないこと。** 外すと、Worker から見たオリジンが `http://<ホスト名>` になる。ブラウザが送る `Origin`（`https://<ホスト名>`）と合わなくなり、状態を変えるリクエストと WebSocket の接続が、オリジンの検査で 403 になる
 - WebSocket の接続要求は `Origin` を確かめ、他のオリジンからの接続を断る（WebSocket は同一オリジンの制約を受けず、Access の Cookie は他サイトからの接続にも付くため）
 - 主体はクライアントの自己申告を使わない。Worker が認証結果から決めて DO に渡す
 - `clientId` はクライアントの自己申告なので、**同じ送信元かどうかの判定（再送の判定、`fixups` の宛先）には主体も合わせて使う**
@@ -368,8 +367,8 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 
 ### 実装方針
 
-- Workers 上に置き、`/mcp` で Streamable HTTP を提供する。OAuth は前述のとおり `workers-oauth-provider` + Access for SaaS
-- MCP のハンドラは `agents` の `createMcpHandler`（ステートレス）で作る。`McpAgent` は非推奨で機能凍結されている。公式サンプル `remote-mcp-cf-access` は `McpAgent` のままなので、流用するのは OAuth 部分（Access for SaaS のログイン処理）だけにする
+- Workers 上に置き、`/mcp` で Streamable HTTP を提供する。認可は、前述のとおり Access の Managed OAuth
+- MCP のハンドラは `agents` の `createMcpHandler`（ステートレス）で作る。`McpAgent` は非推奨で機能凍結されている。このハンドラは、他のオリジンからのリクエスト（`Origin` が違うもの）を 403 で断る
 - MCP サーバーは「DO に `ops` を送る一クライアント」として実装する。ツールは該当ページの DO の `applyOps` を呼ぶだけで、検証・サニタイズ・保存・ブロードキャストはブラウザからの変更と共通
 - 1 回のツール呼び出し = 1 つの `ops`（`actor: 'agent:<client>'`、`summary` にツール名と LLM が渡した説明）。複数の付箋を動かす整理も 1 つの `ops` にまとめ、後から 1 操作として取り消せるようにする
 - ツールの定義（名前・説明・入力スキーマ）は共通モジュールに置き、将来の WebMCP 版と共有する。実装は「ボードを読む・デルタを適用する」インターフェース越しに書き、サーバー版（DO を呼ぶ）とブラウザ版（wema の API を呼ぶ）を差し替えられるようにする
@@ -480,7 +479,7 @@ WebMCP 版はブラウザ内で wema の API を直接呼ぶので、LLM の変�
   - サーバーが付ける操作の要約は、文言ではなく符号で保存する（`src/shared/op-summary.ts`。`system:page-created` など）。画面が、今の言語の文言にして出す。**サーバーで、利用者に見せる文を組み立てて保存しないこと**
   - wema が描く部分（ポップアップ、ツールバー、畳んだ付箋の開閉のリンク）の文言は、wema の `labels` で渡す（wema 0.10.0）。**ボードを作るところでは、必ず `labels: WEMA_LABELS`（`src/web/toolbar.ts`）を渡すこと。** 日本語は wema に同梱の `jaLabels`、英語は wema の既定。`foldLabels` は使わない
   - autoSize の付箋の大きさは、wema が読み込んだときに計測する（wema 0.10.0）。**ボードは、画面に出ている要素の中に作ること。** 出ていない要素の中では計測されず、接続線が、保存された大きさで引かれる（使い方の画面は、ボードを置く要素を先に画面へ足している）
-  - 対象にしていないもの: MCP のツールの説明と返す文、MCP の認可の同意の画面、API のエラーの `error`（英語）
+  - 対象にしていないもの: MCP のツールの説明と返す文、API のエラーの `error`（英語）
 - **ブックマーク**（`src/web/bookmarks.ts`）: ページの画面の表示名の後ろの ★ で、そのページを自分のブックマークに入れる。利用者ごとに D1 の `bookmarks` に保存する。**ブラウザ（localStorage）には保存しない**（別の端末でも同じ一覧を出すため）
 - **他のページへ移るための一覧**（`src/web/bookmarks.ts` の `pageNavMenu`。ページの画面と一覧の画面の、ヘッダーの右のボタン）: ブックマークしたページ（付けた順、★ の印）を上に固定する。その下に、最近更新のあったページを 5 件出す（子ページも含む。ブックマークしたページは重ねて出さない）。上の入力欄に文字を入れると、全部のページから、表示名かスラッグにその文字を含むページを出す（`GET /api/pages?name=`。本文は見ない。新しい順に 30 件までで、それより多いときは、その旨を出す）。Enter で、先頭のページへ移る。開くたびに読み直す。並べる順を決める計算は `src/web/page-nav.ts` の `navEntries`（DOM に触らない）
   - タッチの端末（`pointer: coarse`）では、開いたときに入力欄へフォーカスを入れない（キーボードが出て、一覧が隠れる）

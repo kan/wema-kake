@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { HistoryDelta } from '../src/shared/delta';
 import { TOOLS, ToolError } from '../src/shared/tools';
 import { ServerBoardAccess } from '../src/worker/mcp/board-access';
-import { actorFromProps, mcpHandler } from '../src/worker/mcp/server';
+import { app } from '../src/worker/index';
 import { createNote, edge } from './helpers';
 
 const AGENT = 'agent:claude';
@@ -292,22 +292,16 @@ describe('revert_operation', () => {
 });
 
 describe('MCP のハンドラ', () => {
-  it('認証結果から、変更の主体を決める', () => {
-    expect(actorFromProps({ client: 'Claude' })).toBe('agent:claude');
-    expect(actorFromProps({ client: 'My Client / 日本語' })).toBe('agent:my-client');
-    expect(actorFromProps({})).toBe('agent:unknown');
-    expect(actorFromProps(undefined)).toBe('agent:unknown');
-  });
-
   it('MCP のクライアントから、ツールの一覧を取得して呼び出せる', async () => {
     const { page, notesOf } = await newPage([createNote('n1')]);
-    const ctx = Object.assign(createExecutionContext(), { props: { client: 'Claude' } });
+    const ctx = createExecutionContext();
     const transport = new StreamableHTTPClientTransport(new URL('http://localhost/mcp'), {
-      // テストではネットワークを通さず、ハンドラを直接呼ぶ。Host は実際のリクエストなら必ず付く
+      // テストではネットワークを通さず、Worker の入口を直接呼ぶ（ローカル開発の認証を通る）。
+      // Host は実際のリクエストなら必ず付く
       fetch: async (input, init) => {
         const request = new Request(input as string, init as RequestInit);
         request.headers.set('Host', 'localhost');
-        return mcpHandler.fetch(request, env, ctx);
+        return app.fetch(request, env, ctx);
       },
     });
     const client = new Client({ name: 'test', version: '1.0.0' });
@@ -324,7 +318,7 @@ describe('MCP のハンドラ', () => {
     expect(added.isError).toBeFalsy();
     expect((await notesOf()).map((n) => n.text)).toContain('MCP 経由');
     const board = await env.PAGE.getByName(page).getBoardState();
-    expect(board?.notes.find((n) => n.text === 'MCP 経由')?.createdBy).toBe('agent:claude');
+    expect(board?.notes.find((n) => n.text === 'MCP 経由')?.createdBy).toBe('agent:local');
 
     // ツールが断った場合は、エラーの結果として返る
     const failed = await client.callTool({ name: 'read_board', arguments: { page: 'mcp-no-such-page' } });

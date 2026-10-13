@@ -1,6 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // このファイルは、ローカル開発とテストに使う。デプロイ先ごとの値（Worker の名前、D1 と KV の ID、
+  // このファイルは、ローカル開発とテストに使う。デプロイ先ごとの値（Worker の名前、D1 の ID、
   // Access の値、SITE_ORIGIN）は、ここに書かない。このファイルを wrangler.deploy.jsonc（git には
   // 入れない）へコピーして書き、`npm run deploy` はそちらを使う（AGENTS.md の「デプロイ」）
   "name": "wema-kake",
@@ -17,19 +17,13 @@
       "/api/*",
       "/ws/*",
       "/img/*",
-      // MCP と、その OAuth 用のパス。Access の保護対象から外しておくこと（AGENTS.md の「認証」）
-      "/mcp",
-      "/authorize",
-      "/callback",
-      "/token",
-      "/register",
-      "/.well-known/*"
+      // MCP。認可（クライアントの登録、トークンの発行）は Access の Managed OAuth が行い、
+      // Worker には届かない（AGENTS.md の「認証」）
+      "/mcp"
     ]
   },
-  // MCP の OAuth（クライアントの登録、認可コード、トークン）の保存先
-  "kv_namespaces": [{ "binding": "OAUTH_KV" }],
   "vars": {
-    // Cloudflare Access の設定。両方が空のままだと /api と /ws は 500 を返す（ローカル開発は .dev.vars.example を参照）
+    // Cloudflare Access の設定。両方が空のままだと /api、/ws、/mcp は 500 を返す（ローカル開発は .dev.vars.example を参照）
     // 例: "https://<team>.cloudflareaccess.com"
     "ACCESS_TEAM_DOMAIN": "",
     // Access アプリケーションの AUD タグ
