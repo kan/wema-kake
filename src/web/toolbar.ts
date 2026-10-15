@@ -49,11 +49,12 @@ export function onPressOutside(panel: HTMLElement, root: HTMLElement, close: () 
 /**
  * ボタンを押すと開く小さなパネル（メニュー、整列、リンク元、新規ページ）。
  * パネルの外をクリックするか、Escape で閉じる。
+ * `instead` は、閉じているボタンが押されたときに先に呼ぶ。true を返したら（ボタンが別の操作をしたら）開かない
  */
 export function popover(
   trigger: HTMLButtonElement,
   panel: HTMLElement,
-  options: { onOpen?: () => void; align?: 'left' | 'right' } = {},
+  options: { onOpen?: () => void; align?: 'left' | 'right'; instead?: () => boolean } = {},
 ): { root: HTMLElement; close: () => void } {
   panel.classList.add('popover-panel', `popover-${options.align ?? 'left'}`);
   panel.hidden = true;
@@ -65,6 +66,8 @@ export function popover(
   trigger.ariaExpanded = 'false';
   trigger.addEventListener('click', () => {
     if (!panel.hidden) return close();
+    // 開く代わりに別の操作をしたときは、開かない
+    if (options.instead?.()) return;
     panel.hidden = false;
     trigger.ariaExpanded = 'true';
     options.onOpen?.();

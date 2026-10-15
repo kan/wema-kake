@@ -18,7 +18,7 @@ import {
   type FailureKey,
 } from './dom';
 import { t } from './i18n';
-import type { IconName } from './icons';
+import { icon, type IconName } from './icons';
 import {
   navigate,
   onViewEnd,
@@ -274,8 +274,34 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   const childButton = iconButton('childPage', t('child.place'));
   const childPopover = popover(childButton, childForm.root, { onOpen: childForm.opened });
 
+  /** 自動配置。並べ直した付箋全体の中央へ動かす（倍率は変えない） */
+  const autoLayout = () => {
+    board.autoLayout();
+    centerOnNotes(board, container);
+  };
+  // 選んだ付箋が 2 枚未満のときは、自動配置しか押せないので、メニューを開かずにそのまま自動配置する
+  const layoutTrigger = iconButton('layout', t('layout.title'));
+  const layoutDirect = () => board.getSelection().length < 2;
   const layoutPanel = el('div', { className: 'layout-panel' });
-  const layout = popover(iconButton('layout', t('layout.title')), layoutPanel);
+  const layout = popover(layoutTrigger, layoutPanel, {
+    instead: () => {
+      if (!layoutDirect()) return false;
+      autoLayout();
+      return true;
+    },
+  });
+  /** ボタンの見た目を、メニューか自動配置かに合わせる。直前の状態（未設定は undefined） */
+  let layoutShownDirect: boolean | undefined;
+  const showLayoutTrigger = (direct: boolean) => {
+    if (direct === layoutShownDirect) return;
+    layoutShownDirect = direct;
+    layout.close();
+    const label = direct ? t('layout.auto') : t('layout.title');
+    layoutTrigger.title = layoutTrigger.ariaLabel = label;
+    layoutTrigger.replaceChildren(icon(direct ? 'autoLayout' : 'layout'));
+    // 自動配置のボタンは、開くメニューを持たない
+    layoutTrigger.ariaExpanded = direct ? null : 'false';
+  };
   /** 整列のボタンと、押せるようになる選択数 */
   const layoutButtons: [HTMLButtonElement, number][] = [];
   const layoutButton = (name: IconName, label: string, needs: number, run: (selected: string[]) => void) => {
@@ -291,11 +317,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   }
   layoutButton('distributeH', t('layout.distributeH'), 3, (s) => board.distributeNotes(s, 'horizontal'));
   layoutButton('distributeV', t('layout.distributeV'), 3, (s) => board.distributeNotes(s, 'vertical'));
-  layoutButton('autoLayout', t('layout.auto'), 0, () => {
-    board.autoLayout();
-    // 並べ直した付箋全体の中央へ動かす（倍率は変えない）
-    centerOnNotes(board, container);
-  });
+  layoutButton('autoLayout', t('layout.auto'), 0, autoLayout);
 
   /** ボタンの有効と無効を、ボードの状態に合わせる。自前の状態は持たない */
   const updateTools = () => {
@@ -306,6 +328,10 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     childButton.disabled = locked;
     const selected = board.getSelection().length;
     for (const [button, needs] of layoutButtons) button.disabled = locked || selected < needs;
+    // メニューを開かずに自動配置するときは、編集できなければ押せなくする
+    const direct = layoutDirect();
+    showLayoutTrigger(direct);
+    layoutTrigger.disabled = direct && locked;
   };
   // Ctrl / Cmd + A で全選択（wema のスタンドアロン版と同じ。入力中は、入力欄の全選択のままにする）
   document.addEventListener('keydown', (e) => {
