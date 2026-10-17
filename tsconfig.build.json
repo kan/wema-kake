@@ -1,0 +1,23 @@
+{
+  // パッケージに入れる Worker の側（dist/lib）を出す設定。型検査は tsconfig.json の仕事で、
+  // こちらは出力だけを足す（extends で継ぐので、検査の厳しさは 1 箇所にある）。
+  //
+  // ソースのまま配ると、利用側の tsconfig が wema-kake のソースにも適用され、より厳しい設定の
+  // 利用側でコンパイルエラーになる（skipLibCheck は .d.ts にしか効かない）。だから .js と .d.ts を出す
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "declaration": true,
+    // sourceMap と declarationMap は出さない。パッケージに src/ を入れないので、参照先のない地図になる
+    "rootDir": "src",
+    "outDir": "dist/lib",
+    // 型検査（tsconfig.json）とは別の型を読む。あちらが読む worker-configuration.d.ts には
+    // `mainModule: typeof import("./dev/index")` が入っていて、dev/ を出力の対象に引き込む
+    // （rootDir の外なので、エラーになる）。build-types.d.ts は `wrangler types --include-env false`
+    // で出した、ランタイムの型だけのファイル。パッケージのコードは、グローバルの Env を使わない
+    // （バインディングの型は src/worker/config.ts の WemaKakeEnv）
+    "types": ["./build-types.d.ts"]
+  },
+  // 入口から import をたどれるものだけを出す（画面の src/web と、テストは入らない）
+  "include": ["src/index.ts"]
+}

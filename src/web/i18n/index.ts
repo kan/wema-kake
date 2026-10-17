@@ -4,6 +4,7 @@
 // 言語は、このモジュールを読み込んだときに決まり、画面を開いている間は変わらない（切り替えたら、
 // ページを読み込み直す）。文言を定数に入れているモジュールがあるので、途中では変えられない。
 import { cookieValue, LANG_COOKIE, type Lang, resolveLang } from '../../shared/i18n';
+import { site } from '../site';
 import { en } from './en';
 import { ja } from './ja';
 
@@ -23,7 +24,7 @@ const browser = (globalThis as { document?: { cookie: string } }).document;
 export const lang: Lang =
   browser === undefined
     ? 'ja'
-    : resolveLang(cookieValue(browser.cookie, LANG_COOKIE), navigator.languages ?? []);
+    : resolveLang(cookieValue(browser.cookie, LANG_COOKIE), navigator.languages ?? [], site.defaultLang);
 
 const messages: Messages = lang === 'ja' ? ja : en;
 

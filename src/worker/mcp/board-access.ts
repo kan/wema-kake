@@ -2,6 +2,7 @@
 import type { OpSummary, RevertOutcome } from '../../shared/api';
 import type { HistoryDelta } from '../../shared/delta';
 import { type ApplyOutcome, type BoardAccess, type BoardState, ToolError } from '../../shared/tools';
+import type { WemaKakeEnv } from '../config';
 import { listPages, searchPages } from '../page-queries';
 import { extractContent } from '../plain-text';
 
@@ -13,7 +14,7 @@ export class ServerBoardAccess implements BoardAccess {
    * @param actor 変更の主体（'agent:<client>'）。認証結果から決めたものを渡す
    */
   constructor(
-    private readonly env: Env,
+    private readonly env: WemaKakeEnv,
     private readonly actor: string,
   ) {}
 

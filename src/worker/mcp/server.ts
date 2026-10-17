@@ -3,6 +3,7 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { createMcpHandler } from 'agents/mcp/server';
 import { type BoardAccess, TOOLS, ToolError } from '../../shared/tools';
+import type { WemaKakeEnv } from '../config';
 import { ServerBoardAccess } from './board-access';
 
 export function createMcpServer(access: BoardAccess): McpServer {
@@ -37,7 +38,7 @@ export function createMcpServer(access: BoardAccess): McpServer {
  * `/mcp` のハンドラ。認証は呼び出し側（`src/worker/index.ts`）が済ませていて、
  * そこで決めた変更の主体（`agent:<client>`）を受け取る
  */
-export function handleMcp(request: Request, env: Env, ctx: ExecutionContext, actor: string): Promise<Response> {
+export function handleMcp(request: Request, env: WemaKakeEnv, ctx: ExecutionContext, actor: string): Promise<Response> {
   const access = new ServerBoardAccess(env, actor);
   // リクエストごとにサーバーを作る（MCP のサーバーは、同時に走るリクエストで共有できない）
   return createMcpHandler(() => createMcpServer(access))(request, env, ctx);

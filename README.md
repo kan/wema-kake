@@ -11,6 +11,54 @@
 
 ![ページの画面。付箋と接続線、子ページの付箋が並んでいる](docs/images/page.png)
 
+**wema-kake はライブラリ（npm: `@kanf/wema-kake`）で、デプロイ物ではありません。** 使う人は、雛形から自分のリポジトリを作り、自分の Worker としてデプロイします。Wiki の処理と画面はパッケージにあり、手元に持つのは設定だけです。更新は `npm update` とデプロイで済みます。
+
+> npm への公開はまだです（準備中）。それまでは、このリポジトリで `npm pack` したものを使ってください。
+
+## 始め方
+
+```sh
+npx @kanf/wema-kake init my-wiki
+cd my-wiki
+npm run dev
+```
+
+`init` は、ディレクトリ、サイトの名前、既定の言語を聞いて、雛形を書き出します。`http://localhost:8787/` で開けます。
+
+雛形から GitHub のリポジトリを作ってデプロイするなら、Deploy to Cloudflare のボタンも使えます（npm への公開の後から。それまでは、ボタンからのデプロイは依存の取得で失敗します）。
+
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/kan/wema-kake/tree/main/template)
+
+デプロイと、Cloudflare Access の設定の手順は、雛形の [README](template/README.md) にあります。**デプロイしただけでは、まだ使えません。** Access を設定するまで、画面と API は 500 を返します（保護のない状態で公開しないためです）。
+
+### 手元に持つもの
+
+| ファイル | 中身 |
+| --- | --- |
+| `src/config.ts` | サイトの名前、既定の言語、MCP を有効にするか、最初のページを作るか |
+| `wrangler.jsonc` | Worker の名前、バインディング、デプロイ先ごとの値（Access の設定、サイトのオリジン） |
+| `src/index.ts` | Worker の入口。設定を `@kanf/wema-kake` に渡すだけ |
+
+```ts
+// src/index.ts
+import { createWemaKake, PageDO } from '@kanf/wema-kake';
+import config from './config';
+
+export { PageDO };
+export default createWemaKake(config);
+```
+
+D1 のマイグレーションと画面は、`wrangler.jsonc` がパッケージの中（`node_modules/@kanf/wema-kake`）を直接指します。コピーしないので、更新で取り残されません。
+
+### 更新
+
+```sh
+npm update @kanf/wema-kake
+npm run deploy
+```
+
+`npm run deploy` は、D1 のマイグレーションを当ててから Worker をデプロイします。何を破壊的変更と呼び、版をまたいでデータをどう引き継ぐかは、[docs/package.md](docs/package.md) に書いてあります。
+
 ## できること
 
 - 付箋を置く、動かす、色を付ける、線でつなぐ。箇条書き、チェックリスト、画像、リンクを書ける
@@ -35,7 +83,7 @@ wema-kake は、wema に次のものを足して Wiki にしたものです。
 | 変更の内容を表すデータ（デルタ） | 全文検索、画像の保存、認証 |
 | | LLM 向けの MCP サーバーと、その操作の取り消し |
 
-wema の側に要る機能は、wema へ依頼して入れてもらい、その版を取り込んでいます。
+wema の側に要る機能は、wema へ依頼して入れてもらい、その版を取り込んでいます。使っている wema の版は、`package.json` の `dependencies` にあります。
 
 ## 構成
 
@@ -48,39 +96,7 @@ wema の側に要る機能は、wema へ依頼して入れてもらい、その�
 | 認証 | Cloudflare Access |
 | LLM との連携 | リモート MCP（認可は、Access の Managed OAuth） |
 
-## デプロイ
-
-[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/kan/wema-kake)
-
-ボタンを押すと、リポジトリを自分のアカウントへ複製し、D1、R2 を作って、Worker をデプロイします。ボタンからのデプロイは、作者の環境では試していません。うまくいかない場合は、下の「手動でのデプロイ」を使ってください。
-
-**デプロイしただけでは、まだ使えません。** Cloudflare Access を設定するまで、データを読み書きする API は 500 を返します（保護のない状態で公開しないためです）。続けて、次を設定します。
-
-1. Access アプリケーション（Self-hosted）を、ホスト名全体を宛先にして 1 つ作り、チームドメインと AUD タグを、Worker の変数 `ACCESS_TEAM_DOMAIN` と `ACCESS_AUD` に入れる
-2. MCP を使う場合は、そのアプリケーションの設定で Managed OAuth を有効にし、つなぐクライアントのリダイレクト先を許可する
-
-手順の詳細と、つまずきやすい点は、[AGENTS.md の「デプロイ」](AGENTS.md#デプロイ)に書いてあります。
-
-### 手動でのデプロイ
-
-```sh
-git clone https://github.com/kan/wema-kake.git
-cd wema-kake
-npm install
-
-# デプロイ先ごとの値を書く設定を作る（git には入らない）
-cp wrangler.jsonc wrangler.deploy.jsonc
-
-npx wrangler d1 create wema-kake
-npx wrangler r2 bucket create wema-kake-images
-# 表示された ID と、Access の値を wrangler.deploy.jsonc に書く
-
-npm run deploy
-```
-
-`npm run deploy` は、`wrangler.deploy.jsonc` があればそれを使い、D1 のマイグレーションを適用してからデプロイします。
-
-## ローカルでの開発
+## このリポジトリでの開発
 
 ```sh
 npm install
@@ -89,7 +105,7 @@ npx wrangler d1 migrations apply DB --local
 npm run dev
 ```
 
-`http://localhost:8787/` で開けます。ローカルでは Access を通らず、`.dev.vars` の `DEV_USER_EMAIL` が利用者になります。
+`http://localhost:8787/` で開けます。ローカルでは Access を通らず、`.dev.vars` の `DEV_USER_EMAIL` が利用者になります。リポジトリの中の利用側（`dev/`）が、ビルドせずに `src/` を使います。
 
 | コマンド | 内容 |
 | --- | --- |
@@ -97,10 +113,12 @@ npm run dev
 | `npm run dev:roji` | 同じサーバーを、[roji](https://github.com/kan/roji)（1.5.0 以降）を通して起動する。空いているポートを使い、`https://wema-kake.<roji のドメイン>` で開ける |
 | `npm test` | テストを実行する（Workers のランタイムの上で動く） |
 | `npm run lint` | 型チェック |
-| `npm run deploy` | ビルドしてデプロイする |
+| `npm run build` | 配るものを作る。画面（`dist/web`）と Worker の側（`dist/lib`） |
+| `npm pack` | パッケージを作る（`prepack` が `build` を回す） |
 
 ## 文書
 
+- [docs/package.md](docs/package.md): パッケージの入口、設定、互換の決まり
 - [AGENTS.md](AGENTS.md): 設計と、実装で守る決まり。コーディングエージェント向けの指示を兼ねる
 - [docs/plan.md](docs/plan.md): 実装の計画と、フェーズごとの記録
 

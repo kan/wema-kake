@@ -1,26 +1,24 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
-  // このファイルは、ローカル開発とテストに使う。デプロイ先ごとの値（Worker の名前、D1 の ID、
-  // Access の値、SITE_ORIGIN）は、ここに書かない。このファイルを wrangler.deploy.jsonc（git には
-  // 入れない）へコピーして書き、`npm run deploy` はそちらを使う（AGENTS.md の「デプロイ」）
+  // このファイルは、このリポジトリの中の利用側（dev/）を動かすためのもの。ローカル開発とテストに
+  // 使い、デプロイはしない。利用側の設定の正は template/wrangler.jsonc で、**バインディングや
+  // assets を変えたら、あちらにも同じ変更を入れること**（AGENTS.md の「パッケージの構成」）
   "name": "wema-kake",
-  "main": "src/worker/index.ts",
+  "main": "dev/index.ts",
   "compatibility_date": "2026-10-01",
   // プレビュー用の URL（<version>-<name>.….workers.dev）は出さない。Access のアプリケーションは
   // 本番のホスト名にしか掛けないので、保護の外に同じ Worker の入口を作らない
   "preview_urls": false,
   "assets": {
+    "binding": "ASSETS",
+    // 利用側は node_modules/@kanf/wema-kake/dist/web を指す。ここでは、このリポジトリのビルドの出力
     "directory": "./dist/web",
     // /p/<slug> などアセットに一致しないパスは index.html を返す
     "not_found_handling": "single-page-application",
-    "run_worker_first": [
-      "/api/*",
-      "/ws/*",
-      "/img/*",
-      // MCP。認可（クライアントの登録、トークンの発行）は Access の Managed OAuth が行い、
-      // Worker には届かない（AGENTS.md の「認証」）
-      "/mcp"
-    ]
+    // すべてのリクエストを Worker が先に受ける。API に当たらないものは、Worker が ASSETS から返す
+    // （src/worker/assets.ts）。パスの一覧をパッケージが持つので、API のパスを足しても、利用側の
+    // 設定は変わらない
+    "run_worker_first": true
   },
   "vars": {
     // Cloudflare Access の設定。両方が空のままだと /api、/ws、/mcp は 500 を返す（ローカル開発は .dev.vars.example を参照）

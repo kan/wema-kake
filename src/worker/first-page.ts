@@ -3,6 +3,7 @@
 import type { HistoryDelta } from '../shared/delta';
 import { FIRST_PAGE_SLUG, firstPageTitle, guideBoard } from '../shared/guide';
 import type { Lang } from '../shared/i18n';
+import type { WemaKakeEnv } from './config';
 
 const KEY = 'first_page';
 
@@ -13,7 +14,7 @@ const KEY = 'first_page';
  * `lang` は、一覧を開いた人の画面の言語。その言語の表示名と付箋で作る。作った後は、ふつうの
  * ページなので、言語を切り替えても変わらない
  */
-export async function createFirstPage(env: Env, lang: Lang): Promise<boolean> {
+export async function createFirstPage(env: WemaKakeEnv, lang: Lang): Promise<boolean> {
   // 記録を先に書く。同時に届いたリクエストのうち、書けた 1 つだけが作る
   const claimed = await env.DB.prepare(`INSERT OR IGNORE INTO settings (key, value) VALUES (?, 'created')`)
     .bind(KEY)

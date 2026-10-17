@@ -3,13 +3,13 @@
 // 言語は、次の順で決める。
 //   1. その端末で選んだ言語（Cookie）
 //   2. ブラウザの言語の設定（サーバーでは Accept-Language、画面では navigator.languages）
-//   3. どちらにも対応する言語がなければ、DEFAULT_LANG
+//   3. どちらにも対応する言語がなければ、サイトの既定の言語（設定の `defaultLang`。省けば DEFAULT_LANG）
 
 export type Lang = 'ja' | 'en';
 
 export const LANGS: readonly Lang[] = ['ja', 'en'];
 
-/** ブラウザの設定に、対応する言語が 1 つもないときの言語 */
+/** サイトの設定で既定の言語を省いたときの言語 */
 export const DEFAULT_LANG: Lang = 'en';
 
 /**
@@ -18,19 +18,21 @@ export const DEFAULT_LANG: Lang = 'en';
  */
 export const LANG_COOKIE = 'wk_lang';
 
-const isLang = (value: string | undefined): value is Lang => LANGS.includes(value as Lang);
+export const isLang = (value: string | undefined): value is Lang => LANGS.includes(value as Lang);
 
 /**
  * 言語を決める。`chosen` は、選んだ言語（Cookie の値。なければ undefined）。`preferred` は、
- * ブラウザの言語の並び（優先の高い順。`ja-JP` のような地域つきの値は、先頭の部分で比べる）
+ * ブラウザの言語の並び（優先の高い順。`ja-JP` のような地域つきの値は、先頭の部分で比べる）。
+ * `fallback` は、どちらにも当たらないときの言語（サイトの既定の言語）。省けないようにしてあるのは、
+ * 渡し忘れて設定の `defaultLang` が黙って無視されるのを、型で防ぐため
  */
-export function resolveLang(chosen: string | undefined, preferred: readonly string[]): Lang {
+export function resolveLang(chosen: string | undefined, preferred: readonly string[], fallback: Lang): Lang {
   if (isLang(chosen)) return chosen;
   for (const tag of preferred) {
     const primary = tag.trim().toLowerCase().split('-')[0];
     if (isLang(primary)) return primary;
   }
-  return DEFAULT_LANG;
+  return fallback;
 }
 
 /** Cookie の文字列（`document.cookie` か、Cookie ヘッダー）から、`name` の値を取り出す */
@@ -57,10 +59,11 @@ export function parseAcceptLanguage(header: string | null | undefined): string[]
     .map(({ tag }) => tag);
 }
 
-/** リクエストを送ってきたブラウザの、画面の言語 */
-export function requestLang(request: Request): Lang {
+/** リクエストを送ってきたブラウザの、画面の言語。`fallback` はサイトの既定の言語 */
+export function requestLang(request: Request, fallback: Lang): Lang {
   return resolveLang(
     cookieValue(request.headers.get('Cookie'), LANG_COOKIE),
     parseAcceptLanguage(request.headers.get('Accept-Language')),
+    fallback,
   );
 }

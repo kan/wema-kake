@@ -1,0 +1,8 @@
+node_modules/
+
+# wrangler の作業場所と、生成する型
+.wrangler/
+worker-configuration.d.ts
+
+# 手元の secret。.dev.vars.example をコピーして作る
+.dev.vars

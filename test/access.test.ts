@@ -2,7 +2,9 @@ import { createExecutionContext, env } from 'cloudflare:test';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { agentActor } from '../src/worker/access';
-import { app } from '../src/worker/index';
+import { createApp } from '../src/worker/index';
+
+const app = createApp();
 
 const TEAM = 'https://team.cloudflareaccess.com';
 const AUD = 'aud-tag';

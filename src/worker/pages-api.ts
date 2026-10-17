@@ -55,8 +55,13 @@ pagesApi.get('/index', async (c) => {
         .bind(MAX_LIST_LIMIT),
     ]);
   let [pages, links] = await read();
-  // ページが 1 つもない環境では、使い方の付箋を置いた最初のページを作る（1 回だけ）
-  if (pages.results.length === 0 && (await createFirstPage(c.env, requestLang(c.req.raw)))) {
+  // ページが 1 つもない環境では、使い方の付箋を置いた最初のページを作る（1 回だけ。設定の firstPage で止められる）
+  const { firstPage, defaultLang } = c.get('config');
+  if (
+    pages.results.length === 0 &&
+    firstPage &&
+    (await createFirstPage(c.env, requestLang(c.req.raw, defaultLang)))
+  ) {
     [pages, links] = await read();
   }
   return c.json({ pages: pages.results, links: links.results });

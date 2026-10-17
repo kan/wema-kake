@@ -5,3 +5,8 @@ dist/
 # デプロイ先ごとの設定（Worker の名前、D1 の ID、Access の値）。wrangler.jsonc のコピーから作る
 wrangler.deploy.jsonc
 worker-configuration.d.ts
+# dist/lib を出すときの、ランタイムの型（npm run types:build）
+build-types.d.ts
+# npm pack のときに作る、雛形の .gitignore の複製（scripts/pack-template.mjs）
+template/gitignore
+*.tgz

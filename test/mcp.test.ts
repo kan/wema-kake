@@ -4,8 +4,10 @@ import { describe, expect, it } from 'vitest';
 import type { HistoryDelta } from '../src/shared/delta';
 import { TOOLS, ToolError } from '../src/shared/tools';
 import { ServerBoardAccess } from '../src/worker/mcp/board-access';
-import { app } from '../src/worker/index';
+import { createApp } from '../src/worker/index';
 import { createNote, edge } from './helpers';
+
+const app = createApp();
 
 const AGENT = 'agent:claude';
 let pageCount = 0;

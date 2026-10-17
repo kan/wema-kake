@@ -1,4 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
+import type { WemaKakeEnv } from './config';
 import {
   INDEX_DELAY_MS,
   MAX_TITLE_LENGTH,
@@ -244,7 +245,7 @@ INSERT INTO meta (key, value) VALUES ('seq', '0');
 ];
 
 /** ページ 1 つ分の付箋・接続線・操作履歴を持つ */
-export class PageDO extends DurableObject<Env> {
+export class PageDO extends DurableObject<WemaKakeEnv> {
   /** 適用済みのスキーマのバージョン。0 は一度も書き込まれていないページ */
   private version: number;
 
@@ -259,7 +260,7 @@ export class PageDO extends DurableObject<Env> {
   /** 処理中の applyOps。次の呼び出しはこれが終わってから始める */
   private applyQueue: Promise<unknown> = Promise.resolve();
 
-  constructor(ctx: DurableObjectState, env: Env) {
+  constructor(ctx: DurableObjectState, env: WemaKakeEnv) {
     super(ctx, env);
     // 接続維持の ping には DO を起こさずに応答する
     ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair(PING, PONG));

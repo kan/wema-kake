@@ -17,8 +17,8 @@ export const ja = {
   help: '使い方',
   undo: '元に戻す (Ctrl+Z)',
   redo: 'やり直す (Ctrl+Shift+Z)',
-  /** ブラウザのタブに出す名前。`name` は、ページの表示名や画面の名前 */
-  documentTitle: (name: string) => `${name} - wema-kake`,
+  /** ブラウザのタブに出す名前。`name` は、ページの表示名や画面の名前。`site` は、サイトの名前（設定の siteName） */
+  documentTitle: (name: string, site: string) => `${name} - ${site}`,
   /** 言語を切り替える項目。切り替え先の言語を、その言語で書く */
   'lang.switch': 'English',
 

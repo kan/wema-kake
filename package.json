@@ -1,23 +1,51 @@
 {
-  "name": "wema-kake",
+  "name": "@kanf/wema-kake",
   "version": "0.0.0",
+  "//private": "公開（npm への publish、版の付け方）は別の issue で扱う。それまでは誤って publish しないように止めておく。npm pack はこのままで動く",
   "private": true,
-  "description": "付箋ボードライブラリ wema を使った Wiki",
+  "description": "付箋ボードライブラリ wema を使った Wiki。Cloudflare Workers の上で動き、利用側が自分の Worker を作ってデプロイする",
   "license": "ISC",
   "type": "module",
+  "//exports": "tsc が出した .js と .d.ts（dist/lib）を配る。境界は src/index.ts で、ここに載っていないものは利用側から読まれない前提で動かせる。package.json を出しているのは、利用側やコマンドが migrations と dist/web の場所をたどれるようにするため",
+  "exports": {
+    ".": "./dist/lib/index.js",
+    "./package.json": "./package.json"
+  },
+  "//bin": "init が雛形（template/）を書き出す。名前がパッケージ名と同じなのは、npx @kanf/wema-kake が、スコープを外した名前と同じ bin を選ぶため",
+  "bin": {
+    "wema-kake": "./bin/wema-kake.mjs"
+  },
+  "//files": "dist/web はビルド済みの画面で、利用側の wrangler.jsonc の assets.directory が直接指す。migrations も migrations_dir で直接指す（どちらもコピーしない）。雛形のロックは入れない（publish の時点の版と噛み合わない）",
+  "files": [
+    "dist/lib",
+    "dist/web",
+    "migrations",
+    "bin",
+    "template",
+    "!template/package-lock.json"
+  ],
   "scripts": {
-    "dev": "npm run build && wrangler dev",
-    "dev:roji": "npm run build && roji run wema-kake -- wrangler dev --port {port} --host {host} --upstream-protocol https",
-    "build": "vite build",
-    "deploy": "npm run build && node scripts/deploy.mjs",
+    "dev": "npm run build:web && wrangler dev",
+    "dev:roji": "npm run build:web && roji run wema-kake -- wrangler dev --port {port} --host {host} --upstream-protocol https",
+    "build": "npm run build:web && npm run build:lib",
+    "build:web": "vite build",
+    "build:lib": "npm run types:build && node scripts/clean-lib.mjs && tsc -p tsconfig.build.json",
+    "//types:build": "出力用の、ランタイムの型だけを出す（Env と mainModule を落とす）。理由は tsconfig.build.json",
+    "types:build": "wrangler types ./build-types.d.ts --include-env false --strict-vars=false",
+    "//prepack": "配るものを作る。雛形の .gitignore は npm がパッケージから落とすので、入る名前で複製する（scripts/pack-template.mjs）",
+    "prepack": "npm run build && node scripts/pack-template.mjs",
+    "deploy": "npm run build:web && node scripts/deploy.mjs",
     "types": "wrangler types --strict-vars=false",
     "lint": "npm run types && tsc -p tsconfig.json && tsc -p tsconfig.web.json && tsc -p tsconfig.node.json",
+    "//pretest": "テストは src/ を直接読むので dist/lib は要らない。画面のアセットを返す処理を確かめるので、dist/web は要る",
+    "pretest": "npm run build:web",
     "test": "vitest run"
   },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/kan/wema-kake.git"
   },
+  "//dependencies": "Worker の側が実行時に使うもの。@kanf/wema は、画面のビルドに入るほか、Worker の側も自動配置（computeAutoLayout）と型に使うので、ここに置く",
   "dependencies": {
     "@kanf/wema": "^0.16.0",
     "@modelcontextprotocol/server": "^2.0.0",

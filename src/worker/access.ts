@@ -1,5 +1,6 @@
 import { createMiddleware } from 'hono/factory';
 import { createRemoteJWKSet, type JWKSCacheInput, jwksCache, jwtVerify } from 'jose';
+import type { ResolvedConfig, WemaKakeEnv } from './config';
 
 /**
  * 入口が受け付ける主体の種類。
@@ -17,8 +18,10 @@ interface Principal {
 }
 
 export type AuthEnv = {
-  Bindings: Env;
+  Bindings: WemaKakeEnv;
   Variables: {
+    /** 利用側が `createWemaKake` に渡した設定（既定の値を埋めたもの） */
+    config: ResolvedConfig;
     /** `Principal` の `actor` */
     actor: string;
     /** `Principal` の `expiresAt` */
@@ -117,7 +120,7 @@ async function verifyAccessJwt(
  * `ACCESS_TEAM_DOMAIN` と `ACCESS_AUD` が未設定のときは、ローカル開発に限り `DEV_USER_EMAIL` を
  * 使う。どちらもなければ拒否する。
  */
-async function authenticate(request: Request, env: Env, kind: PrincipalKind): Promise<AuthResult> {
+async function authenticate(request: Request, env: WemaKakeEnv, kind: PrincipalKind): Promise<AuthResult> {
   const { ACCESS_TEAM_DOMAIN: teamDomain, ACCESS_AUD: aud, DEV_USER_EMAIL: devEmail } = env;
 
   if (teamDomain && aud) {

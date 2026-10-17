@@ -6,20 +6,21 @@ import { ja } from '../src/web/i18n/ja';
 
 describe('言語を決める', () => {
   it('選んだ言語が、ブラウザの設定より優先される', () => {
-    expect(resolveLang('en', ['ja'])).toBe('en');
-    expect(resolveLang('ja', ['en-US'])).toBe('ja');
+    expect(resolveLang('en', ['ja'], 'ja')).toBe('en');
+    expect(resolveLang('ja', ['en-US'], 'en')).toBe('ja');
   });
 
   it('選んでいなければ、ブラウザの設定の、優先の高い順で決める。地域つきの値は、先頭の部分で比べる', () => {
-    expect(resolveLang(undefined, ['fr', 'ja-JP', 'en'])).toBe('ja');
-    expect(resolveLang(undefined, ['EN-us', 'ja'])).toBe('en');
+    expect(resolveLang(undefined, ['fr', 'ja-JP', 'en'], 'en')).toBe('ja');
+    expect(resolveLang(undefined, ['EN-us', 'ja'], 'ja')).toBe('en');
   });
 
-  it('対応する言語がなければ en。不正な値の Cookie は無視する', () => {
-    expect(resolveLang(undefined, ['fr', 'de'])).toBe('en');
-    expect(resolveLang(undefined, [])).toBe('en');
-    expect(resolveLang('fr', ['ja'])).toBe('ja');
-    expect(resolveLang('', ['ja'])).toBe('ja');
+  it('対応する言語がなければ、サイトの既定の言語。不正な値の Cookie は無視する', () => {
+    expect(resolveLang(undefined, ['fr', 'de'], 'en')).toBe('en');
+    expect(resolveLang(undefined, ['fr', 'de'], 'ja')).toBe('ja');
+    expect(resolveLang(undefined, [], 'ja')).toBe('ja');
+    expect(resolveLang('fr', ['ja'], 'en')).toBe('ja');
+    expect(resolveLang('', ['ja'], 'en')).toBe('ja');
   });
 
   it('Accept-Language を、q 値の高い順に並べる。同じ q なら書かれた順。q が 0 のものは外す', () => {
@@ -37,9 +38,9 @@ describe('言語を決める', () => {
 
   it('リクエストの Cookie と Accept-Language から決める', () => {
     const request = (headers: Record<string, string>) => new Request('http://localhost/', { headers });
-    expect(requestLang(request({ 'Accept-Language': 'ja,en;q=0.5' }))).toBe('ja');
-    expect(requestLang(request({ 'Accept-Language': 'ja', Cookie: 'wk_lang=en' }))).toBe('en');
-    expect(requestLang(request({}))).toBe('en');
+    expect(requestLang(request({ 'Accept-Language': 'ja,en;q=0.5' }), 'en')).toBe('ja');
+    expect(requestLang(request({ 'Accept-Language': 'ja', Cookie: 'wk_lang=en' }), 'ja')).toBe('en');
+    expect(requestLang(request({}), 'ja')).toBe('ja');
   });
 });
 

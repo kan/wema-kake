@@ -1,0 +1,25 @@
+{
+  "name": "my-wiki",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "//dev": "ローカルの D1 にマイグレーションを当ててから起動する（新しく clone した木には、ローカルの D1 がない）",
+    "dev": "npm run db:migrate:local && wrangler dev",
+    "//deploy": "2 回目からのデプロイ。マイグレーションを先に当てるので、新しいコードが古いスキーマに当たらない",
+    "deploy": "npm run db:migrate && wrangler deploy",
+    "//deploy:first": "最初のデプロイだけ。D1 と R2 は wrangler deploy がバインディングから作るので、それまではマイグレーションを当てる先がない",
+    "deploy:first": "wrangler deploy && npm run db:migrate",
+    "db:migrate": "wrangler d1 migrations apply DB --remote",
+    "db:migrate:local": "wrangler d1 migrations apply DB --local",
+    "typecheck": "wrangler types --strict-vars=false && tsc --noEmit"
+  },
+  "//dependencies": "Wiki の本体。画面、D1 のマイグレーションも、このパッケージに入っている",
+  "dependencies": {
+    "@kanf/wema-kake": "^0.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^7.0.2",
+    "wrangler": "^4.149.0"
+  }
+}

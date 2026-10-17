@@ -45,21 +45,35 @@ MCP クライアント ──/mcp──> MCP ┘          │
 - roji が入っていない、動いていない、または 1.5.0 より前の環境では、`npm run dev` を使う
 - `dev:roji` の `wrangler dev` に渡している引数の理由と、ローカルと見なすホスト名は、下の「認証」にある
 
+## パッケージの構成
+
+**wema-kake は npm のパッケージ（`@kanf/wema-kake`）で、デプロイ物ではない。** 利用側が雛形（`template/`）から自分のリポジトリを作り、自分の Worker としてデプロイする（issue #17）。入口、設定の型、互換の決まりの詳細は `docs/package.md` にある。
+
+| 場所 | 中身 |
+| --- | --- |
+| `src/index.ts` | パッケージの入口。**ここが境界**で、ここから export したものだけが、利用側から読まれる前提にする |
+| `src/worker/config.ts` | 設定（`WemaKakeConfig`）とバインディング（`WemaKakeEnv`）の型 |
+| `dev/` | このリポジトリの中の利用側。ルートの `wrangler.jsonc` の `main` がここを指し、ローカル開発とテストに使う。**`template/src/` と同じ形に保つ**（違いは `../src/index` を読むことだけ） |
+| `template/` | 利用側の雛形。パッケージに入り、`npx @kanf/wema-kake init`（`bin/wema-kake.mjs`）が書き出す。Deploy to Cloudflare のボタンもここを指す |
+| `dist/lib` | `npm run build:lib`（`tsc -p tsconfig.build.json`）の出力。`exports` が指す |
+| `dist/web` | `npm run build:web`（vite）の出力。利用側の `assets.directory` が直接指す |
+
+- **パッケージのコードで、グローバルの `Env` を使わない。** バインディングの型は `WemaKakeEnv`。`Env` は `wrangler types` がこのリポジトリの `wrangler.jsonc` から作る型で、`dist/lib` の `.d.ts` に残ると、利用側では別物を指す
+- **バインディング、`assets`、DO の `migrations` を変えたら、`wrangler.jsonc` と `template/wrangler.jsonc` の両方を直す。** 利用側の `wrangler.jsonc` に要る変更は、破壊的変更になる（`docs/package.md` の「互換の決まり」）
+- **`run_worker_first` は `true` のまま保つ。** すべてのリクエストを Worker が受け、API のどのルートにも合わない GET と HEAD を画面のアセットとして返す（`src/worker/index.ts` の末尾）。パスを足しても、利用側の設定は変わらない
+  - **API のパスの最初の部分（`/api/` など）を足したら、`src/worker/index.ts` の JSON の 404 を返す一覧にも足す。** 足さないと、そのパスの「ない」が、画面の 200 になる
+- **`bin/wema-kake.mjs` は、雛形の中の埋める場所を名指ししている**（`replaceOnce`）。`template/src/config.ts`、`template/wrangler.jsonc`、`template/package.json`、`template/README.md` のその行を変えたら、あちらも直す（見つからなければ init が落ちるので、黙って既定の値のまま出ることはない）
+- テストは `src/` を直接読むので、`dist/lib` は要らない。`dist/web` は要る（画面のアセットを返す処理を確かめる）ので、`pretest` が `build:web` を回す
+- 雛形が通るかの確かめ方: `npm pack` → 別のディレクトリで `npx --package=<tgz> wema-kake init <dir> --yes --no-install` → そこで `npm install <tgz>` → `npm run typecheck`、`npx wrangler deploy --dry-run`、`npm run dev`
+- D1 と DO のスキーマ、同期のプロトコル、MCP のツールを変えるときは、`docs/package.md` の「互換の決まり」に従う。**D1 のマイグレーションと DO の `MIGRATIONS` は、追加のみで書く**
+
 ## デプロイ
 
 - **このリポジトリは公開している。デプロイ先ごとの値を、git に入れるファイルへ書かないこと。** 対象は、Worker の名前、ホスト名、D1 の ID、Access のチームドメインと AUD タグ、`SITE_ORIGIN`。文書（`docs/`、この `AGENTS.md`）にも、実際のホスト名や ID を書かない
 - `wrangler.jsonc` は、ローカル開発とテストに使う。値は空のまま保つ
-- デプロイ用の設定は `wrangler.deploy.jsonc`（`.gitignore` 済み）。`wrangler.jsonc` をコピーして、デプロイ先の値を書く。**`wrangler.jsonc` のバインディングや `run_worker_first` を変えたら、`wrangler.deploy.jsonc` にも同じ変更を入れること**（wrangler は設定を継承できないので、丸ごとのコピーになっている）
-- デプロイは `npm run deploy`（`scripts/deploy.mjs`）。本番の D1 のマイグレーションを適用してから、Worker をデプロイする。設定は、`wrangler.deploy.jsonc` があればそれを、なければ `wrangler.jsonc` を使う（後者は、README の「Deploy to Cloudflare」ボタンからのデプロイのため。**`wrangler.deploy.jsonc` を消したまま `npm run deploy` を実行すると、`wrangler.jsonc` の名前で別の Worker ができる**）
-- マイグレーションだけを適用するには `npx wrangler d1 migrations apply DB --remote --config wrangler.deploy.jsonc`
+- 利用側の最初のデプロイと、Access の設定の手順は `template/README.md` にある（利用側の README になる）。つまずきやすい点もそこに書く
+- 作者の本番は、利用側の形へ移す途中（issue #17 の進め方の 5）。移すまでは、このリポジトリの `wrangler.deploy.jsonc`（`.gitignore` 済み。`main` は `dev/index.ts`）と `npm run deploy`（`scripts/deploy.mjs`）でデプロイする。**`wrangler.jsonc` のバインディングや `assets` を変えたら、`wrangler.deploy.jsonc` にも同じ変更を入れること**。`wrangler.deploy.jsonc` を消したまま `npm run deploy` を実行すると、`wrangler.jsonc` の名前で別の Worker ができる
 - secret は使っていない（Access の設定は `vars` の 2 つだけ）
-- 最初のデプロイの手順
-  1. D1、R2 バケットを作り、ID を `wrangler.deploy.jsonc` に書く。マイグレーションを適用して、デプロイする。**Access の値が空の間、`/api`、`/ws`、`/img`、`/mcp` は 500 を返す**（保護のない状態では、データを読み書きできない）
-  2. Access アプリケーション（Self-hosted）を 1 つ作る。宛先はホスト名だけ（パスは空）、ポリシーは Allow。チームドメインと AUD タグを `wrangler.deploy.jsonc` に書いて、デプロイし直す。チームドメインは、末尾のスラッシュを付けない
-  3. MCP を使うなら、そのアプリケーションの Additional settings の「OAuth」で、**Managed OAuth** を有効にする。Allowed redirect URIs に、つなぐクライアントのコールバックを入れる。claude.ai は `https://claude.ai/api/mcp/auth_callback`、ChatGPT は `https://chatgpt.com/connector_platform_oauth_redirect`。手元のクライアント（Claude Code など）からつなぐなら、Allow localhost clients と Allow loopback clients も有効にする。Grant session duration（リフレッシュトークンの期限）は、定期タスクから使うなら 1 か月（上限）にする。既定のままだと、アプリケーションのセッションの長さで切れて、そのたびにコネクタの再認可が要る
-  4. 未ログインの `curl` で確かめる。Managed OAuth を有効にしていれば、`/api/session` と `POST /mcp` は 401 を返し、`WWW-Authenticate` に `resource_metadata` が入る（有効にしていなければ、Access のログイン画面への 302）。ブラウザで開くと、どちらの場合もログイン画面へ転送される
-  - **Worker 単位の保護（Worker の「Access」タブの「Protect this Worker behind Access」）は使わない。** WebSocket に対応していない
-  - **`/mcp` を Bypass にするアプリケーションを作らない。** Access を通らないリクエストには JWT が付かないので、Worker が 401 を返す
 
 ## 認証
 

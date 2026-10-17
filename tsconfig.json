@@ -11,5 +11,5 @@
     "isolatedModules": true,
     "verbatimModuleSyntax": true
   },
-  "include": ["src/worker", "src/shared", "test"]
+  "include": ["src/index.ts", "src/worker", "src/shared", "dev", "test"]
 }

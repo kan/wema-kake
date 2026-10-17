@@ -15,7 +15,7 @@ export const en = {
   help: 'Help',
   undo: 'Undo (Ctrl+Z)',
   redo: 'Redo (Ctrl+Shift+Z)',
-  documentTitle: (name) => `${name} - wema-kake`,
+  documentTitle: (name, site) => `${name} - ${site}`,
   'lang.switch': '日本語',
 
   'failed.bookmark': (reason) => `Could not change the bookmark (${reason})`,

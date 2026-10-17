@@ -23,4 +23,17 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm test
-      - run: npm run build
+
+      # 雛形（template/）から作った利用側が、パッケージ（npm pack の出力）だけで通るか。
+      # 確かめ方は AGENTS.md の「パッケージの構成」と同じ。npm pack の prepack が npm run build を
+      # 回すので、ビルドの確認もここで兼ねる
+      - name: template
+        run: |
+          npm pack --pack-destination "$RUNNER_TEMP"
+          cd "$RUNNER_TEMP"
+          tgz="$(ls "$RUNNER_TEMP"/kanf-wema-kake-*.tgz)"
+          npx --yes --package="$tgz" wema-kake init site --yes --no-install
+          cd site
+          npm install "$tgz"
+          npm run typecheck
+          npx wrangler deploy --dry-run

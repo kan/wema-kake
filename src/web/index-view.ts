@@ -19,6 +19,7 @@ import { attachNoteActions } from './index-actions';
 import { buildIndexBoard, descendantHitsHtml, type IndexBoard } from './index-board';
 import { navigate, onViewEnd, pageSlugOf, setPopLeave, type Transition, viewSignal } from './navigation';
 import { checkedSlug, pageFields } from './page-form';
+import { site } from './site';
 import { stackOnNarrow } from './stacked-view';
 import { header, langButton, popover, separator, toast, WEMA_LABELS, zoomControls } from './toolbar';
 import { zoomTransitions } from './viewport-motion';
@@ -100,7 +101,7 @@ let lastSeen: { search: string; viewport?: WemaViewport; scrollTop?: number } | 
 
 /** `arrival` は、どのように切り替わってきたか（ページから戻ってきたなら、そのページの付箋から広げる） */
 export function openIndex(app: HTMLElement, arrival?: Transition): void {
-  document.title = 'wema-kake';
+  document.title = site.siteName;
   const signal = viewSignal();
 
   const search = textInput({
@@ -127,7 +128,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
   const boardHost = el('div', { className: 'index-board' });
   app.append(
     header(
-      [el('h1', { textContent: 'wema-kake' })],
+      [el('h1', { textContent: site.siteName })],
       [search, count, zoomSlot],
       [pageNavMenu(), langButton(), newPage.root],
     ),

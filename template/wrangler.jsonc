@@ -1,0 +1,57 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+
+  // この Worker の名前。workers.dev のホスト名にもなる（https://my-wiki.<account>.workers.dev）
+  "name": "my-wiki",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-10-01",
+
+  // プレビュー用の URL（<version>-<name>.….workers.dev）は出さない。Access のアプリケーションは
+  // 本番のホスト名にしか掛けないので、保護の外に同じ Worker の入口を作らない
+  "preview_urls": false,
+
+  // 画面。ビルド済みのものが @kanf/wema-kake に入っているので、それを直接指す（ビルドは要らない）。
+  // **run_worker_first は true のままにすること。** API に当たらないリクエストも Worker が受け、
+  // 認証を通してから画面を返す。パスの一覧は @kanf/wema-kake が持つ
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./node_modules/@kanf/wema-kake/dist/web",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": true
+  },
+
+  // **バインディングの名前（PAGE / DB / IMAGES / ASSETS）は変えないこと。** @kanf/wema-kake がこの名前で読む。
+  // リソースの ID は書かない。wrangler deploy（と Deploy to Cloudflare のボタン）が、足りないものを作って結び付ける
+
+  // ページごとの Durable Object。クラスは src/index.ts が再 export する PageDO。
+  // **クラス名と migrations の tag は変えないこと**（変えると、保存してあるページに届かなくなる）
+  "durable_objects": {
+    "bindings": [{ "name": "PAGE", "class_name": "PageDO" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["PageDO"] }],
+
+  // ページの一覧と全文検索の索引。スキーマは @kanf/wema-kake が持ち、ここからパッケージの中を指す
+  // （コピーしない）。当てるのは npm run db:migrate
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "my-wiki",
+      "migrations_dir": "./node_modules/@kanf/wema-kake/migrations"
+    }
+  ],
+
+  // 付箋に貼った画像
+  "r2_buckets": [{ "binding": "IMAGES", "bucket_name": "my-wiki-images" }],
+
+  "vars": {
+    // Cloudflare Access の設定（README の「Access の設定」）。**両方が空の間、画面と API は 500 を返す**
+    // （保護のない状態では開かない）。ローカル開発は .dev.vars の DEV_USER_EMAIL を使う
+    // 例: "https://<team>.cloudflareaccess.com"（末尾の / は付けない）
+    "ACCESS_TEAM_DOMAIN": "",
+    // Access アプリケーションの AUD タグ
+    "ACCESS_AUD": "",
+    // このサイトのオリジン（例: "https://wiki.example.com"）。付箋の中の絶対 URL のリンクを、
+    // ページ間のリンクとして拾うのに使う。空なら相対 URL（/p/<slug>）だけを拾う
+    "SITE_ORIGIN": ""
+  }
+}

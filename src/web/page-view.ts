@@ -19,6 +19,7 @@ import {
 } from './dom';
 import { t } from './i18n';
 import { icon, type IconName } from './icons';
+import { site } from './site';
 import {
   navigate,
   onViewEnd,
@@ -231,7 +232,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   const showTitle = (value: string | null) => {
     currentTitle = value;
     title.textContent = value ?? slug;
-    document.title = t('documentTitle', value ?? slug);
+    document.title = t('documentTitle', value ?? slug, site.siteName);
   };
   showTitle(null);
   // ページの色。ヘッダーの地の色にする。変更は、サーバーから届いたときにも反映する（他の人の変更）。
