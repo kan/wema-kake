@@ -2,7 +2,8 @@ node_modules/
 dist/
 .wrangler/
 .dev.vars
-# デプロイ先ごとの設定（Worker の名前、D1 の ID、Access の値）。wrangler.jsonc のコピーから作る
+# 以前このリポジトリからデプロイしていたときの、デプロイ先ごとの設定。今は使わないが、手元に残っていても
+# git に入らないようにしておく（Worker の名前、D1 の ID、Access の値が書いてある）
 wrangler.deploy.jsonc
 worker-configuration.d.ts
 # dist/lib を出すときの、ランタイムの型（npm run types:build）

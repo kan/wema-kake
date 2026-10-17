@@ -45,7 +45,6 @@
     "types:build": "wrangler types ./build-types.d.ts --include-env false --strict-vars=false",
     "//prepack": "配るものを作る。雛形の .gitignore は npm がパッケージから落とすので、入る名前で複製する（scripts/pack-template.mjs）",
     "prepack": "npm run build && node scripts/pack-template.mjs",
-    "deploy": "npm run build:web && node scripts/deploy.mjs",
     "types": "wrangler types --strict-vars=false",
     "lint": "npm run types && tsc -p tsconfig.json && tsc -p tsconfig.web.json && tsc -p tsconfig.node.json",
     "//pretest": "テストは src/ を直接読むので dist/lib は要らない。画面のアセットを返す処理を確かめるので、dist/web は要る",

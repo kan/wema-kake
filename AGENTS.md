@@ -80,7 +80,8 @@ MCP クライアント ──/mcp──> MCP ┘          │
 - **このリポジトリは公開している。デプロイ先ごとの値を、git に入れるファイルへ書かないこと。** 対象は、Worker の名前、ホスト名、D1 の ID、Access のチームドメインと AUD タグ、`SITE_ORIGIN`。文書（`docs/`、この `AGENTS.md`）にも、実際のホスト名や ID を書かない
 - `wrangler.jsonc` は、ローカル開発とテストに使う。値は空のまま保つ
 - 利用側の最初のデプロイと、Access の設定の手順は `template/README.md` にある（利用側の README になる）。つまずきやすい点もそこに書く
-- 作者の本番は、利用側の形へ移す途中（issue #17 の進め方の 5）。移すまでは、このリポジトリの `wrangler.deploy.jsonc`（`.gitignore` 済み。`main` は `dev/index.ts`）と `npm run deploy`（`scripts/deploy.mjs`）でデプロイする。**`wrangler.jsonc` のバインディングや `assets` を変えたら、`wrangler.deploy.jsonc` にも同じ変更を入れること**。`wrangler.deploy.jsonc` を消したまま `npm run deploy` を実行すると、`wrangler.jsonc` の名前で別の Worker ができる
+- **このリポジトリからはデプロイしない。** 作者の本番も、リポジトリの外にある利用側（雛形から作ったもの）が、npm に出した版を使ってデプロイする。このリポジトリで `wrangler deploy` を実行すると、`wrangler.jsonc` の名前（`wema-kake`）で、保護のない別の Worker ができる
+- 本番に変更を届けるのは、版を上げて publish（上の「リリース」）→ 利用側で `npm update @kanf/wema-kake` → `npm run deploy`
 - secret は使っていない（Access の設定は `vars` の 2 つだけ）
 
 ## 認証
