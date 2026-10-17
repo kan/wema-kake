@@ -59,8 +59,8 @@
   "//dependencies": "Worker の側が実行時に使うもの。@kanf/wema は、画面のビルドに入るほか、Worker の側も自動配置（computeAutoLayout）と型に使うので、ここに置く",
   "dependencies": {
     "@kanf/wema": "^0.16.0",
-    "@modelcontextprotocol/server": "^2.0.0",
-    "agents": "^0.28.0",
+    "@modelcontextprotocol/server": "^2.3.1",
+    "agents": "^0.28.1",
     "hono": "^4.13.13",
     "jose": "^6.2.12",
     "zod": "^4.6.5"
