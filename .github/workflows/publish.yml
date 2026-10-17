@@ -1,0 +1,69 @@
+name: Publish
+
+# タグ（v*）を打ったときだけ npm へ出す。main への push で出さないのは、版を上げる判断とコードを直す
+# 判断が別だから（package.json の version を上げたコミットに v0.1.1 を打つ、という 2 手を踏ませる）
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  # GitHub Release を作るのに要る
+  contents: write
+  # Trusted Publishing（OIDC）。token を secret に置かない代わりに、npm の側で「このリポジトリの
+  # このワークフローからの publish を許す」と登録しておく。provenance も自動で付く。
+  # npm の Trusted Publisher は、direct publish を許可しておくこと（既定のままだと
+  # `npm publish` が `403 OIDC permission denied` で落ちる）
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      # Trusted Publishing は npm 11.5.1 以降にしかない
+      - run: npm install -g npm@latest
+      - run: npm ci
+
+      # タグと package.json の版が一致すること。ずれたまま出すと、違う版が publish されるか、
+      # 「同じ版は出せない」で落ちて、どちらも原因をタグ名から読めない
+      - name: タグと版の一致を見る
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="v$(node -p 'require("./package.json").version')"
+          if [ "$TAG" != "$version" ]; then
+            echo "タグ ($TAG) と package.json の版 ($version) が違う" >&2
+            exit 1
+          fi
+
+      # publish の前に一通り通す。配るもの（dist/lib と dist/web）は、npm publish の prepack が作る
+      - run: npm run lint
+      - run: npm test
+
+      # すでに npm にある版は出さない（最初の版は Trusted Publishing を設定する前に手元から出したので、
+      # そのタグでは Release だけを作る）
+      - name: npm に出す
+        run: |
+          name="$(node -p 'require("./package.json").name')"
+          version="$(node -p 'require("./package.json").version')"
+          if npm view "$name@$version" version >/dev/null 2>&1; then
+            echo "$name@$version は npm にあるので、publish しない"
+          else
+            npm publish --access public
+          fi
+
+      # npm に出たものを GitHub にも残す。npm publish の後に置く（逆にすると、publish に失敗した版の
+      # Release が残る）。本文は、前の Release からの commit を並べる（--generate-notes）。
+      # workflow_dispatch では作らない（タグの push でしか走らない）
+      - name: GitHub Release を作る
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" --title "$TAG" --verify-tag --generate-notes

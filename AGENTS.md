@@ -67,6 +67,14 @@ MCP クライアント ──/mcp──> MCP ┘          │
 - 雛形が通るかの確かめ方: `npm pack` → 別のディレクトリで `npx --package=<tgz> wema-kake init <dir> --yes --no-install` → そこで `npm install <tgz>` → `npm run typecheck`、`npx wrangler deploy --dry-run`、`npm run dev`
 - D1 と DO のスキーマ、同期のプロトコル、MCP のツールを変えるときは、`docs/package.md` の「互換の決まり」に従う。**D1 のマイグレーションと DO の `MIGRATIONS` は、追加のみで書く**
 
+## リリース
+
+- **npm への publish は、`v*` のタグから CI で行う**（`.github/workflows/publish.yml`。Trusted Publishing なので、token を secret に置かない）。手順は、`package.json` の `version` を上げるコミットを作り、そのコミットに `v<version>` のタグを打って push する。ワークフローが、タグと版の一致、lint、テストを見てから publish し、GitHub Release を作る
+- **版を上げることと、タグを打つことは、ユーザーの承認を得てから行う**
+- 版の付け方: 0.x の間は、破壊的変更（`docs/package.md` の「互換の決まり」）を minor で、それ以外を patch で上げる
+- npmjs.com の Trusted Publisher の設定は、リポジトリの外にある。direct publish を許可しておく（既定のままだと `403 OIDC permission denied` で落ちる）
+- publish の後に、雛形のロックを新しい版に合わせて commit する（Deploy to Cloudflare のボタンが `npm ci` で使う）。`cd template && npm install @kanf/wema-kake@latest --package-lock-only`。minor を上げたときは、`template/package.json` の範囲も上げる（`^0.1.0` は `0.2.0` を受けない）
+
 ## デプロイ
 
 - **このリポジトリは公開している。デプロイ先ごとの値を、git に入れるファイルへ書かないこと。** 対象は、Worker の名前、ホスト名、D1 の ID、Access のチームドメインと AUD タグ、`SITE_ORIGIN`。文書（`docs/`、この `AGENTS.md`）にも、実際のホスト名や ID を書かない

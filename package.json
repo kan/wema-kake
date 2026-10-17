@@ -1,11 +1,22 @@
 {
   "name": "@kanf/wema-kake",
-  "version": "0.0.0",
-  "//private": "公開（npm への publish、版の付け方）は別の issue で扱う。それまでは誤って publish しないように止めておく。npm pack はこのままで動く",
-  "private": true,
+  "version": "0.1.0",
   "description": "付箋ボードライブラリ wema を使った Wiki。Cloudflare Workers の上で動き、利用側が自分の Worker を作ってデプロイする",
   "license": "ISC",
   "type": "module",
+  "homepage": "https://github.com/kan/wema-kake",
+  "bugs": "https://github.com/kan/wema-kake/issues",
+  "keywords": [
+    "wiki",
+    "sticky-notes",
+    "whiteboard",
+    "cloudflare",
+    "cloudflare-workers",
+    "durable-objects",
+    "d1",
+    "mcp",
+    "wema"
+  ],
   "//exports": "tsc が出した .js と .d.ts（dist/lib）を配る。境界は src/index.ts で、ここに載っていないものは利用側から読まれない前提で動かせる。package.json を出しているのは、利用側やコマンドが migrations と dist/web の場所をたどれるようにするため",
   "exports": {
     ".": "./dist/lib/index.js",

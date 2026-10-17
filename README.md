@@ -12,9 +12,6 @@
 ![ページの画面。付箋と接続線、子ページの付箋が並んでいる](docs/images/page.png)
 
 **wema-kake はライブラリ（npm: `@kanf/wema-kake`）で、デプロイ物ではありません。** 使う人は、雛形から自分のリポジトリを作り、自分の Worker としてデプロイします。Wiki の処理と画面はパッケージにあり、手元に持つのは設定だけです。更新は `npm update` とデプロイで済みます。
-
-> npm への公開はまだです（準備中）。それまでは、このリポジトリで `npm pack` したものを使ってください。
-
 ## 始め方
 
 ```sh
@@ -25,7 +22,7 @@ npm run dev
 
 `init` は、ディレクトリ、サイトの名前、既定の言語を聞いて、雛形を書き出します。`http://localhost:8787/` で開けます。
 
-雛形から GitHub のリポジトリを作ってデプロイするなら、Deploy to Cloudflare のボタンも使えます（npm への公開の後から。それまでは、ボタンからのデプロイは依存の取得で失敗します）。
+雛形から GitHub のリポジトリを作ってデプロイするなら、Deploy to Cloudflare のボタンも使えます。
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/kan/wema-kake/tree/main/template)
 
