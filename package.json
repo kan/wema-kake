@@ -22,9 +22,9 @@
     ".": "./dist/lib/index.js",
     "./package.json": "./package.json"
   },
-  "//bin": "init が雛形（template/）を書き出す。名前がパッケージ名と同じなのは、npx @kanf/wema-kake が、スコープを外した名前と同じ bin を選ぶため",
+  "//bin": "init が雛形（template/）を書き出す。名前がパッケージ名と同じなのは、npx @kanf/wema-kake が、スコープを外した名前と同じ bin を選ぶため。パスに ./ を付けないのは、publish のときに npm が外して「invalid and removed」という警告を出すため（実際は外した形で残る）",
   "bin": {
-    "wema-kake": "./bin/wema-kake.mjs"
+    "wema-kake": "bin/wema-kake.mjs"
   },
   "//files": "dist/web はビルド済みの画面で、利用側の wrangler.jsonc の assets.directory が直接指す。migrations も migrations_dir で直接指す（どちらもコピーしない）。雛形のロックは入れない（publish の時点の版と噛み合わない）",
   "files": [
