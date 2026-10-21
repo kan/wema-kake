@@ -550,4 +550,133 @@ describe('MCP', () => {
     await call('delete_notes', { page: parent, note_ids: [id] });
     expect(await parentOf(child)).toBeNull();
   });
+
+  /** `parent` のボードにある子ページの付箋が指すページ */
+  const placedIn = async (parent: string) =>
+    (await call('read_board', { page: parent })).notes.map((n: any) => n.child_page).filter(Boolean);
+
+  it('create_page は、ルートのページを作る。すでにある名前では作らない', async () => {
+    const name = unique('mcp-new');
+    expect(await call('create_page', { name, title: '新しいページ' })).toEqual({ page: name, parent: null });
+    expect(await page(name).getPageRef()).toMatchObject({ title: '新しいページ', parent: null, noteCount: 0 });
+
+    await expect(call('create_page', { name, title: '上書き' })).rejects.toThrow(/already exists/);
+    expect((await page(name).getPageRef())?.title).toBe('新しいページ');
+    await expect(call('create_page', { name: unique('mcp-bad'), title: '改行\nあり' })).rejects.toThrow(/invalid title/);
+  });
+
+  it('create_page は、parent を指定すると子ページとして置き、置いた操作は親ページで取り消せる', async () => {
+    const parent = await create('mcp-new-parent', undefined, '既存の付箋');
+    const name = unique('mcp-new-child');
+    const result = await call('create_page', { name, parent, reason: 'アーカイブ用' });
+    expect(result).toMatchObject({ page: name, parent, operation: expect.any(Number) });
+    expect(await parentOf(name)).toBe(parent);
+
+    const board = await call('read_board', { page: parent });
+    const note = board.notes.find((n: any) => n.child_page === name);
+    // 子ページの付箋の大きさで、既存の付箋と重ならない位置に置く
+    expect(note).toMatchObject({ width: 240, height: 180, text: '' });
+    const body = board.notes.find((n: any) => n.id === 'body');
+    expect(note.y).toBeGreaterThanOrEqual(body.y + body.height);
+
+    await call('revert_operation', { page: parent, operation: result.operation });
+    expect(await parentOf(name)).toBeNull();
+    expect(await page(name).getPageRef()).not.toBeNull();
+  });
+
+  it('create_page は、parent がなければページを作らずに断る', async () => {
+    const name = unique('mcp-orphan');
+    await expect(call('create_page', { name, parent: unique('mcp-no-parent') })).rejects.toThrow(/page not found/);
+    expect(await page(name).getPageRef()).toBeNull();
+    await expect(call('create_page', { name, parent: name })).rejects.toThrow(/itself/);
+  });
+
+  it('move_page は、子ページを別のページへ移し、両方のページの操作を返す', async () => {
+    const from = await create('mcp-move-from');
+    const archive = await create('mcp-move-archive');
+    const moved = await create('mcp-move-page');
+    const grandchild = await create('mcp-move-grandchild');
+    await place(from, moved);
+    await place(moved, grandchild);
+
+    const result = await call('move_page', { name: moved, parent: archive });
+    expect(result).toMatchObject({
+      page: moved, from, to: archive,
+      operations: [{ page: from, operation: expect.any(Number) }, { page: archive, operation: expect.any(Number) }],
+    });
+    expect(await parentOf(moved)).toBe(archive);
+    expect(await placedIn(from)).toEqual([]);
+    expect(await placedIn(archive)).toEqual([moved]);
+    // 子孫ごと移る
+    expect(await parentOf(grandchild)).toBe(moved);
+
+    await expect(call('move_page', { name: moved, parent: archive })).rejects.toThrow(/already in/);
+  });
+
+  it('move_page は、ルートのページを子にでき、parent が null ならルートへ戻す', async () => {
+    const archive = await create('mcp-root-archive');
+    const root = await create('mcp-root-page');
+    expect(await call('move_page', { name: root, parent: archive })).toMatchObject({
+      from: null, to: archive, operations: [{ page: archive }],
+    });
+    expect(await parentOf(root)).toBe(archive);
+
+    expect(await call('move_page', { name: root, parent: null })).toMatchObject({
+      from: archive, to: null, operations: [{ page: archive }],
+    });
+    expect(await parentOf(root)).toBeNull();
+    expect(await placedIn(archive)).toEqual([]);
+    await expect(call('move_page', { name: root, parent: null })).rejects.toThrow(/already a root/);
+  });
+
+  it('move_page は、輪になる移動と、ない移す先を、今の親から外す前に断る', async () => {
+    const from = await create('mcp-loop-from');
+    const moved = await create('mcp-loop-page');
+    const descendant = await create('mcp-loop-descendant');
+    await place(from, moved);
+    await place(moved, descendant);
+    const opsOf = async (slug: string) => (await page(slug).listOps({ actor: 'agent:test' })).length;
+
+    await expect(call('move_page', { name: moved, parent: descendant })).rejects.toThrow(/is inside/);
+    await expect(call('move_page', { name: moved, parent: unique('mcp-loop-none') })).rejects.toThrow(/page not found/);
+    expect(await parentOf(moved)).toBe(from);
+    expect(await opsOf(from)).toBe(0);
+    await expect(call('move_page', { name: unique('mcp-loop-none'), parent: from })).rejects.toThrow(/page not found/);
+  });
+
+  it('move_page は、移す先に置けなければ（深さの上限）、外した操作を取り消して元の親ページに戻す', async () => {
+    const from = await create('mcp-deep-from');
+    const moved = await create('mcp-deep-page');
+    await place(from, moved);
+    await place(moved, await create('mcp-deep-child'));
+    // 4 段の鎖の最下段へ、2 段の部分木を置くと 6 段になる
+    const chain = [await create('mcp-deep-t1')];
+    for (let i = 2; i <= 4; i++) {
+      const next = await create(`mcp-deep-t${i}`);
+      await place(chain[chain.length - 1], next);
+      chain.push(next);
+    }
+
+    await expect(call('move_page', { name: moved, parent: chain[3] })).rejects.toThrow(/too-deep.*left it in/);
+    expect(await parentOf(moved)).toBe(from);
+    expect(await placedIn(from)).toEqual([moved]);
+  });
+
+  it('move_page は、親の記録が古い（親ページに付箋がない）ページも移せる', async () => {
+    const stale = await create('mcp-stale-parent');
+    const archive = await create('mcp-stale-archive');
+    const moved = await create('mcp-stale-page');
+    // 付箋を置かずに、親の記録だけを付ける
+    expect(await page(moved).setParent(stale)).toBeNull();
+
+    expect(await call('move_page', { name: moved, parent: archive })).toMatchObject({
+      from: stale, to: archive, operations: [{ page: archive }],
+    });
+    expect(await parentOf(moved)).toBe(archive);
+
+    const other = await create('mcp-stale-other');
+    expect(await page(other).setParent(stale)).toBeNull();
+    expect(await call('move_page', { name: other, parent: null })).toMatchObject({ to: null, operations: [] });
+    expect(await parentOf(other)).toBeNull();
+  });
 });

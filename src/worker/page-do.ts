@@ -111,7 +111,7 @@ export interface ApplyInput {
   /** 外から来た値をそのまま渡す。検証は applyOps が行う */
   deltas: unknown;
   summary?: string;
-  /** ページがまだ作られていなければ、適用せずに断る（MCP のツールはページを作らない） */
+  /** ページがまだ作られていなければ、適用せずに断る（MCP の書き込みのツールは、ページを作らない。作るのは create_page だけ） */
   mustExist?: boolean;
 }
 

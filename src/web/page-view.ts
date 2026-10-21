@@ -1,12 +1,12 @@
 // ページの画面（/p/<slug>）。wema のボードと、見出し（表示名、バックリンク、操作の履歴、削除）。
 import { WemaBoard, type WemaNote } from '@kanf/wema';
 import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type SkipReason } from '../shared/api';
-import { CHILD_PAGE_KEY, childPageOf } from '../shared/hierarchy';
+import { CHILD_NOTE_SIZE, CHILD_PAGE_KEY, childPageOf } from '../shared/hierarchy';
 import { parseSystemSummary } from '../shared/op-summary';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import * as api from './api';
 import { bookmarkStar, pageLinks, pageNavMenu } from './bookmarks';
-import { CHILD_NOTE_SIZE, ChildNotes, childPageForm } from './child-notes';
+import { ChildNotes, childPageForm } from './child-notes';
 import {
   confirmDeletePage,
   el,

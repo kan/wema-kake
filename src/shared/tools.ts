@@ -5,9 +5,9 @@
 // 渡せば、同じツールがそのまま使える。
 import { computeAutoLayout } from '@kanf/wema';
 import { z } from 'zod';
-import { MAX_LIST_LIMIT, MAX_QUERY_LENGTH, type OpSummary, type RevertOutcome } from './api';
+import { MAX_LIST_LIMIT, MAX_QUERY_LENGTH, MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome } from './api';
 import type { HistoryDelta, WemaEdge, WemaNote } from './delta';
-import { childPageOf } from './hierarchy';
+import { CHILD_NOTE_SIZE, CHILD_PAGE_KEY, childPageOf, MAX_DEPTH } from './hierarchy';
 import { textToHtml } from './note-text';
 import { SLUG_RE } from './slug';
 
@@ -42,11 +42,17 @@ export interface BoardAccess {
   ): Promise<{ name: string; title: string | null; parent: string | null; snippet?: string }[]>;
   /** ページがまだ作られていなければ null */
   readBoard(page: string): Promise<BoardState | null>;
+  /** 親ページのスラッグ（ルートなら null）。ページがなければ undefined。索引ではなく、ページの今の値を返す */
+  parentOf(page: string): Promise<string | null | undefined>;
+  /** ページの親が `parent` なら、ルートへ戻す（親の記録が古く、親ページに子ページの付箋がないときに使う） */
+  clearParent(page: string, parent: string): Promise<void>;
+  /** ページを、付箋のない状態で作る。すでにあれば作らずに `exists` を返す */
+  createPage(page: string, title: string): Promise<'created' | 'exists' | 'invalid title'>;
   /** 付箋の text（HTML）をプレーンテキストにする */
   plainText(html: string): Promise<string>;
   /**
    * デルタを 1 つの操作として適用する。`summary` は履歴に出る説明。
-   * ページがなければ適用せず、`ok: false` を返すこと（ツールはページを作らない）
+   * ページがなければ適用せず、`ok: false` を返すこと（ページを作るのは create_page だけ）
    */
   apply(page: string, deltas: HistoryDelta[], summary: string): Promise<ApplyOutcome>;
   /** 自分（この agent）の最近の操作 */
@@ -119,7 +125,7 @@ interface Board extends BoardState {
 
 async function existingBoard(access: BoardAccess, slug: string): Promise<Board> {
   const board = await access.readBoard(slug);
-  // ページの作成はツールでは行わない（人が画面から作る）
+  // 書き込みのツールは、ページを作らない（作るのは create_page だけ）
   if (!board) throw new ToolError(`page not found: ${slug}`);
   return { ...board, notesById: new Map(board.notes.map((n) => [n.id, n])) };
 }
@@ -145,6 +151,35 @@ function assertUnique(ids: string[]): void {
 }
 
 const summaryOf = (tool: string, why: string | undefined) => (why ? `${tool}: ${why}` : tool);
+
+const messageOf = (e: unknown) => (e instanceof Error ? e.message : String(e));
+
+/** `page` が `ancestor` の子孫（`ancestor` 自身を含む）か。親をたどる（階層の深さの上限までで止まる） */
+async function isDescendant(access: BoardAccess, page: string, ancestor: string): Promise<boolean> {
+  let name: string | null | undefined = page;
+  for (let depth = 0; name && depth <= MAX_DEPTH; depth++) {
+    if (name === ancestor) return true;
+    name = await access.parentOf(name);
+  }
+  return false;
+}
+
+/**
+ * `parent` のボードに、`child` の子ページの付箋を置く（既存の付箋の下に、重ならないように）。
+ * 置けるかどうか（親は 1 つだけ、輪にならない、深さ）は、ページの DO が確かめる。記録した操作の番号を返す
+ */
+async function placeChild(access: BoardAccess, parent: Board, parentSlug: string, child: string, summary: string) {
+  const rect = placeNote(CHILD_NOTE_SIZE, undefined, parent.notes);
+  const note: WemaNote = {
+    id: crypto.randomUUID(),
+    ...rect,
+    text: '',
+    color: NOTE_COLOR,
+    zIndex: 1,
+    meta: { [CHILD_PAGE_KEY]: child },
+  };
+  return applyOrThrow(access, parentSlug, [{ type: 'note:create', note }], summary);
+}
 
 function findNote(board: Board, id: string) {
   const note = board.notesById.get(id);
@@ -410,6 +445,108 @@ export const TOOLS: Tool[] = [
       }
       const seq = await applyOrThrow(access, input.page, deltas, summaryOf('auto_layout', input.reason));
       return { operation: seq, moved: deltas.length };
+    },
+  }),
+
+  tool({
+    name: 'create_page',
+    description:
+      'ページを新しく作る。付箋のない空のページができる。parent を指定すると、そのページの中に子ページとして置く（parent のボードに、子ページを表す付箋が足される）。すでにある名前では作れない（既存のページを別のページの中へ移すときは move_page を使う）。ページの作成そのものは、revert_operation では取り消せない。子ページとして置いた操作は、parent のページで取り消せる（取り消すと、作ったページはルートのページとして残る）。',
+    readOnly: false,
+    input: z.object({
+      name: z
+        .string()
+        .regex(SLUG_RE)
+        .describe('新しいページのスラッグ（URL に使う名前。英小文字、数字、ハイフン。後から変えられない）'),
+      title: z.string().max(MAX_TITLE_LENGTH).optional().describe('ページの表示名。省略すると、スラッグが表示される'),
+      parent: page.optional().describe('子ページとして置く先のページのスラッグ。省略すると、ルートのページになる'),
+      reason,
+    }),
+    async run(access, input) {
+      const { name, parent } = input;
+      if (parent === name) throw new ToolError(`a page cannot be placed in itself: ${name}`);
+      // 置く先が無ければ、ページを作る前に断る
+      const parentBoard = parent === undefined ? undefined : await existingBoard(access, parent);
+      const created = await access.createPage(name, input.title ?? '');
+      if (created === 'exists') {
+        throw new ToolError(`page already exists: ${name} (use move_page to place an existing page)`);
+      }
+      if (created === 'invalid title') throw new ToolError('invalid title (control characters are not allowed)');
+      if (parent === undefined || parentBoard === undefined) return { page: name, parent: null };
+      try {
+        const seq = await placeChild(access, parentBoard, parent, name, summaryOf('create_page', input.reason));
+        return { page: name, parent, operation: seq };
+      } catch (e) {
+        // ページはできているので、どんな失敗でも、そのことを伝える（作り直そうとすると exists で断られる）
+        throw new ToolError(`created ${name} as a root page, but could not place it in ${parent}: ${messageOf(e)}`);
+      }
+    },
+  }),
+
+  tool({
+    name: 'move_page',
+    description:
+      '既存のページを、別のページの中へ子ページとして移す（今の親ページにある子ページの付箋を消し、移す先に置く）。parent に null を指定すると、親から外してルートのページにする。子ページを持つページは、子孫ごと移る。今の親ページで子ページの付箋につながっていた接続線は消える。移す先に置けなかった場合（輪になる、階層が深すぎるなど）は、元の親ページに戻してエラーを返す。operations は、変更したページと操作の番号の組で、それぞれのページで revert_operation に渡せる。',
+    readOnly: false,
+    input: z.object({
+      name: page.describe('移すページのスラッグ'),
+      parent: page
+        .nullable()
+        .describe('移す先の親ページのスラッグ。null なら、親から外してルートのページにする'),
+      reason,
+    }),
+    async run(access, input) {
+      const { name, parent: target } = input;
+      const current = await access.parentOf(name);
+      if (current === undefined) throw new ToolError(`page not found: ${name}`);
+      if (target === name) throw new ToolError(`a page cannot be placed in itself: ${name}`);
+      if (current === target) {
+        throw new ToolError(target === null ? `already a root page: ${name}` : `already in ${target}: ${name}`);
+      }
+      const summary = summaryOf('move_page', input.reason);
+      // 移す先が無いか、移す先が自分の子孫（輪になる）なら、今の親から外す前に断る。
+      // 深さの上限は、置くときに DO が確かめる（断られたら、下で元に戻す）
+      const targetBoard = target === null ? undefined : await existingBoard(access, target);
+      if (target !== null && (await isDescendant(access, target, name))) {
+        throw new ToolError(`could not place ${name} in ${target}: ${target} is inside ${name}`);
+      }
+      const operations: { page: string; operation: number }[] = [];
+
+      let removed: number | undefined;
+      if (current !== null) {
+        const board = await access.readBoard(current);
+        const notes = board?.notes.filter((n) => childPageOf(n) === name) ?? [];
+        if (notes.length > 0) {
+          removed = await applyOrThrow(
+            access, current, notes.map((note): HistoryDelta => ({ type: 'note:delete', note })), summary,
+          );
+          operations.push({ page: current, operation: removed });
+        } else {
+          // 親の記録が古い（親ページに付箋がない、親ページがもうない）。記録だけを消す
+          await access.clearParent(name, current);
+        }
+      }
+      if (target === null || targetBoard === undefined) return { page: name, from: current, to: null, operations };
+
+      try {
+        const placed = await placeChild(access, targetBoard, target, name, summary);
+        operations.push({ page: target, operation: placed });
+        return { page: name, from: current, to: target, operations };
+      } catch (e) {
+        const why = `could not place ${name} in ${target}: ${messageOf(e)}`;
+        if (current === null || removed === undefined) throw new ToolError(why);
+        // 置けなかったので、外した操作を取り消して、元の親ページに戻す
+        await access
+          .revert(current, removed, summaryOf('move_page', `restore ${name} after a failed move`))
+          .catch(() => undefined);
+        // 戻せたかは、取り消しの結果ではなく、今の親で判断する（間に人が別のページへ置いたこともある）
+        const now = await access.parentOf(name).catch(() => undefined);
+        if (now === current) throw new ToolError(`${why} (left it in ${current})`);
+        const where = now === null ? 'is now a root page' : now === undefined ? 'could not be checked' : `is now in ${now}`;
+        throw new ToolError(
+          `${why}. It was removed from ${current} and ${where}; operation ${removed} on ${current} is the removal`,
+        );
+      }
     },
   }),
 

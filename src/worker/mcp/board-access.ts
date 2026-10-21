@@ -36,6 +36,20 @@ export class ServerBoardAccess implements BoardAccess {
     return this.page(slug).getBoardState();
   }
 
+  async parentOf(slug: string): Promise<string | null | undefined> {
+    const ref = await this.page(slug).getPageRef();
+    return ref === null ? undefined : ref.parent;
+  }
+
+  async clearParent(slug: string, parent: string): Promise<void> {
+    await this.page(slug).clearParent(parent);
+  }
+
+  async createPage(slug: string, title: string): Promise<'created' | 'exists' | 'invalid title'> {
+    const result = await this.page(slug).createPage(title);
+    return result.ok ? 'created' : result.reason;
+  }
+
   async plainText(html: string): Promise<string> {
     // ページへのリンクは、書くときと同じ書式（[[slug]]）で残す
     return (await extractContent(html, { siteOrigin: this.env.SITE_ORIGIN })).text;

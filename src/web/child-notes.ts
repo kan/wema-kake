@@ -20,9 +20,6 @@ const REFRESH_DELAY_MS = 300;
 /** 子ページの変更が、索引（付箋の枚数と配置）に反映されるのを待つ時間 */
 const INDEXING_WAIT_MS = INDEX_DELAY_MS + 2000;
 
-/** 子ページの付箋の大きさ。配置の再現が入るよう、ふつうの付箋より少し大きくする */
-export const CHILD_NOTE_SIZE = { width: 240, height: 180 };
-
 type LayoutNote = [x: number, y: number, width: number, height: number, color: string];
 
 function parseLayout(json: string | null): LayoutNote[] {

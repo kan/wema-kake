@@ -8,6 +8,9 @@ import type { HistoryDelta, WemaNote } from './delta';
 /** 子ページの付箋の meta のキー。値は、子ページのスラッグ */
 export const CHILD_PAGE_KEY = 'page';
 
+/** 子ページの付箋の大きさ。配置の再現が入るよう、ふつうの付箋より少し大きくする */
+export const CHILD_NOTE_SIZE = { width: 240, height: 180 };
+
 /** 階層の深さの上限。ルートを 1 段目と数える */
 export const MAX_DEPTH = 5;
 
