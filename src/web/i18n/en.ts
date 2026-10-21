@@ -118,6 +118,7 @@ export const en = {
   'ops.summary.revert': (seq) => `Reverted #${seq}`,
   'ops.summary.revertUnknown': 'Revert',
   'ops.summary.notesReceived': (page) => `Notes received from page ${page}`,
+  'ops.summary.notesSent': (page) => `Notes moved to page ${page}`,
   'ops.summary.childRecolored': (page) => `Matched the color of child page ${page}`,
 
   'revert.done': 'Reverted',
@@ -144,6 +145,8 @@ export const en = {
     `Could not place it as a child page (${why})${kept ? '. The page you created remains in the list as a root page' : ''}`,
   'transfer.moved': (notes, page) => `Moved ${count(notes, 'note')} to “${page}”`,
   'transfer.copied': (notes, page) => `Copied ${count(notes, 'note')} to “${page}”`,
+  'transfer.partial': (page) =>
+    `Placed the notes in “${page}”, but some could not be removed from this page and are now in both (notes changed during the move are kept)`,
   'transfer.confirmMoveLinked': (notes) =>
     `Also move the ${count(notes, 'note')} connected by lines?\nChoose “Cancel” to move only the notes you dragged`,
   'transfer.confirmCopyLinked': (notes) =>

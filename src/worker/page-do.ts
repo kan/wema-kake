@@ -14,6 +14,7 @@ import {
   type HistoryDelta,
   invertDeltas,
   type Snapshot,
+  type WemaEdge,
   type WemaNote,
 } from '../shared/delta';
 import { systemSummary } from '../shared/op-summary';
@@ -42,7 +43,9 @@ import {
   readBoardWithAuthors,
   readBoardWithInfos,
   readNotes,
+  readNotesAmong,
   type Sanitized,
+  type TakenNote,
   sanitizeDeltas,
   UNSET_FLAGS,
 } from './apply-ops';
@@ -125,6 +128,51 @@ export interface ReceiveInput extends Pick<ApplyInput, 'actor' | 'clientId' | 'o
   /** 付箋が元あったページ（操作の履歴の要約に出す） */
   from: string;
 }
+
+export interface TakeInput extends Pick<ApplyInput, 'actor' | 'clientId' | 'opId'> {
+  /** 付箋が今あるページ */
+  from: string;
+  /** 移す（写す）付箋の、元のページでの id。呼び出し側（Worker）が検証する */
+  noteIds: string[];
+  /** 付箋の id から、元のページでの位置の代わりに使う位置。呼び出し側（Worker）が検証する */
+  positions: Map<string, { x: number; y: number }>;
+  /** 付箋の作成者を引き継ぐ（移すとき）。引き継がなければ、作成者は `actor`（写すとき） */
+  keepAuthors: boolean;
+  /** 操作の履歴に出す説明。省略すると、元のページを表す符号 */
+  summary?: string;
+}
+
+/** 付箋の id から、最後に変更した時刻（notes.updated_at） */
+export type NoteVersions = Record<string, number>;
+
+/**
+ * `noteIds` は、置いた付箋の id。`TakeInput.noteIds` と同じ順に並ぶ。`versions` は、読んだときの
+ * 元の付箋の版。同じ操作の再送では、読み直さないので null。`notFound` は、このページ、元のページ、
+ * 付箋のどれかがなかった
+ */
+export type TakeResult =
+  | { ok: true; seq: number; noteIds: string[]; versions: NoteVersions | null }
+  | { ok: false; reason: string; notFound?: true };
+
+export interface RemoveInput extends Pick<ApplyInput, 'actor' | 'clientId' | 'opId'> {
+  noteIds: string[];
+  /**
+   * takeNotes が読んだときの版。これと違う付箋（読んだ後に変わった、消えた）は消さずに、`kept` で返す
+   * （送り先には、変わる前の付箋が置かれている）。null なら、今ある付箋をそのまま消す
+   */
+  versions: NoteVersions | null;
+  /** 付箋を移した先のページ（操作の履歴の要約に出す） */
+  to: string;
+  /** 操作の履歴に出す説明。省略すると、移した先のページを表す符号 */
+  summary?: string;
+}
+
+/** `seq` は記録した操作の番号。消した付箋がなければ null。`kept` は、版が違って消さなかった付箋 */
+export type RemoveResult = { ok: true; seq: number | null; kept: string[] } | { ok: false; reason: string };
+
+/** 作成のデルタで作る付箋（デルタの順） */
+const createdNotes = (deltas: HistoryDelta[]) => deltas.flatMap((d) => (d.type === 'note:create' ? [d.note] : []));
+const createdNoteIds = (deltas: HistoryDelta[]) => createdNotes(deltas).map((note) => note.id);
 
 /** 受け取った付箋と、今ある付箋の間に空ける幅 */
 const RECEIVE_GAP = 40;
@@ -660,7 +708,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
         (note): HistoryDelta => ({ type: 'note:update', noteId: note.id, before: { color: note.color }, after: { color } }),
       ),
       summary: systemSummary.childRecolored(page),
-    }, undefined, false);
+    }, { matchColors: false });
   }
 
   /**
@@ -889,6 +937,9 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * 他のページから移す（写す）付箋と、その間の接続線を受け取って置く。互いの位置関係は保ち、
    * 今ある付箋の下に置く（送る側は、このページの付箋の位置を知らない）。
    * ページがまだ作られていなければ、作らずに断る。
+   *
+   * 付箋の中身を送る側が渡す形なので、作成者は送った人になる。画面は takeNotes（Worker の
+   * transferNotes）を使う。これは、更新の前に開いた画面のタブが使う
    */
   receiveNotes(input: ReceiveInput): Promise<ApplyResult> {
     return this.write(
@@ -907,19 +958,130 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
             summary: systemSummary.notesReceived(from),
             mustExist: true,
           },
-          (deltas) =>
-            placeBelow(
-              deltas.flatMap((d) => (d.type === 'note:create' ? [d.note] : [])),
-              this.sql
-                .exec<{ left: number | null; bottom: number | null }>(
-                  `SELECT min(x) AS left, max(y + height) AS bottom FROM notes`,
-                )
-                .one(),
-            ),
+          { prepare: (deltas) => this.placeBelowNotes(deltas) },
         );
       },
       // 呼び出し側（Worker）は、ページがないときと同じに扱う
       { ok: false, reason: REASON_PAGE_NOT_FOUND },
+    );
+  }
+
+  /**
+   * 他のページ（`from`）の付箋を読んで、このページに置く。置き方は receiveNotes と同じ。
+   * 付箋の中身と作成者は、元のページの DO から読む（送る側の申告を使わない）。
+   * 元のページからは消さない（消すのは、置けた後に、Worker が removeNotes で行う）。
+   * 子ページを表す付箋は、置かずに断る（ページの親が変わることになる）
+   */
+  takeNotes(input: TakeInput): Promise<TakeResult> {
+    const pageNotFound = { ok: false, reason: REASON_PAGE_NOT_FOUND, notFound: true } as const;
+    return this.write(async (): Promise<TakeResult> => {
+      const { actor, clientId, opId, from, noteIds } = input;
+      if (this.version === 0) return pageNotFound;
+      // 同じ操作の再送。元のページの付箋は、前の送信で消えていることがあるので、読みに行かない
+      const done = this.findOp(actor, clientId, opId);
+      if (done) {
+        const noteIds = createdNoteIds(JSON.parse(done.body as string));
+        return { ok: true, seq: done.seq as number, noteIds, versions: null };
+      }
+      if (from === this.slug()) return { ok: false, reason: 'cannot move notes to the same page' };
+
+      // 元のページの読み取りは、向こうの順番待ちに入らない。向こうの書き込みが、こちらの順番待ちを
+      // 待っていることがあるため（入ると、互いに待って止まる）。読んだ後に向こうで変わった付箋は、
+      // removeNotes が版を比べて、消さずに残す
+      const source = await this.env.PAGE.getByName(from).notesAmong(noteIds);
+      if (!source) return { ok: false, reason: `page not found: ${from}`, notFound: true };
+      return this.placeTaken(input, source);
+    }, pageNotFound);
+  }
+
+  /**
+   * 付箋 `ids` と、その付箋どうしをつなぐ接続線。他のページが、移す付箋を読む（takeNotes）。
+   * ページがまだ作られていなければ null
+   */
+  notesAmong(ids: string[]): { notes: TakenNote[]; edges: WemaEdge[] } | null {
+    return this.version === 0 ? null : readNotesAmong(this.sql, ids);
+  }
+
+  /** takeNotes で読んだ付箋を、新しい id にして置く */
+  private async placeTaken(input: TakeInput, source: { notes: TakenNote[]; edges: WemaEdge[] }): Promise<TakeResult> {
+    const { from, noteIds, positions, keepAuthors, summary, ...sender } = input;
+    const byId = new Map(source.notes.map((note) => [note.id, note]));
+    /** 元のページでの id から、このページでの id（同じ付箋を 2 回写しても、重ならない） */
+    const newIds = new Map<string, string>();
+    const authors = new Map<string, string | null>();
+    const versions: NoteVersions = {};
+    const notes: WemaNote[] = [];
+    for (const id of noteIds) {
+      const found = byId.get(id);
+      if (!found) return { ok: false, reason: `note not found: ${id}`, notFound: true };
+      if (childPageOf(found) !== undefined) return { ok: false, reason: `cannot move a child page note: ${id}` };
+      const { createdBy, updatedAt, ...note } = found;
+      const newId = crypto.randomUUID();
+      newIds.set(id, newId);
+      notes.push({ ...note, ...positions.get(id), id: newId });
+      if (keepAuthors) authors.set(newId, createdBy);
+      versions[id] = updatedAt;
+    }
+    // 読んだ接続線は、送る付箋どうしをつなぐものだけ（残る付箋との接続線は、置かない）
+    const edges = source.edges.map((edge) => ({
+      ...edge, id: crypto.randomUUID(), from: newIds.get(edge.from)!, to: newIds.get(edge.to)!,
+    }));
+
+    const result = await this.applyOpsInOrder(
+      {
+        ...sender,
+        deltas: [
+          ...notes.map((note) => ({ type: 'note:create', note })),
+          ...edges.map((edge) => ({ type: 'edge:create', edge })),
+        ],
+        summary: summary ?? systemSummary.notesReceived(from),
+        mustExist: true,
+      },
+      { prepare: (deltas) => this.placeBelowNotes(deltas), authors },
+    );
+    if (!result.ok) return { ok: false, reason: result.reason };
+    return { ok: true, seq: result.seq, noteIds: createdNoteIds(result.deltas), versions };
+  }
+
+  /**
+   * 他のページへ移した付箋を、このページから消す（takeNotes で置けた後に、Worker が呼ぶ）。
+   * 付箋を読むのは、順番待ちに入ってから。同じ opId で送り直しても、二重には記録しない
+   */
+  removeNotes(input: RemoveInput): Promise<RemoveResult> {
+    return this.write(async (): Promise<RemoveResult> => {
+      const { noteIds, versions, to, summary, ...sender } = input;
+      if (this.version === 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
+      // 同じ操作の再送。付箋は前の送信で消えている
+      const done = this.findOp(sender.actor, sender.clientId, sender.opId);
+      if (done) return { ok: true, seq: done.seq as number, kept: [] };
+
+      const current = new Map(readNotesAmong(this.sql, noteIds).notes.map((note) => [note.id, note]));
+      // 読んだ後に変わった付箋と、誰かが消した付箋（同時に別のページへ移した場合を含む）は消さない
+      const kept = versions ? noteIds.filter((id) => current.get(id)?.updatedAt !== versions[id]) : [];
+      const keptSet = new Set(kept);
+      const notes = [...current.values()]
+        .filter((note) => !keptSet.has(note.id))
+        .map(({ createdBy: _, updatedAt: __, ...note }) => note);
+      // 空のデルタは記録できない
+      if (notes.length === 0) return { ok: true, seq: null, kept };
+      const result = await this.applyOpsInOrder({
+        ...sender,
+        deltas: notes.map((note): HistoryDelta => ({ type: 'note:delete', note })),
+        summary: summary ?? systemSummary.notesSent(to),
+        mustExist: true,
+      });
+      if (!result.ok) return { ok: false, reason: result.reason };
+      return { ok: true, seq: result.deltas.length > 0 ? result.seq : null, kept };
+    }, { ok: false, reason: REASON_PAGE_NOT_FOUND });
+  }
+
+  /** 作成のデルタの付箋を、互いの位置関係を保ったまま、今ある付箋の下へずらす */
+  private placeBelowNotes(deltas: HistoryDelta[]): void {
+    placeBelow(
+      createdNotes(deltas),
+      this.sql
+        .exec<{ left: number | null; bottom: number | null }>(`SELECT min(x) AS left, max(y + height) AS bottom FROM notes`)
+        .one(),
     );
   }
 
@@ -986,15 +1148,20 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
   }
 
   /**
-   * @param prepare 検証の済んだデルタを、適用する前に書き換える（今あるボードに合わせた位置決めなど）。
+   * @param options.prepare 検証の済んだデルタを、適用する前に書き換える（今あるボードに合わせた位置決めなど）。
    *   同じ操作の再送（適用済み）では、呼ばない
-   * @param matchColors 適用した後に、子ページの色と、その付箋の色をそろえる（matchChildColors）
+   * @param options.matchColors 適用した後に、子ページの色と、その付箋の色をそろえる（matchChildColors）。既定は true
+   * @param options.authors 作成する付箋の作成者（付箋の id から）。applyDeltas を参照
    */
   private async applyOpsInOrder(
     input: ApplyInput,
-    prepare?: (deltas: HistoryDelta[]) => void,
-    matchColors = true,
+    options: {
+      prepare?: (deltas: HistoryDelta[]) => void;
+      matchColors?: boolean;
+      authors?: ReadonlyMap<string, string | null>;
+    } = {},
   ): Promise<ApplyResult> {
+    const { prepare, matchColors = true, authors } = options;
     let deltas: HistoryDelta[];
     let sanitized: Sanitized;
     try {
@@ -1031,7 +1198,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       try {
         const result = this.ctx.storage.transactionSync((): ApplyResult => {
           const now = Date.now();
-          const applied = applyDeltas(this.sql, deltas, input.actor, now, sanitized.cleanBefore);
+          const applied = applyDeltas(this.sql, deltas, input.actor, now, sanitized.cleanBefore, authors);
           const fixups = [...sanitized.fixups, ...applied.fixups];
           if (applied.deltas.length === 0) {
             return { ok: true, seq: this.getSeq(), deltas: [], fixups, broadcast: false };

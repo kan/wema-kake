@@ -16,6 +16,8 @@ export const systemSummary = {
   revert: (seq: number) => `${PREFIX}revert:${seq}`,
   /** ページ `page` から移した（写した）付箋を置いた */
   notesReceived: (page: string) => `${PREFIX}notes-received:${page}`,
+  /** 付箋を、ページ `page` へ移したので、このページから消した */
+  notesSent: (page: string) => `${PREFIX}notes-sent:${page}`,
   /** 子ページ `page` の色に、その付箋の色を合わせた */
   childRecolored: (page: string) => `${PREFIX}child-recolored:${page}`,
 };
@@ -25,6 +27,7 @@ export type SystemSummary =
   | { kind: 'childRemoved'; page: string }
   | { kind: 'revert'; seq: number }
   | { kind: 'notesReceived'; page: string }
+  | { kind: 'notesSent'; page: string }
   | { kind: 'childRecolored'; page: string };
 
 /** 要約が、サーバーの付けた符号なら、その中身を返す。符号でなければ（知らない符号も）null */
@@ -36,6 +39,7 @@ export function parseSystemSummary(summary: string): SystemSummary | null {
   if (kind === 'child-removed' && value !== '') return { kind: 'childRemoved', page: value };
   if (kind === 'revert' && /^\d+$/.test(value)) return { kind: 'revert', seq: Number(value) };
   if (kind === 'notes-received' && value !== '') return { kind: 'notesReceived', page: value };
+  if (kind === 'notes-sent' && value !== '') return { kind: 'notesSent', page: value };
   if (kind === 'child-recolored' && value !== '') return { kind: 'childRecolored', page: value };
   return null;
 }

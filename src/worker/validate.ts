@@ -219,6 +219,24 @@ function parseDelta(v: unknown): HistoryDelta {
   }
 }
 
+/** 他のページへ移す（写す）付箋の id の一覧。重複は 1 つにする */
+export function parseNoteIds(input: unknown): string[] {
+  if (!Array.isArray(input) || input.length === 0) throw new RejectError('invalid noteIds');
+  if (input.length > MAX_DELTAS) throw new RejectError(`too many notes (${input.length}, limit ${MAX_DELTAS})`);
+  return [...new Set(input.map((v) => id(v, 'note id')))];
+}
+
+/** 付箋の id から、位置（`{ x, y }`）。省略されていれば空 */
+export function parsePositions(input: unknown): Map<string, { x: number; y: number }> {
+  if (input === undefined || input === null) return new Map();
+  return new Map(
+    Object.entries(obj(input, 'positions')).map(([key, v]) => {
+      const p = obj(v, 'position');
+      return [id(key, 'note id'), { x: num(p.x, 'x'), y: num(p.y, 'y') }];
+    }),
+  );
+}
+
 /** 外から来たデルタの形を検証し、既知のフィールドだけを持つデルタにして返す */
 export function parseDeltas(input: unknown): HistoryDelta[] {
   if (!Array.isArray(input) || input.length === 0) throw new RejectError('invalid deltas');

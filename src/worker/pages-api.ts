@@ -8,6 +8,7 @@ import type { AuthEnv } from './access';
 import { createFirstPage } from './first-page';
 import { REASON_PAGE_NOT_FOUND, type RevertFailure } from './page-do';
 import { listPages, searchPages, searchRoots } from './page-queries';
+import { type TransferFailure, transferNotes } from './transfer';
 
 const REVERT_STATUS = {
   'not-found': 404,
@@ -229,10 +230,50 @@ pagesApi.post('/pages/:slug/ops/:seq/revert', validSlug, async (c) => {
   return c.json({ error: result.reason }, REVERT_STATUS[result.code]);
 });
 
+const TRANSFER_STATUS = {
+  'not-found': 404,
+  invalid: 400,
+  partial: 409,
+} as const satisfies Record<TransferFailure, number>;
+
+/**
+ * このページの付箋を、他のページ（`to`）へ移す（写す）。本文は
+ * `{ clientId, opId, to, noteIds, positions?, copy? }`。付箋の中身はサーバーが読む。
+ * 移すときは、作成者を引き継ぎ、このページから消す。写すときは、作成者は写した人になり、このページに残す。
+ * `positions`（付箋の id から `{ x, y }`）は、このページでの位置の代わりに使う（ドラッグで動かした
+ * 付箋を、動かす前の位置で送る）。送り先では、今ある付箋の下に置く。同じ `opId` で送り直しても、
+ * 二重には置かない。送り先がなければ 404（作らない）
+ */
+pagesApi.post('/pages/:slug/transfer', validSlug, async (c) => {
+  const body = await c.req
+    .json<{ clientId?: unknown; opId?: unknown; to?: unknown; noteIds?: unknown; positions?: unknown; copy?: unknown }>()
+    .catch(() => null);
+  const to = body?.to;
+  // スラッグの形は transferNotes が確かめる
+  if (typeof to !== 'string') return c.json({ error: 'invalid to' }, 400);
+  const result = await transferNotes(c.env, {
+    actor: c.get('actor'),
+    clientId: String(body?.clientId ?? ''),
+    opId: String(body?.opId ?? ''),
+    from: c.req.param('slug'),
+    to,
+    noteIds: body?.noteIds,
+    positions: body?.positions,
+    copy: body?.copy === true,
+  });
+  if (!result.ok) return c.json({ error: result.reason }, TRANSFER_STATUS[result.code]);
+  // 置いた後の送り先の概要も返す（送った側が、索引への反映を待たずに、子ページの付箋を描き直せる）
+  const summary = await c.env.PAGE.getByName(to).getSummary();
+  return c.json({ ok: true, page: summary && { name: to, ...summary } });
+});
+
 /**
  * 他のページから移す（写す）付箋を置く。本文は `{ clientId, opId, from, notes, edges }`
  * （`from` は、付箋が元あったページ。同じ `opId` で送り直しても、二重には置かない）。
- * 今ある付箋の下に置く。ページがなければ 404（作らない）
+ * 今ある付箋の下に置く。ページがなければ 404（作らない）。
+ *
+ * 付箋の中身を送る側が渡すので、作成者は送った人になる。今の画面は `/transfer` を使う。これは、
+ * 更新の前に開いた画面のタブのために残している
  */
 pagesApi.post('/pages/:slug/notes', validSlug, async (c) => {
   const body = await c.req

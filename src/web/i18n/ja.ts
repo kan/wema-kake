@@ -138,6 +138,7 @@ export const ja = {
   'ops.summary.revert': (seq: number) => `#${seq} の取り消し`,
   'ops.summary.revertUnknown': '取り消し',
   'ops.summary.notesReceived': (page: string) => `ページ ${page} から付箋を受け取り`,
+  'ops.summary.notesSent': (page: string) => `ページ ${page} へ付箋を移動`,
   'ops.summary.childRecolored': (page: string) => `子ページ ${page} の色に合わせる`,
 
   // 取り消しの結果。`why` は、`revert.reasons` で作った理由（なければ空文字）
@@ -170,6 +171,8 @@ export const ja = {
   // 付箋を、子ページの付箋の上へドラッグして放したとき（src/web/note-drop.ts）
   'transfer.moved': (notes: number, page: string) => `付箋 ${notes} 枚を「${page}」へ移動しました`,
   'transfer.copied': (notes: number, page: string) => `付箋 ${notes} 枚を「${page}」へコピーしました`,
+  'transfer.partial': (page: string) =>
+    `「${page}」へ付箋を置きましたが、一部の付箋はこのページから消せなかったので、両方にあります（移動の途中で変更された付箋は、消さずに残します）`,
   /** 「キャンセル」でも、ドラッグした付箋は送る */
   'transfer.confirmMoveLinked': (notes: number) =>
     `線でつながっている付箋 ${notes} 枚も一緒に移動しますか？\n「キャンセル」を選ぶと、ドラッグした付箋だけを移動します`,

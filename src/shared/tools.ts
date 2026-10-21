@@ -55,6 +55,17 @@ export interface BoardAccess {
    * ページがなければ適用せず、`ok: false` を返すこと（ページを作るのは create_page だけ）
    */
   apply(page: string, deltas: HistoryDelta[], summary: string): Promise<ApplyOutcome>;
+  /**
+   * ページ `from` の付箋を、ページ `to` へ移す（作成者は引き継ぐ）。付箋の中身は、実装の側が
+   * 元のページから読む。移せなければ ToolError を投げる。`noteIds` は移した後の付箋の id
+   * （`ids` と同じ順）、`received` と `removed` は、それぞれのページで記録した操作の番号
+   */
+  moveNotes(
+    from: string,
+    to: string,
+    ids: string[],
+    summary: string,
+  ): Promise<{ noteIds: string[]; received: number; removed: number | null }>;
   /** 自分（この agent）の最近の操作 */
   ownOps(page: string): Promise<OpSummary[]>;
   /** 自分の操作を取り消す */
@@ -378,6 +389,29 @@ export const TOOLS: Tool[] = [
       );
       const seq = await applyOrThrow(access, input.page, deltas, summaryOf('delete_notes', input.reason));
       return { operation: seq };
+    },
+  }),
+
+  tool({
+    name: 'move_notes',
+    description:
+      '付箋を、別のページ（すでにあるページ）へ移す。付箋の作成者は変わらない（delete_notes と add_notes で移すと、作成者が自分に変わるので、移すときはこれを使う）。移す付箋どうしをつなぐ接続線も一緒に移り、残る付箋とつながっていた接続線は消える。移す先では、付箋どうしの位置関係を保ったまま、今ある付箋の下に置く。子ページを表す付箋は移せない（ページごと移すときは move_page を使う）。note_ids は移した後の付箋の id で、指定した順に並ぶ。operations は、変更したページと操作の番号の組で、それぞれのページで revert_operation に渡せる。',
+    readOnly: false,
+    input: z.object({
+      page: page.describe('付箋が今あるページのスラッグ'),
+      note_ids: z.array(z.string()).min(1).max(MAX_ITEMS),
+      to: page.describe('移す先のページのスラッグ'),
+      reason,
+    }),
+    async run(access, input) {
+      if (input.to === input.page) throw new ToolError('the notes are already in this page');
+      assertUnique(input.note_ids);
+      const moved = await access.moveNotes(
+        input.page, input.to, input.note_ids, summaryOf('move_notes', input.reason),
+      );
+      const operations = [{ page: input.to, operation: moved.received }];
+      if (moved.removed !== null) operations.push({ page: input.page, operation: moved.removed });
+      return { note_ids: moved.noteIds, operations };
     },
   }),
 

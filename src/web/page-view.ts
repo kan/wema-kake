@@ -107,6 +107,8 @@ function summaryText(op: OpSummary): string {
       return t('ops.summary.revert', system.seq);
     case 'notesReceived':
       return t('ops.summary.notesReceived', system.page);
+    case 'notesSent':
+      return t('ops.summary.notesSent', system.page);
     case 'childRecolored':
       return t('ops.summary.childRecolored', system.page);
     default:

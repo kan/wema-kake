@@ -1,5 +1,4 @@
 // サーバーの HTTP API の呼び出し。形は AGENTS.md の「HTTP API」を参照。
-import type { WemaEdge, WemaNote } from '../shared/delta';
 import type { IndexLink, IndexPage, OpSummary, PageSummary, RevertOutcome, RootHit } from '../shared/api';
 
 /** ページへのリンクを出すのに要るもの。表示名が未設定なら null（スラッグを出す） */
@@ -98,14 +97,22 @@ export const revertOp = (slug: string, seq: number, clientId: string) =>
   });
 
 /**
- * 付箋と、その間の接続線を、ページ `slug` へ送る（そのページの、今ある付箋の下に置かれる）。
- * `from` は、付箋が元あったページ。id は、送る側で新しく振っておく。
- * 同じ `opId` で送り直しても、二重には置かれない。`page` は、置いた後のそのページの概要
+ * ページ `slug` の付箋を、ページ `to` へ移す（写す）。付箋の中身はサーバーが読む（送り先の、今ある
+ * 付箋の下に置かれる）。同じ `opId` で送り直しても、二重には置かれない。返る `page` は、置いた後の
+ * 送り先の概要
  */
-export const sendNotes = (
+export const transferNotes = (
   slug: string,
-  body: { clientId: string; opId: string; from: string; notes: WemaNote[]; edges: WemaEdge[] },
-) => request<{ ok: true; page: PageSummary | null }>('POST', `/api/pages/${slug}/notes`, body);
+  body: {
+    clientId: string;
+    opId: string;
+    to: string;
+    noteIds: string[];
+    /** 付箋の id から、サーバーにある位置の代わりに使う位置 */
+    positions: Record<string, { x: number; y: number }>;
+    copy: boolean;
+  },
+) => request<{ ok: true; page: PageSummary | null }>('POST', `/api/pages/${slug}/transfer`, body);
 
 /** 画像を R2 に上げ、付箋に入れる URL を返す */
 export async function uploadImage(file: File): Promise<string> {

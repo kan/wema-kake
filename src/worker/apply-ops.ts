@@ -185,6 +185,29 @@ export function readBoardWithAuthors(sql: SqlStorage): Pick<BoardState, 'notes' 
   };
 }
 
+/** 他のページへ移すために読んだ付箋。作成者と、最後に変更した時刻が付く */
+export type TakenNote = WemaNote & { createdBy: string | null; updatedAt: number };
+
+/** 付箋 `ids` と、その付箋どうしをつなぐ接続線。他のページへ移す付箋を読む */
+export function readNotesAmong(sql: SqlStorage, ids: string[]): { notes: TakenNote[]; edges: WemaEdge[] } {
+  const json = JSON.stringify(ids);
+  const among = `(SELECT value FROM json_each(?))`;
+  return {
+    notes: sql
+      .exec(`SELECT * FROM notes WHERE id IN ${among} ORDER BY rowid`, json)
+      .toArray()
+      .map((row) => ({
+        ...rowToNote(row),
+        createdBy: row.created_by as string | null,
+        updatedAt: row.updated_at as number,
+      })),
+    edges: sql
+      .exec(`SELECT * FROM edges WHERE from_id IN ${among} AND to_id IN ${among} ORDER BY rowid`, json, json)
+      .toArray()
+      .map(rowToEdge),
+  };
+}
+
 export const readBoard = (sql: SqlStorage): BoardData => readBoardWithInfos(sql).data;
 
 export interface Sanitized {
@@ -245,6 +268,8 @@ export interface Applied {
  *   変える前に保存した text を編集できるようにするため。後者は、送信元がサニタイズ前の
  *   text を手元に持ったまま続けて編集した場合のため
  * - 更新で `after` にキーがなく `before` にあるものは、未設定に戻す
+ * - 作成した付箋の作成者は `actor`。`authors` に付箋の id があれば、その値にする（他のページから
+ *   移した付箋の作成者を引き継ぐ）。`authors` はサーバーが読んだ値だけを渡すこと
  */
 export function applyDeltas(
   sql: SqlStorage,
@@ -252,6 +277,7 @@ export function applyDeltas(
   actor: string,
   now: number,
   cleanBefore?: Map<HistoryDelta, string>,
+  authors?: ReadonlyMap<string, string | null>,
 ): Applied {
   const applied: HistoryDelta[] = [];
   const fixups: HistoryDelta[] = [];
@@ -267,7 +293,7 @@ export function applyDeltas(
                               created_by, updated_at, updated_by)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           n.id, n.x, n.y, n.width, n.height, n.text, n.color, n.zIndex, n.autoSize ? 1 : 0,
-          n.foldable ? 1 : 0, metaJson(n.meta), actor, now, actor,
+          n.foldable ? 1 : 0, metaJson(n.meta), authors?.has(n.id) ? authors.get(n.id) : actor, now, actor,
         );
         applied.push(d);
         break;
