@@ -16,7 +16,7 @@
   },
   "//dependencies": "Wiki の本体。画面、D1 のマイグレーションも、このパッケージに入っている",
   "dependencies": {
-    "@kanf/wema-kake": "^0.1.1"
+    "@kanf/wema-kake": "^0.1.2"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
