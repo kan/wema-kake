@@ -59,7 +59,7 @@
   "dependencies": {
     "@kanf/wema": "^0.16.0",
     "@modelcontextprotocol/server": "^2.0.0",
-    "agents": "^0.28.0",
+    "agents": "^0.30.0",
     "hono": "^4.13.13",
     "jose": "^6.2.12",
     "zod": "^4.6.5"
