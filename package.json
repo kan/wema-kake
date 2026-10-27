@@ -1,6 +1,6 @@
 {
   "name": "@kanf/wema-kake",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "付箋ボードライブラリ wema を使った Wiki。Cloudflare Workers の上で動き、利用側が自分の Worker を作ってデプロイする",
   "license": "ISC",
   "type": "module",
