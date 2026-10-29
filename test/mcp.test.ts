@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import type { HistoryDelta } from '../src/shared/delta';
 import { TOOLS, ToolError } from '../src/shared/tools';
 import { ServerBoardAccess } from '../src/worker/mcp/board-access';
+import { readOnlyAccess } from '../src/worker/mcp/server';
 import { createApp } from '../src/worker/index';
 import { createNote, edge } from './helpers';
 
@@ -293,21 +294,30 @@ describe('revert_operation', () => {
   });
 });
 
+/** MCP のクライアントで `/mcp` につなぐ。主体は、ローカル開発の `agent:local` */
+async function connect(target = app) {
+  const ctx = createExecutionContext();
+  const transport = new StreamableHTTPClientTransport(new URL('http://localhost/mcp'), {
+    // テストではネットワークを通さず、Worker の入口を直接呼ぶ（ローカル開発の認証を通る）。
+    // Host は実際のリクエストなら必ず付く
+    fetch: async (input, init) => {
+      const request = new Request(input as string, init as RequestInit);
+      request.headers.set('Host', 'localhost');
+      return target.fetch(request, env, ctx);
+    },
+  });
+  const client = new Client({ name: 'test', version: '1.0.0' });
+  await client.connect(transport);
+  return client;
+}
+
+const READ_TOOLS = TOOLS.filter((t) => t.readOnly).map((t) => t.name).sort();
+const WRITE_TOOLS = TOOLS.filter((t) => !t.readOnly).map((t) => t.name);
+
 describe('MCP のハンドラ', () => {
   it('MCP のクライアントから、ツールの一覧を取得して呼び出せる', async () => {
     const { page, notesOf } = await newPage([createNote('n1')]);
-    const ctx = createExecutionContext();
-    const transport = new StreamableHTTPClientTransport(new URL('http://localhost/mcp'), {
-      // テストではネットワークを通さず、Worker の入口を直接呼ぶ（ローカル開発の認証を通る）。
-      // Host は実際のリクエストなら必ず付く
-      fetch: async (input, init) => {
-        const request = new Request(input as string, init as RequestInit);
-        request.headers.set('Host', 'localhost');
-        return app.fetch(request, env, ctx);
-      },
-    });
-    const client = new Client({ name: 'test', version: '1.0.0' });
-    await client.connect(transport);
+    const client = await connect();
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(TOOLS.map((t) => t.name).sort());
@@ -326,6 +336,52 @@ describe('MCP のハンドラ', () => {
     const failed = await client.callTool({ name: 'read_board', arguments: { page: 'mcp-no-such-page' } });
     expect(failed.isError).toBe(true);
     expect(failed.content).toEqual([{ type: 'text', text: 'page not found: mcp-no-such-page' }]);
+    await client.close();
+  });
+
+  it('読み取りだけのクライアントには、書き込みのツールを出さず、呼ばれても書き込まない', async () => {
+    const { page, notesOf } = await newPage([createNote('n1')]);
+    // どのクライアントも読み取りだけ、と、書き込めるクライアントに当たらない、の 2 通り
+    for (const mcp of [{ write: false }, { write: ['claude.ai', 'localhost'] }]) {
+      const client = await connect(createApp({ mcp }));
+      expect((await client.listTools()).tools.map((t) => t.name).sort()).toEqual(READ_TOOLS);
+      expect(WRITE_TOOLS.length).toBeGreaterThan(0);
+      for (const name of WRITE_TOOLS) {
+        // 登録していないツールは、MCP のサーバーが「ツールがない」で断る（入力の検証の失敗と区別する）
+        await expect(
+          client.callTool({ name, arguments: { page, notes: [{ text: '書けてはいけない' }], reason: 'ro' } }),
+          name,
+        ).rejects.toThrow(`Tool ${name} not found`);
+      }
+      expect((await notesOf()).map((n) => n.id)).toEqual(['n1']);
+      // 読み取りのツールは使える
+      const read = await client.callTool({ name: 'read_board', arguments: { page } });
+      expect(read.isError).toBeFalsy();
+      await client.close();
+    }
+  });
+
+  it('読み取りだけの主体に渡す BoardAccess は、書き込みのツールを直接呼んでも断る', async () => {
+    const { page, notesOf } = await newPage([createNote('n1')]);
+    const access = readOnlyAccess(new ServerBoardAccess(env, AGENT));
+    const run = (name: string, input: unknown) => {
+      const tool = TOOLS.find((t) => t.name === name)!;
+      return tool.run(access, tool.input.parse(input));
+    };
+    await expect(run('add_notes', { page, notes: [{ text: 'x' }] })).rejects.toThrow('this client can only read');
+    await expect(run('delete_notes', { page, note_ids: ['n1'] })).rejects.toThrow('this client can only read');
+    await expect(run('create_page', { name: `mcp-ro-${++pageCount}` })).rejects.toThrow('this client can only read');
+    expect((await notesOf()).map((n) => n.id)).toEqual(['n1']);
+    expect(((await run('read_board', { page })) as { notes: unknown[] }).notes).toHaveLength(1);
+  });
+
+  it('書き込めるクライアントに並べた主体は、すべてのツールを使える', async () => {
+    const { page, notesOf } = await newPage();
+    const client = await connect(createApp({ mcp: { write: ['local'] } }));
+    expect((await client.listTools()).tools).toHaveLength(TOOLS.length);
+    const added = await client.callTool({ name: 'add_notes', arguments: { page, notes: [{ text: '書ける' }], reason: 'rw' } });
+    expect(added.isError).toBeFalsy();
+    expect((await notesOf()).map((n) => n.text)).toContain('書ける');
     await client.close();
   });
 });

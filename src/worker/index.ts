@@ -1,7 +1,7 @@
 import { Hono, type HonoRequest } from 'hono';
 import { type AuthEnv, requireAccess } from './access';
 import { assetServer } from './assets';
-import { resolveConfig, type WemaKakeConfig } from './config';
+import { canWrite, resolveConfig, type WemaKakeConfig } from './config';
 import { images } from './images';
 import { handleMcp } from './mcp/server';
 import { ACTOR_HEADER, AUTH_EXPIRES_HEADER } from './page-do';
@@ -33,12 +33,16 @@ export function createApp(options: WemaKakeConfig = {}) {
   //
   // MCP の仕様（Streamable HTTP）は、DNS リバインディングへの対策として、すべての要求で `Origin` を
   // 確かめることを求めている。人向けの入口と違い、メソッドを問わず、認証より前で確かめる
-  if (config.mcp) {
+  const mcp = config.mcp;
+  if (mcp) {
     app.all(
       '/mcp',
       (c, next) => (isForeignOrigin(c.req) ? c.json({ error: 'forbidden origin' }, 403) : next()),
       requireAccess('agent'),
-      (c) => handleMcp(c.req.raw, c.env, c.executionCtx as ExecutionContext, c.get('actor')),
+      (c) => {
+        const actor = c.get('actor');
+        return handleMcp(c.req.raw, c.env, c.executionCtx as ExecutionContext, actor, canWrite(mcp, actor));
+      },
     );
   } else {
     app.all('/mcp', (c) => c.notFound());

@@ -74,8 +74,17 @@ export function agentActor(redirectUri: unknown): string {
   } catch {
     // 下で unknown にする
   }
-  const name = host.toLowerCase().replace(/[^a-z0-9.-]+/g, '-');
-  return `agent:${name.replace(/^[-.]+|[-.]+$/g, '').slice(0, 64) || 'unknown'}`;
+  return `agent:${agentName(host) || 'unknown'}`;
+}
+
+/**
+ * ホスト名を、主体の名前（`agent:<名前>` の部分）の形にする。設定の `mcp.write` に並べる名前の検査も
+ * これを使う（名前の形を 2 か所で決めると食い違い、並べた名前が黙ってどの主体にも当たらなくなる）
+ */
+export function agentName(host: string): string {
+  const trim = (s: string) => s.replace(/^[-.]+|[-.]+$/g, '');
+  // 切った後の末尾に - や . が残らないよう、切ってからもう一度落とす
+  return trim(trim(host.toLowerCase().replace(/[^a-z0-9.-]+/g, '-')).slice(0, 64));
 }
 
 /**

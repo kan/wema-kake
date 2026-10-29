@@ -203,7 +203,10 @@ export interface Tool<S extends z.ZodType = z.ZodType> {
   name: string;
   description: string;
   input: S;
-  /** ボードを変更しないか */
+  /**
+   * ボードを変更しないか。**権限の判定に使う。** 読み取りだけのクライアント（設定の `mcp.write`）には、
+   * これが true のツールだけを出す。何かを書き換えるツールに true を付けないこと
+   */
   readOnly: boolean;
   run(access: BoardAccess, input: z.infer<S>): Promise<unknown>;
 }

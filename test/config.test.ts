@@ -2,7 +2,8 @@ import { env, SELF } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import { FIRST_PAGE_SLUG, firstPageTitle } from '../src/shared/guide';
 import { DEFAULT_SITE, parseSiteConfig, SITE_META_NAME } from '../src/shared/site';
-import { resolveConfig, type WemaKakeConfig } from '../src/worker/config';
+import { agentActor } from '../src/worker/access';
+import { canWrite, resolveConfig, type WemaKakeConfig } from '../src/worker/config';
 import { createApp } from '../src/worker/index';
 
 /** HTML から、`<title>` の中身と、サイトの設定の `<meta>` を取り出す */
@@ -33,7 +34,7 @@ const html = { Accept: 'text/html' };
 
 describe('resolveConfig', () => {
   it('省いた項目を既定の値で埋める', () => {
-    expect(resolveConfig()).toEqual({ siteName: 'wema-kake', defaultLang: 'en', mcp: true, firstPage: true });
+    expect(resolveConfig()).toEqual({ siteName: 'wema-kake', defaultLang: 'en', mcp: { write: true }, firstPage: true });
     expect(resolveConfig({ siteName: 'Notes', defaultLang: 'ja', mcp: false, firstPage: false })).toEqual({
       siteName: 'Notes',
       defaultLang: 'ja',
@@ -47,6 +48,40 @@ describe('resolveConfig', () => {
     expect(() => resolveConfig({ defaultLang: 'fr' as never })).toThrow(/defaultLang/);
     expect(() => resolveConfig({ mcp: 'false' as never })).toThrow(/mcp/);
     expect(() => resolveConfig({ firstPage: 0 as never })).toThrow(/firstPage/);
+  });
+
+  it('mcp の書き込みの設定を確かめる', () => {
+    expect(resolveConfig({ mcp: { write: false } }).mcp).toEqual({ write: false });
+    expect(resolveConfig({ mcp: { write: ['claude.ai', 'localhost'] } }).mcp).toEqual({ write: ['claude.ai', 'localhost'] });
+    expect(() => resolveConfig({ mcp: null as never })).toThrow(/mcp/);
+    expect(() => resolveConfig({ mcp: {} as never })).toThrow(/mcp\.write/);
+    expect(() => resolveConfig({ mcp: { write: 'claude.ai' as never } })).toThrow(/mcp\.write/);
+    // 主体の名前でない書き方は、黙って読み取りだけにならないよう、起動時に断る
+    for (const name of ['agent:claude.ai', 'https://claude.ai', 'Claude.ai', '', ' claude.ai', 'a'.repeat(65), 1]) {
+      expect(() => resolveConfig({ mcp: { write: [name as string] } }), String(name)).toThrow(/mcp\.write/);
+    }
+  });
+
+  it('agentActor が作る主体の名前は、そのまま mcp.write に並べられる', () => {
+    // 64 文字で切った後の末尾に . が来るホスト名も、切った後の名前で並べられる
+    const hosts = ['claude.ai', 'chatgpt.com', 'localhost', `${'a'.repeat(63)}.example.com`, 'x'.repeat(80)];
+    for (const host of hosts) {
+      const actor = agentActor(`https://${host}/callback`);
+      const name = actor.slice('agent:'.length);
+      expect(name.length, host).toBeLessThanOrEqual(64);
+      const mcp = resolveConfig({ mcp: { write: [name] } }).mcp;
+      expect(mcp && canWrite(mcp, actor), host).toBe(true);
+    }
+  });
+
+  it('canWrite は、主体の名前が完全に一致するときだけ書き込みを許す', () => {
+    expect(canWrite({ write: true }, 'agent:claude.ai')).toBe(true);
+    expect(canWrite({ write: false }, 'agent:claude.ai')).toBe(false);
+    const mcp = { write: ['claude.ai'] };
+    expect(canWrite(mcp, 'agent:claude.ai')).toBe(true);
+    expect(canWrite(mcp, 'agent:chatgpt.com')).toBe(false);
+    expect(canWrite(mcp, 'agent:evil.claude.ai')).toBe(false);
+    expect(canWrite(mcp, 'user:claude.ai')).toBe(false);
   });
 });
 
