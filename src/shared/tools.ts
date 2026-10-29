@@ -198,20 +198,48 @@ function findNote(board: Board, id: string) {
   return note;
 }
 
-/** ツール 1 つ。`input` は入力のスキーマ、`run` は BoardAccess を使った実装 */
-export interface Tool<S extends z.ZodType = z.ZodType> {
+/**
+ * ツール 1 つ。`input` は入力のスキーマ、`run` は BoardAccess を使った実装。
+ * 書き込みのツールは、`destructive` と `idempotent` も持つ（MCP の注釈になる。`toolAnnotations`）
+ */
+export type Tool<S extends z.ZodType = z.ZodType> = {
   name: string;
   description: string;
   input: S;
-  /**
-   * ボードを変更しないか。**権限の判定に使う。** 読み取りだけのクライアント（設定の `mcp.write`）には、
-   * これが true のツールだけを出す。何かを書き換えるツールに true を付けないこと
-   */
-  readOnly: boolean;
   run(access: BoardAccess, input: z.infer<S>): Promise<unknown>;
-}
+} & (
+  | {
+      /**
+       * ボードを変更しないか。**権限の判定に使う。** 読み取りだけのクライアント（設定の `mcp.write`）には、
+       * これが true のツールだけを出す。何かを書き換えるツールに true を付けないこと
+       */
+      readOnly: true;
+    }
+  | {
+      readOnly: false;
+      /** 既存のもの（付箋、接続線、ページの置き場所）を消すか、上書きするか。取り消せるかどうかでは決めない */
+      destructive: boolean;
+      /** 同じ引数で続けて呼んでも、2 回目以降はボードが変わらないか（断られる場合も含む） */
+      idempotent: boolean;
+    }
+);
 
 const tool = <S extends z.ZodType>(definition: Tool<S>): Tool<S> => definition;
+
+/** MCP の注釈（annotations）。省いた注釈はクライアントが既定の値（破壊的、冪等でない、外とやり取りする）で扱う */
+export interface ToolAnnotations {
+  readOnlyHint: boolean;
+  destructiveHint?: boolean;
+  idempotentHint: boolean;
+  openWorldHint: boolean;
+}
+
+export function toolAnnotations(tool: Tool): ToolAnnotations {
+  // どのツールも、この Wiki の中だけで完結し、外の世界（Web など）とやり取りしない
+  const openWorldHint = false;
+  if (tool.readOnly) return { readOnlyHint: true, idempotentHint: true, openWorldHint };
+  return { readOnlyHint: false, destructiveHint: tool.destructive, idempotentHint: tool.idempotent, openWorldHint };
+}
 
 const ARROW = { fromAnchor: 'auto', toAnchor: 'auto', style: 'arrow' } as const;
 
@@ -280,6 +308,9 @@ export const TOOLS: Tool[] = [
     description:
       `付箋を追加する。位置を省略すると、near で指定した付箋の右（なければ既存の付箋の下）に、重ならないように置く。大きさを省略すると、幅は ${NOTE_WIDTH}、高さは本文の量に合わせて自動で決まる（長い本文でも、ふつうは指定しなくてよい）。connect_from を指定すると、その付箋から新しい付箋へ接続線を引く。`,
     readOnly: false,
+    destructive: false,
+    // 呼ぶたびに、新しい付箋ができる
+    idempotent: false,
     input: z.object({
       page,
       notes: z
@@ -342,6 +373,9 @@ export const TOOLS: Tool[] = [
     name: 'update_notes',
     description: '付箋の本文、色、位置、大きさを変更する。指定した項目だけが変わる。',
     readOnly: false,
+    destructive: true,
+    // 2 回目は、もう同じ値なので「nothing changed」で断られる
+    idempotent: true,
     input: z.object({
       page,
       notes: z
@@ -383,6 +417,9 @@ export const TOOLS: Tool[] = [
     name: 'delete_notes',
     description: '付箋を削除する。その付箋につながる接続線も削除される。',
     readOnly: false,
+    destructive: true,
+    // 2 回目は、付箋がもうないので断られる
+    idempotent: true,
     input: z.object({ page, note_ids: z.array(z.string()).min(1).max(MAX_ITEMS), reason }),
     async run(access, input) {
       const board = await existingBoard(access, input.page);
@@ -400,6 +437,10 @@ export const TOOLS: Tool[] = [
     description:
       '付箋を、別のページ（すでにあるページ）へ移す。付箋の作成者は変わらない（delete_notes と add_notes で移すと、作成者が自分に変わるので、移すときはこれを使う）。移す付箋どうしをつなぐ接続線も一緒に移り、残る付箋とつながっていた接続線は消える。移す先では、付箋どうしの位置関係を保ったまま、今ある付箋の下に置く。子ページを表す付箋は移せない（ページごと移すときは move_page を使う）。note_ids は移した後の付箋の id で、指定した順に並ぶ。operations は、変更したページと操作の番号の組で、それぞれのページで revert_operation に渡せる。',
     readOnly: false,
+    // 元のページから付箋を消し、残る付箋とつながっていた接続線も消える
+    destructive: true,
+    // 移す先に置いた後で元のページから消せなかったとき（partial）に呼び直すと、移す先に二重に置かれる
+    idempotent: false,
     input: z.object({
       page: page.describe('付箋が今あるページのスラッグ'),
       note_ids: z.array(z.string()).min(1).max(MAX_ITEMS),
@@ -422,6 +463,9 @@ export const TOOLS: Tool[] = [
     name: 'connect_notes',
     description: '付箋同士を接続線（矢印）でつなぐ。ラベルを付けられる。',
     readOnly: false,
+    destructive: false,
+    // 呼ぶたびに、新しい接続線ができる（同じ 2 つの付箋の間にも、重ねて引ける）
+    idempotent: false,
     input: z.object({
       page,
       connections: z
@@ -451,9 +495,13 @@ export const TOOLS: Tool[] = [
     name: 'disconnect_notes',
     description: '接続線を削除する。',
     readOnly: false,
+    destructive: true,
+    // 2 回目は、接続線がもうないので断られる
+    idempotent: true,
     input: z.object({ page, edge_ids: z.array(z.string()).min(1).max(MAX_ITEMS), reason }),
     async run(access, input) {
       const board = await existingBoard(access, input.page);
+      assertUnique(input.edge_ids);
       const deltas = input.edge_ids.map((id): HistoryDelta => {
         const edge = board.edges.find((e) => e.id === id);
         if (!edge) throw new ToolError(`edge not found: ${id}`);
@@ -469,6 +517,9 @@ export const TOOLS: Tool[] = [
     description:
       '接続線のつながりに基づいて、付箋を階層に並べ直す。note_ids を省略すると、ページの全付箋が対象になる。1 回で動かせる付箋は 2000 枚まで（超える場合は note_ids で対象を絞る）。',
     readOnly: false,
+    destructive: true,
+    // 並べた結果をもう一度並べると、動くことがある（行に折り返した付箋の順が、今の位置で決まるため）
+    idempotent: false,
     input: z.object({ page, note_ids: z.array(z.string()).max(2000).optional(), reason }),
     async run(access, input) {
       const board = await existingBoard(access, input.page);
@@ -490,6 +541,10 @@ export const TOOLS: Tool[] = [
     description:
       'ページを新しく作る。付箋のない空のページができる。parent を指定すると、そのページの中に子ページとして置く（parent のボードに、子ページを表す付箋が足される）。すでにある名前では作れない（既存のページを別のページの中へ移すときは move_page を使う）。ページの作成そのものは、revert_operation では取り消せない。子ページとして置いた操作は、parent のページで取り消せる（取り消すと、作ったページはルートのページとして残る）。',
     readOnly: false,
+    // ページを足し、parent には子ページの付箋を足すだけ
+    destructive: false,
+    // 2 回目は、ページがもうあるので断られる
+    idempotent: true,
     input: z.object({
       name: z
         .string()
@@ -525,6 +580,10 @@ export const TOOLS: Tool[] = [
     description:
       '既存のページを、別のページの中へ子ページとして移す（今の親ページにある子ページの付箋を消し、移す先に置く）。parent に null を指定すると、親から外してルートのページにする。子ページを持つページは、子孫ごと移る。今の親ページで子ページの付箋につながっていた接続線は消える。移す先に置けなかった場合（輪になる、階層が深すぎるなど）は、元の親ページに戻してエラーを返す。operations は、変更したページと操作の番号の組で、それぞれのページで revert_operation に渡せる。',
     readOnly: false,
+    // 今の親ページから子ページの付箋を消し、つながっていた接続線も消える
+    destructive: true,
+    // 2 回目は、もうその親にあるので断られる
+    idempotent: true,
     input: z.object({
       name: page.describe('移すページのスラッグ'),
       parent: page
@@ -592,6 +651,9 @@ export const TOOLS: Tool[] = [
     description:
       '自分が行った操作を取り消す。operation を省略すると、まだ取り消していない直前の操作が対象になる。その後に人が変更した付箋は戻さず、skipped で返す。何も戻せなかった場合（applied が 0）は、それより前の自分の操作の番号を earlier_operations で返すので、必要なら operation に指定して呼び直す。',
     readOnly: false,
+    destructive: true,
+    // operation を省くと、2 回目はその前の操作を取り消す
+    idempotent: false,
     input: z.object({
       page,
       operation: z.number().int().optional().describe('取り消す操作の番号（各ツールが返す operation）'),

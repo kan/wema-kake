@@ -2,7 +2,7 @@ import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/cli
 import { createExecutionContext, env, runDurableObjectAlarm } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
 import type { HistoryDelta } from '../src/shared/delta';
-import { TOOLS, ToolError } from '../src/shared/tools';
+import { TOOLS, ToolError, toolAnnotations } from '../src/shared/tools';
 import { ServerBoardAccess } from '../src/worker/mcp/board-access';
 import { readOnlyAccess } from '../src/worker/mcp/server';
 import { createApp } from '../src/worker/index';
@@ -294,6 +294,44 @@ describe('revert_operation', () => {
   });
 });
 
+describe('ツールの注釈', () => {
+  /** ページの今の状態（操作の番号を含む）。操作が記録されれば seq が変わる */
+  const snapshot = (page: string) => env.PAGE.getByName(page).getSnapshot();
+
+  /** 同じ引数で 2 回呼び、2 回目で、関係するページが変わらないことを確かめる（断られてもよい） */
+  async function expectIdempotent(name: string, input: unknown, pages: string[]) {
+    await call(name, input);
+    const before = await Promise.all(pages.map(snapshot));
+    await call(name, input).catch((e) => expect(e, name).toBeInstanceOf(ToolError));
+    expect(await Promise.all(pages.map(snapshot)), name).toEqual(before);
+  }
+
+  it('冪等と申告したツールは、2 回目でボードを変えない', async () => {
+    const notes = [createNote('n1'), createNote('n2', { x: 400 }), { type: 'edge:create', edge: edge('e1', 'n1', 'n2') }];
+    const a = await newPage(notes);
+    // move_page の移す先
+    const b = await newPage();
+    const checked = new Set<string>();
+    const check = async (name: string, input: unknown, pages: string[]) => {
+      await expectIdempotent(name, input, pages);
+      checked.add(name);
+    };
+
+    // 保存するときのサニタイズで本文が変わると、2 回目も「変更あり」になる。変わりやすい文字を入れておく
+    const text = '<b>太字</b> & "引用" \'単\' <script>x</script>\n\n  行頭の空白\r\n末尾 ';
+    await check('update_notes', { page: a.page, notes: [{ id: 'n1', text, x: 50 }] }, [a.page]);
+    await check('disconnect_notes', { page: a.page, edge_ids: ['e1'] }, [a.page]);
+    await check('delete_notes', { page: a.page, note_ids: ['n1'] }, [a.page]);
+    const child = `mcp-${++pageCount}`;
+    await check('create_page', { name: child, parent: a.page }, [a.page, child]);
+    await check('move_page', { name: child, parent: b.page }, [a.page, b.page, child]);
+
+    // 冪等と申告したツールは、すべて確かめた
+    const idempotent = TOOLS.filter((t) => !t.readOnly && t.idempotent).map((t) => t.name);
+    expect([...checked].sort()).toEqual(idempotent.sort());
+  });
+});
+
 /** MCP のクライアントで `/mcp` につなぐ。主体は、ローカル開発の `agent:local` */
 async function connect(target = app) {
   const ctx = createExecutionContext();
@@ -321,7 +359,15 @@ describe('MCP のハンドラ', () => {
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(TOOLS.map((t) => t.name).sort());
-    expect(tools.find((t) => t.name === 'read_board')?.annotations?.readOnlyHint).toBe(true);
+    // 注釈は、省くとクライアントが「破壊的、冪等でない、外とやり取りする」で扱うので、すべて返す
+    const annotations = Object.fromEntries(tools.map((t) => [t.name, t.annotations]));
+    for (const t of TOOLS) expect(annotations[t.name], t.name).toEqual(toolAnnotations(t));
+    expect(annotations.read_board).toEqual({ readOnlyHint: true, idempotentHint: true, openWorldHint: false });
+    // 付箋を足すだけのツールは、破壊的な操作として申告しない
+    expect(annotations.add_notes).toMatchObject({ readOnlyHint: false, destructiveHint: false, idempotentHint: false });
+    expect(annotations.delete_notes).toEqual({
+      readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: false,
+    });
 
     const added = await client.callTool({
       name: 'add_notes',

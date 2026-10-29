@@ -2,7 +2,7 @@
 // サーバーに登録して、結果を MCP の形にするだけ。
 import { McpServer } from '@modelcontextprotocol/server';
 import { createMcpHandler } from 'agents/mcp/server';
-import { type BoardAccess, TOOLS, ToolError } from '../../shared/tools';
+import { type BoardAccess, TOOLS, ToolError, toolAnnotations } from '../../shared/tools';
 import type { WemaKakeEnv } from '../config';
 import { ServerBoardAccess } from './board-access';
 
@@ -19,7 +19,7 @@ export function createMcpServer(access: BoardAccess, write: boolean): McpServer 
       {
         description: tool.description,
         inputSchema: tool.input,
-        annotations: { readOnlyHint: tool.readOnly },
+        annotations: toolAnnotations(tool),
       },
       async (input: unknown) => {
         try {
