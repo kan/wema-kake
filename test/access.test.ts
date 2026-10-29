@@ -163,11 +163,62 @@ describe('agent と人の入口を分ける', () => {
 
   it('/mcp も、他のオリジンからのリクエストを断る', async () => {
     mockCerts();
-    const res = await mcp({
-      'Cf-Access-Jwt-Assertion': await token({ oauth: CLAUDE }),
-      Origin: 'https://evil.example.com',
-    });
+    const jwt = await token({ oauth: CLAUDE });
+    // 同じホスト名でも、スキームやポートが違えば他のオリジン。localhost も、自分でなければ断る
+    for (const origin of [
+      'https://evil.example.com',
+      'http://wiki.example.com',
+      'https://wiki.example.com:8443',
+      'http://localhost',
+      'null',
+      'not a url',
+    ]) {
+      const res = await mcp({ 'Cf-Access-Jwt-Assertion': jwt, Origin: origin });
+      expect(res.status, origin).toBe(403);
+    }
+  });
+
+  it('/mcp は、Origin の付かない要求と、自分のオリジンの Origin が付いた要求を通す', async () => {
+    mockCerts();
+    const jwt = await token({ oauth: CLAUDE });
+    expect((await mcp({ 'Cf-Access-Jwt-Assertion': jwt })).status).toBe(200);
+    // 独自ドメインでも通る（MCP のハンドラの既定の許可リストは、localhost と workers.dev しか知らない）
+    const res = await mcp({ 'Cf-Access-Jwt-Assertion': jwt, Origin: 'https://wiki.example.com' });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
+  });
+
+  it('/mcp の Origin の検査は、認証より前で行う', async () => {
+    const certs = mockCerts();
+    const before = certs.mock.calls.length;
+    const res = await mcp({ 'Cf-Access-Jwt-Assertion': 'not-a-jwt', Origin: 'https://evil.example.com' });
     expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'forbidden origin' });
+    expect(certs.mock.calls.length).toBe(before);
+  });
+
+  it('ローカル開発でも、/mcp は他のポートの localhost を断る', async () => {
+    const devEnv = { ...env, ACCESS_TEAM_DOMAIN: '', ACCESS_AUD: '', DEV_USER_EMAIL: 'dev@example.com' };
+    const local = (origin?: string) =>
+      app.request(
+        'http://localhost:8787/mcp',
+        {
+          method: 'POST',
+          headers: {
+            // 実際のリクエストなら必ず付く（MCP のハンドラが、localhost の Host を確かめる）
+            Host: 'localhost:8787',
+            'Content-Type': 'application/json',
+            Accept: 'application/json, text/event-stream',
+            ...(origin ? { Origin: origin } : {}),
+          },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        },
+        devEnv,
+        createExecutionContext(),
+      );
+    expect((await local()).status).toBe(200);
+    expect((await local('http://localhost:8787')).status).toBe(200);
+    expect((await local('http://localhost:6274')).status).toBe(403);
   });
 
   it('Access が未設定のとき、/mcp もローカルのホスト名でだけ有効', async () => {

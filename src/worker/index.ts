@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type HonoRequest } from 'hono';
 import { type AuthEnv, requireAccess } from './access';
 import { assetServer } from './assets';
 import { resolveConfig, type WemaKakeConfig } from './config';
@@ -30,9 +30,15 @@ export function createApp(options: WemaKakeConfig = {}) {
   // **`/mcp` は、下の `app.use(requireAccess('user'))` より前に置くこと。** ハンドラが応答を返すので、
   // 人向けの認証には進まない。後ろに置くと、agent が人向けの認証で断られる
   // 無効なら、人向けの認証より前で 404 を返す（後ろに落とすと、agent のトークンが人向けの認証で 403 になる）
+  //
+  // MCP の仕様（Streamable HTTP）は、DNS リバインディングへの対策として、すべての要求で `Origin` を
+  // 確かめることを求めている。人向けの入口と違い、メソッドを問わず、認証より前で確かめる
   if (config.mcp) {
-    app.all('/mcp', requireAccess('agent'), (c) =>
-      handleMcp(c.req.raw, c.env, c.executionCtx as ExecutionContext, c.get('actor')),
+    app.all(
+      '/mcp',
+      (c, next) => (isForeignOrigin(c.req) ? c.json({ error: 'forbidden origin' }, 403) : next()),
+      requireAccess('agent'),
+      (c) => handleMcp(c.req.raw, c.env, c.executionCtx as ExecutionContext, c.get('actor')),
     );
   } else {
     app.all('/mcp', (c) => c.notFound());
@@ -45,8 +51,7 @@ export function createApp(options: WemaKakeConfig = {}) {
   app.use(async (c, next) => {
     const method = c.req.method;
     const guarded = (method !== 'GET' && method !== 'HEAD') || c.req.header('Upgrade') === 'websocket';
-    const origin = c.req.header('Origin');
-    if (guarded && origin && origin !== new URL(c.req.url).origin) {
+    if (guarded && isForeignOrigin(c.req)) {
       return c.json({ error: 'forbidden origin' }, 403);
     }
     await next();
@@ -79,4 +84,13 @@ export function createApp(options: WemaKakeConfig = {}) {
   app.notFound((c) => c.json({ error: 'not found' }, 404));
 
   return app;
+}
+
+/**
+ * `Origin` が付いていて、このアプリのオリジンと違うか。スキームとポートも含めて比べる。
+ * `Origin` が付いていない要求（ブラウザでないクライアント）は、他のオリジンとは見なさない
+ */
+function isForeignOrigin(req: HonoRequest): boolean {
+  const origin = req.header('Origin');
+  return !!origin && origin !== new URL(req.url).origin;
 }

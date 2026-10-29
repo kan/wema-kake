@@ -397,7 +397,8 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 ### 実装方針
 
 - Workers 上に置き、`/mcp` で Streamable HTTP を提供する。認可は、前述のとおり Access の Managed OAuth
-- MCP のハンドラは `agents` の `createMcpHandler`（ステートレス）で作る。`McpAgent` は非推奨で機能凍結されている。このハンドラは、他のオリジンからのリクエスト（`Origin` が違うもの）を 403 で断る
+- MCP のハンドラは `agents` の `createMcpHandler`（ステートレス）で作る。`McpAgent` は非推奨で機能凍結されている
+- `/mcp` は、`Origin` が付いていて自分のオリジンと違う要求を、メソッドを問わず 403 で断る（MCP の仕様の DNS リバインディング対策）。`Origin` の付かない要求は通す。検査は `src/worker/index.ts` で、認証より前に行う。**`createMcpHandler` の既定の検査だけに任せないこと**（理由は `src/worker/mcp/server.ts` の `handleMcp`）
 - MCP サーバーは「DO に `ops` を送る一クライアント」として実装する。書き込みのツールは該当ページの DO の `applyOps` を呼ぶだけで、検証・サニタイズ・保存・ブロードキャストはブラウザからの変更と共通。例外は `create_page` のページの作成で、画面と同じ DO の `createPage` を呼ぶ。もう 1 つの例外は `move_notes` で、画面からの移動と同じ `transferNotes`（DO の `takeNotes` と `removeNotes`）を呼ぶ。どちらも中で `applyOps` と同じ経路を通る
 - 1 回のツール呼び出し = 1 つの `ops`（`actor: 'agent:<client>'`、`summary` にツール名と LLM が渡した説明）。複数の付箋を動かす整理も 1 つの `ops` にまとめ、後から 1 操作として取り消せるようにする。例外は `move_page` と `move_notes` で、ページをまたぐので、変更したページごとに 1 つずつ記録する（下の「ツール」）
 - ツールの定義（名前・説明・入力スキーマ）は共通モジュールに置き、将来の WebMCP 版と共有する。実装は「ボードを読む・デルタを適用する」インターフェース越しに書き、サーバー版（DO を呼ぶ）とブラウザ版（wema の API を呼ぶ）を差し替えられるようにする

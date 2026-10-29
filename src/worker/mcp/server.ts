@@ -41,5 +41,13 @@ export function createMcpServer(access: BoardAccess): McpServer {
 export function handleMcp(request: Request, env: WemaKakeEnv, ctx: ExecutionContext, actor: string): Promise<Response> {
   const access = new ServerBoardAccess(env, actor);
   // リクエストごとにサーバーを作る（MCP のサーバーは、同時に走るリクエストで共有できない）
-  return createMcpHandler(() => createMcpServer(access))(request, env, ctx);
+  //
+  // `Origin` は、呼び出し側（`src/worker/index.ts`）が自分のオリジンとの完全一致で確かめている。
+  // ハンドラの検査はホスト名だけを比べ、既定の許可リストは localhost と workers.dev しか知らない。
+  // そのままだと独自ドメインで自分のオリジンを断るので、許すホスト名を自分のものに絞って残す。
+  // 他のオリジンから呼ばせないので、CORS のヘッダー（既定は `*`）も付けない
+  return createMcpHandler(() => createMcpServer(access), {
+    allowedOriginHostnames: [new URL(request.url).hostname],
+    corsOptions: false,
+  })(request, env, ctx);
 }
