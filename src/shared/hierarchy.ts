@@ -22,8 +22,9 @@ export const MAX_DEPTH = 5;
  * - duplicate: このページに、すでに置いてある
  * - ancestor: このページの先祖なので、輪になる
  * - too-deep: 深さの上限を超える
+ * - trash: ゴミ箱を子ページにしようとした、またはゴミ箱に子ページを置こうとした
  */
-export type ChildRejectCode = 'not-found' | 'self' | 'other-parent' | 'duplicate' | 'ancestor' | 'too-deep';
+export type ChildRejectCode = 'not-found' | 'self' | 'other-parent' | 'duplicate' | 'ancestor' | 'too-deep' | 'trash';
 
 /** 置けなかったときの `reject` の `reason` の先頭。続けて、理由と、置こうとしたページが入る */
 const REJECT_PREFIX = 'child page: ';

@@ -108,6 +108,9 @@ describe('applyOps', () => {
     // バージョン 1 のスキーマに戻して、DO を起こし直す（移行は、DO を起こしたときに走る）
     await runInDurableObject(stub, (_do, state) => {
       state.storage.sql.exec(`ALTER TABLE notes DROP COLUMN foldable`);
+      // バージョン 3 で足したゴミ箱の表も消す
+      state.storage.sql.exec(`DROP TABLE trashed`);
+      state.storage.sql.exec(`DROP TABLE trash_origins`);
       state.storage.sql.exec(`UPDATE meta SET value = '1' WHERE key = 'version'`);
     });
     await evictDurableObject(stub);

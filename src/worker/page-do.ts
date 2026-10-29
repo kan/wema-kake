@@ -18,6 +18,7 @@ import {
   type WemaNote,
 } from '../shared/delta';
 import { systemSummary } from '../shared/op-summary';
+import { DAY_MS, EXPIRE_DAYS_CHOICES, isExpirable, isTrash, TRASH_EXPIRE_DAYS, TRASH_SLUG } from '../shared/trash';
 import {
   CLOSE_AUTH_EXPIRED,
   CLOSE_PAGE_DELETED,
@@ -28,6 +29,7 @@ import {
 } from '../shared/protocol';
 import type { BoardState } from '../shared/tools';
 import {
+  CHILD_PAGE_KEY,
   type ChildRejectCode,
   childPageOf,
   childRejection,
@@ -74,7 +76,7 @@ const MAX_SUMMARY_LENGTH = 500;
 const DEFAULT_LIST_OPS = 50;
 const MAX_LIST_OPS = 200;
 /** ops を残す期間と件数。どちらかに収まっていれば残す（再接続時の差分、履歴、取り消しに使う） */
-const OPS_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+const OPS_RETENTION_MS = 30 * DAY_MS;
 const OPS_RETENTION_COUNT = 1000;
 /** 受信メッセージの上限（文字数）。1 回の ops に入る text の合計の上限より少し大きくしている */
 const MAX_MESSAGE_LENGTH = 2_000_000;
@@ -140,6 +142,11 @@ export interface TakeInput extends Pick<ApplyInput, 'actor' | 'clientId' | 'opId
   keepAuthors: boolean;
   /** 操作の履歴に出す説明。省略すると、元のページを表す符号 */
   summary?: string;
+  /**
+   * 付箋の id から、置くときの id と位置。指定すると、今ある付箋の下へずらさずに、その位置に置く
+   * （ゴミ箱から元のページへ戻すとき）。サーバーが記録した値だけを渡すこと
+   */
+  placeAs?: Map<string, { id: string; x: number; y: number }>;
 }
 
 /** 付箋の id から、最後に変更した時刻（notes.updated_at） */
@@ -290,7 +297,32 @@ INSERT INTO meta (key, value) VALUES ('seq', '0');
 `,
   // 長い本文を畳んで表示する付箋（wema 0.9.0 の WemaNote.foldable）
   `ALTER TABLE notes ADD COLUMN foldable INTEGER NOT NULL DEFAULT 0;`,
+  // ゴミ箱（src/shared/trash.ts）。
+  // trashed: このページで消して、ゴミ箱へ移した付箋（Undo や取り消しで戻ったら、ゴミ箱の写しを消す）。
+  // trash_origins: ゴミ箱のページだけが使う。ゴミ箱の付箋が、どのページのどの付箋だったか
+  `
+CREATE TABLE trashed (
+  note_id    TEXT PRIMARY KEY,
+  trash_id   TEXT NOT NULL,
+  trashed_at INTEGER NOT NULL
+);
+
+CREATE TABLE trash_origins (
+  note_id     TEXT PRIMARY KEY,
+  page        TEXT NOT NULL,
+  original_id TEXT NOT NULL,
+  x REAL NOT NULL, y REAL NOT NULL
+);
+`,
 ];
+
+/** 1 回の alarm で、期限を過ぎた付箋を消す量（本文の文字数の合計）。ops の 1 行の上限に収める */
+const EXPIRE_BATCH_LENGTH = 400_000;
+/** 期限を過ぎた付箋を消せなかったときに、期限の処理を止める時間 */
+const EXPIRE_RETRY_MS = 60 * 60 * 1000;
+
+/** 自動で消す対象の付箋（子ページの付箋を除く）。notes への WHERE 句の条件。src/shared/trash.ts の `isExpirable` と同じ規則 */
+const EXPIRABLE = `(extra IS NULL OR json_extract(extra, '$.${CHILD_PAGE_KEY}') IS NULL)`;
 
 /** ページ 1 つ分の付箋・接続線・操作履歴を持つ */
 export class PageDO extends DurableObject<WemaKakeEnv> {
@@ -363,14 +395,47 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     if (created) this.broadcast(this.metaJson());
   }
 
-  /** 表示名、ページの色、epoch を伝えるメッセージ。スキーマがある（version > 0）ときだけ呼ぶ */
+  /** 表示名、ページの色、epoch、自動で消す日数を伝えるメッセージ。スキーマがある（version > 0）ときだけ呼ぶ */
   private metaJson(): string {
     return JSON.stringify({
       type: 'meta',
       title: this.getMeta('title'),
       color: this.getMeta('color'),
       epoch: this.getMeta('epoch'),
+      expireDays: this.expireDays(),
     } satisfies ServerMsg);
+  }
+
+  /** 古い付箋を自動で消すまでの日数。ゴミ箱は、常に TRASH_EXPIRE_DAYS。付けていなければ null */
+  private expireDays(): number | null {
+    const slug = this.slugOrNull();
+    if (slug && isTrash(slug)) return TRASH_EXPIRE_DAYS;
+    if (this.version === 0) return null;
+    const days = this.getMeta('expire_days');
+    return days === null ? null : Number(days);
+  }
+
+  /**
+   * 古い付箋を自動で消すまでの日数を変える（null で、消さない）。表示名と同じく、ops には記録しない。
+   * ページの色と同じく、まだ作られていないページには付けない。ゴミ箱の日数は変えられない
+   */
+  setExpiry(
+    input: unknown,
+  ):
+    | { ok: true; expireDays: number | null }
+    | { ok: false; reason: 'invalid days' | 'fixed' | typeof REASON_PAGE_NOT_FOUND } {
+    if (input !== null && !(EXPIRE_DAYS_CHOICES as readonly unknown[]).includes(input)) {
+      return { ok: false, reason: 'invalid days' };
+    }
+    if (this.version === 0 || this.deleting > 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
+    if (isTrash(this.slug())) return { ok: false, reason: 'fixed' };
+    const days = input as number | null;
+    if (days !== this.expireDays()) {
+      this.setMeta('expire_days', days === null ? null : String(days));
+      this.broadcast(this.metaJson());
+      this.ctx.waitUntil(this.scheduleNextAlarm(Date.now()));
+    }
+    return { ok: true, expireDays: days };
   }
 
   /** スキーマがある（version > 0）ときだけ呼ぶ */
@@ -380,13 +445,17 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
 
   getSnapshot(): Snapshot {
     if (this.version === 0) {
-      return { seq: 0, title: null, color: null, epoch: null, data: { version: 1, notes: [], edges: [] }, info: {} };
+      return {
+        seq: 0, title: null, color: null, epoch: null, expireDays: this.expireDays(),
+        data: { version: 1, notes: [], edges: [] }, info: {},
+      };
     }
     return {
       seq: this.getSeq(),
       title: this.getMeta('title'),
       color: this.getMeta('color'),
       epoch: this.getMeta('epoch'),
+      expireDays: this.expireDays(),
       ...readBoardWithInfos(this.sql),
     };
   }
@@ -509,6 +578,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
   /** このページを `parent` の子にする。すでに別の親があるか、輪になるなら、理由を返す。置けたら null */
   setParent(parent: string): ChildRejectCode | null {
     if (this.version === 0 || this.deleting > 0) return 'not-found';
+    if (isTrash(this.slug())) return 'trash';
     const current = this.getMeta('parent');
     if (current !== null && current !== parent) return 'other-parent';
     // 相手を自分の子にしている（または、今まさに子にしようとしている）なら、輪になる
@@ -529,9 +599,14 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
 
   /** このページのスラッグ */
   private slug(): string {
-    const slug = (this.version > 0 ? this.getMeta('slug') : null) ?? this.ctx.id.name;
+    const slug = this.slugOrNull();
     if (!slug) throw new Error('page slug is not available in the Durable Object');
     return slug;
+  }
+
+  /** このページのスラッグ。取得できなければ null */
+  private slugOrNull(): string | null {
+    return (this.version > 0 ? this.getMeta('slug') : null) ?? this.ctx.id.name ?? null;
   }
 
   /** 先祖のページ（親、その親、…の順）。上限を超えてたどらない。パンくずと、輪の検査に使う */
@@ -635,6 +710,8 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     if (!touchesChildren(deltas)) return run();
     const before = childPages(this.sql);
     const wanted = placedPages(deltas).filter((page) => !before.has(page));
+    // ゴミ箱には子ページを置かない（一覧に出ないので、置いたページがどこからもたどれなくなる）
+    if (wanted.length > 0 && isTrash(this.slug())) return rejected(childRejection('trash', wanted[0]));
     const reason = wanted.length > 0 ? await this.adoptChildren(wanted) : null;
     if (reason !== null) return rejected(reason);
     try {
@@ -835,15 +912,39 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
 
   /**
    * 変更から少し後に、まとめて D1 へ反映する（書き込みごとには反映しない）。
-   * alarm が設定済みなら何もしない。alarm の実行中は未設定に見えるので、反映中に届いた変更は
-   * 次の alarm で反映される。
+   * 反映が要ることを meta の `index_clean` を消して記録し、alarm をそれより早く設定済みでなければ設定する。
+   * alarm の実行中は未設定に見えるので、反映中に届いた変更は次の alarm で反映される。
+   *
+   * alarm は 1 つしかないので、古い付箋を消す時刻（scheduleNextAlarm）と共用している
    */
   private scheduleIndexing(): void {
-    this.ctx.waitUntil(
-      this.ctx.storage.getAlarm().then((alarm) => {
-        if (alarm === null) return this.ctx.storage.setAlarm(Date.now() + INDEX_DELAY_MS);
-      }),
-    );
+    // 読むほうが書くより安いので、印があるときだけ消す（書き込みのたびに呼ばれる）
+    if (this.version > 0 && this.getMeta('index_clean') !== null) this.setMeta('index_clean', null);
+    this.ctx.waitUntil(this.scheduleAlarm(Date.now() + INDEX_DELAY_MS));
+  }
+
+  /** alarm を `at` に設定する。それより早い時刻に設定済みなら、そのままにする */
+  private async scheduleAlarm(at: number): Promise<void> {
+    const alarm = await this.ctx.storage.getAlarm();
+    if (alarm === null || alarm > at) await this.ctx.storage.setAlarm(at);
+  }
+
+  /**
+   * 次の alarm を設定する。索引への反映が残っていればその時刻、古い付箋を自動で消すページでは、
+   * 最も古い付箋が期限を過ぎる時刻の、早い方。反映の分も入れるのは、scheduleIndexing と同時に
+   * 動いたときに、遠い時刻で上書きして、反映を遅らせないため
+   */
+  private async scheduleNextAlarm(now: number): Promise<void> {
+    if (this.version === 0) return;
+    let at = this.getMeta('index_clean') === null ? now + INDEX_DELAY_MS : Infinity;
+    const days = this.expireDays();
+    if (days !== null) {
+      const oldest = this.sql
+        .exec(`SELECT min(updated_at) AS t FROM notes WHERE ${EXPIRABLE}`)
+        .one().t as number | null;
+      if (oldest !== null) at = Math.min(at, Math.max(oldest + days * DAY_MS, this.expirePausedUntil()));
+    }
+    if (at !== Infinity) await this.scheduleAlarm(at);
   }
 
   /** 失敗して例外で終わると、ランタイムが間隔を空けて再実行する */
@@ -851,7 +952,12 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     if (this.version === 0) return;
     const now = Date.now();
     this.pruneOps(now);
-    await this.reindexInOrder(now);
+    await this.expireNotes(now);
+    if (this.version === 0) return;
+    // 期限で消した付箋の記録も、同じ alarm で消す
+    this.pruneTrashRecords(now);
+    if (this.getMeta('index_clean') === null) await this.reindexInOrder(now);
+    await this.scheduleNextAlarm(Date.now());
   }
 
   /**
@@ -860,8 +966,75 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    */
   private reindexInOrder(now: number): Promise<void> {
     return this.inOrder(async () => {
-      if (this.version > 0) await this.reindex(now);
+      if (this.version === 0) return;
+      // 反映の途中で届いた変更は、scheduleIndexing が印を消すので、次の alarm で反映される
+      this.setMeta('index_clean', '1');
+      try {
+        await this.reindex(now);
+      } catch (e) {
+        if (this.version > 0) this.setMeta('index_clean', null);
+        throw e;
+      }
     });
+  }
+
+  /**
+   * 期限を過ぎた付箋を消す（ゴミ箱以外のページでは、ゴミ箱へ移る）。子ページの付箋は消さない
+   * （ページを表す付箋で、消すと子ページがルートへ戻る）。消す量は EXPIRE_BATCH_LENGTH までで、
+   * 残りは、次の alarm（scheduleNextAlarm が、すぐの時刻にする）で消す
+   */
+  private expireNotes(now: number): Promise<void> {
+    const days = this.expireDays();
+    if (days === null || now < this.expirePausedUntil()) return Promise.resolve();
+    return this.write(async () => {
+      if (this.version === 0) return;
+      const rows = this.sql
+        .exec<{ id: string; size: number }>(
+          `SELECT id, length(text) AS size FROM notes WHERE updated_at <= ? AND ${EXPIRABLE} ORDER BY updated_at`,
+          now - days * DAY_MS,
+        )
+        .toArray();
+      const ids: string[] = [];
+      let total = 0;
+      for (const row of rows) {
+        if (ids.length > 0 && total + row.size > EXPIRE_BATCH_LENGTH) break;
+        ids.push(row.id);
+        total += row.size;
+      }
+      if (ids.length === 0) return;
+      const notes = readNotesAmong(this.sql, ids).notes.map(({ createdBy: _, updatedAt: __, ...note }) => note);
+      const result = await this.applyOpsInOrder(
+        {
+          actor: 'system',
+          clientId: 'system',
+          opId: crypto.randomUUID(),
+          deltas: notes.map((note): HistoryDelta => ({ type: 'note:delete', note })),
+          summary: systemSummary.expired(),
+        },
+        { trash: true },
+      );
+      if (!result.ok) {
+        // 同じ付箋で失敗し続けると、期限を過ぎた時刻（過去）に alarm を設定し直して、すぐに起き続ける。
+        // しばらく期限の処理を止める（その間に付箋が変われば、次の書き込みの後の alarm で消せる）
+        console.error('failed to remove expired notes', result.reason);
+        this.setMeta('expire_paused_until', String(now + EXPIRE_RETRY_MS));
+      }
+    }, undefined);
+  }
+
+  /** 期限の処理を止めている時刻（expireNotes が失敗したとき）。止めていなければ 0 */
+  private expirePausedUntil(): number {
+    return Number(this.getMeta('expire_paused_until') ?? 0);
+  }
+
+  /**
+   * ゴミ箱の記録の後始末。ゴミ箱の付箋は TRASH_EXPIRE_DAYS で消えるので、それより古い `trashed` は
+   * 使われない。`trash_origins` は、ゴミ箱から付箋がなくなったら消す
+   */
+  private pruneTrashRecords(now: number): void {
+    this.sql.exec(`DELETE FROM trashed WHERE trashed_at < ?`, now - (TRASH_EXPIRE_DAYS + 1) * DAY_MS);
+    // trash_origins はゴミ箱のページだけが使う
+    if (isTrash(this.slug())) this.sql.exec(`DELETE FROM trash_origins WHERE note_id NOT IN (SELECT id FROM notes)`);
   }
 
   /** 保持期間を過ぎた ops を消す。直近の分は期間を過ぎていても残す */
@@ -875,6 +1048,8 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
 
   private async reindex(now: number): Promise<void> {
     const slug = this.slug();
+    // ゴミ箱は、一覧、検索、リンクの索引に出さない（消した付箋が、検索に出ないようにする）
+    if (isTrash(slug)) return;
     const title = this.getMeta('title');
     const notes = readNotes(this.sql);
     const row: PageRow = {
@@ -930,7 +1105,151 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * その付箋の更新が処理されるなど）ので、呼び出しを 1 つずつ順に処理する。
    */
   applyOps(input: ApplyInput): Promise<ApplyResult> {
-    return this.write(() => this.applyOpsInOrder(input), { ok: false, reason: REASON_PAGE_DELETED });
+    return this.write(() => this.applyOpsInOrder(input, { trash: true }), { ok: false, reason: REASON_PAGE_DELETED });
+  }
+
+  // --- ゴミ箱（src/shared/trash.ts） ---
+  //
+  // ゴミ箱のページの DO は、他のページの DO の順番待ちに入らない（ゴミ箱の書き込みから、他のページの
+  // 書き込みを呼ばない）。他のページの DO は、自分の順番待ちの中からゴミ箱の書き込みを呼ぶので、
+  // 逆向きの呼び出しを足すと、互いに待って止まることがある。
+
+  /**
+   * 消した付箋を、ゴミ箱へ移す（applyOpsInOrder の `trash`）。付箋どうしをつなぐ接続線も一緒に移す。
+   * 子ページの付箋は移さない（ページを表す付箋で、ゴミ箱に置くと、ゴミ箱の子ページになる）。
+   *
+   * 消した後に呼ぶので、失敗しても消した操作は取り消さない。消した付箋は、その操作の記録（ops）に
+   * 残っていて、操作の履歴から取り消せば戻る
+   */
+  private async sendToTrash(applied: HistoryDelta[], authors: ReadonlyMap<string, string | null>, actor: string) {
+    const slug = this.slug();
+    if (isTrash(slug)) return;
+    const notes = applied.flatMap((d) => (d.type === 'note:delete' && isExpirable(d.note) ? [d.note] : []));
+    if (notes.length === 0) return;
+    const ids = new Set(notes.map((note) => note.id));
+    const edges = applied.flatMap((d) =>
+      d.type === 'edge:delete' && ids.has(d.edge.from) && ids.has(d.edge.to) ? [d.edge] : [],
+    );
+    try {
+      const placed = await this.env.PAGE.getByName(TRASH_SLUG).trashNotes({
+        actor,
+        from: slug,
+        notes: notes.map((note) => ({ ...note, createdBy: authors.get(note.id) ?? null })),
+        edges,
+      });
+      const now = Date.now();
+      for (const [noteId, trashId] of placed) {
+        this.sql.exec(
+          `INSERT OR REPLACE INTO trashed (note_id, trash_id, trashed_at) VALUES (?, ?, ?)`,
+          noteId, trashId, now,
+        );
+      }
+    } catch (e) {
+      console.error('failed to move deleted notes to the trash', slug, e);
+    }
+  }
+
+  /**
+   * ゴミ箱へ移した付箋が、このページに戻ったら（ブラウザの Undo、操作の取り消し）、ゴミ箱の写しを消す。
+   * 消さないと、Undo のたびに、ゴミ箱に同じ付箋が残る。失敗しても、書き込みは取り消さない
+   */
+  private async untrash(applied: HistoryDelta[], actor: string): Promise<void> {
+    const created = createdNoteIds(applied);
+    if (created.length === 0) return;
+    const rows = this.sql
+      .exec<{ note_id: string; trash_id: string }>(
+        `SELECT note_id, trash_id FROM trashed WHERE note_id IN (SELECT value FROM json_each(?))`,
+        JSON.stringify(created),
+      )
+      .toArray();
+    if (rows.length === 0) return;
+    this.forgetTrashed(rows.map((row) => row.note_id));
+    const slug = this.slug();
+    try {
+      const removed = await this.env.PAGE.getByName(TRASH_SLUG).removeNotes({
+        actor,
+        clientId: 'system',
+        opId: crypto.randomUUID(),
+        noteIds: rows.map((row) => row.trash_id),
+        versions: null,
+        to: slug,
+        summary: systemSummary.untrashed(slug),
+      });
+      if (!removed.ok) console.warn('could not remove restored notes from the trash', slug, removed.reason);
+    } catch (e) {
+      console.error('failed to remove restored notes from the trash', slug, e);
+    }
+  }
+
+  /** ゴミ箱へ移した付箋の記録（`trashed`）から、`noteIds` を消す */
+  private forgetTrashed(noteIds: string[]): void {
+    this.sql.exec(`DELETE FROM trashed WHERE note_id IN (SELECT value FROM json_each(?))`, JSON.stringify(noteIds));
+  }
+
+  /**
+   * 他のページで消した付箋を、ゴミ箱（このページ）に置く。新しい id にして、今ある付箋の下に置く。
+   * 作成者は引き継ぐ。元のページと、元の id と位置を `trash_origins` に記録する（元のページへ戻すときに使う）。
+   * 元のページでの id から、ゴミ箱での id への対応を返す
+   */
+  trashNotes(input: {
+    actor: string;
+    from: string;
+    notes: (WemaNote & { createdBy: string | null })[];
+    edges: WemaEdge[];
+  }): Promise<[string, string][]> {
+    return this.write(async () => {
+      const newIds = new Map<string, string>();
+      const authors = new Map<string, string | null>();
+      /** ゴミ箱での id、元の id、元の位置（placeBelowNotes でずらす前） */
+      const origins: [string, string, number, number][] = [];
+      const notes = input.notes.map(({ createdBy, ...note }) => {
+        const id = crypto.randomUUID();
+        newIds.set(note.id, id);
+        authors.set(id, createdBy);
+        origins.push([id, note.id, note.x, note.y]);
+        return { ...note, id };
+      });
+      const edges = input.edges.map((edge) => ({
+        ...edge, id: crypto.randomUUID(), from: newIds.get(edge.from)!, to: newIds.get(edge.to)!,
+      }));
+      const result = await this.applyOpsInOrder(
+        {
+          actor: input.actor,
+          clientId: 'system',
+          opId: crypto.randomUUID(),
+          deltas: [
+            ...notes.map((note) => ({ type: 'note:create', note })),
+            ...edges.map((edge) => ({ type: 'edge:create', edge })),
+          ],
+          summary: systemSummary.trashed(input.from),
+        },
+        { prepare: (deltas) => this.placeBelowNotes(deltas), authors },
+      );
+      if (!result.ok) throw new Error(`could not put the notes in the trash: ${result.reason}`);
+      for (const [id, originalId, x, y] of origins) {
+        this.sql.exec(
+          `INSERT OR REPLACE INTO trash_origins (note_id, page, original_id, x, y) VALUES (?, ?, ?, ?, ?)`,
+          id, input.from, originalId, x, y,
+        );
+      }
+      return [...newIds];
+    }, []);
+  }
+
+  /**
+   * ゴミ箱の付箋 `ids` が、元はどのページのどの付箋だったか。記録のない付箋は、結果に入らない。
+   * 付箋がもうなくても、記録が残っていれば返す（戻した直後の送り直しを、記録済みの結果で返せるようにする。
+   * 記録は、次の alarm で消える）
+   */
+  trashOrigins(ids: string[]): { noteId: string; page: string; originalId: string; x: number; y: number }[] {
+    if (this.version === 0) return [];
+    return this.sql
+      .exec<{ noteId: string; page: string; originalId: string; x: number; y: number }>(
+        `SELECT note_id AS noteId, page, original_id AS originalId, x, y FROM trash_origins
+         WHERE note_id IN (SELECT value FROM json_each(?))`,
+        JSON.stringify(ids),
+      )
+      .toArray();
   }
 
   /**
@@ -1004,7 +1323,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
 
   /** takeNotes で読んだ付箋を、新しい id にして置く */
   private async placeTaken(input: TakeInput, source: { notes: TakenNote[]; edges: WemaEdge[] }): Promise<TakeResult> {
-    const { from, noteIds, positions, keepAuthors, summary, ...sender } = input;
+    const { from, noteIds, positions, keepAuthors, summary, placeAs, ...sender } = input;
     const byId = new Map(source.notes.map((note) => [note.id, note]));
     /** 元のページでの id から、このページでの id（同じ付箋を 2 回写しても、重ならない） */
     const newIds = new Map<string, string>();
@@ -1016,9 +1335,10 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       if (!found) return { ok: false, reason: `note not found: ${id}`, notFound: true };
       if (childPageOf(found) !== undefined) return { ok: false, reason: `cannot move a child page note: ${id}` };
       const { createdBy, updatedAt, ...note } = found;
-      const newId = crypto.randomUUID();
+      const place = placeAs?.get(id);
+      const newId = place?.id ?? crypto.randomUUID();
       newIds.set(id, newId);
-      notes.push({ ...note, ...positions.get(id), id: newId });
+      notes.push({ ...note, ...(place ? { x: place.x, y: place.y } : positions.get(id)), id: newId });
       if (keepAuthors) authors.set(newId, createdBy);
       versions[id] = updatedAt;
     }
@@ -1037,9 +1357,11 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
         summary: summary ?? systemSummary.notesReceived(from),
         mustExist: true,
       },
-      { prepare: (deltas) => this.placeBelowNotes(deltas), authors },
+      { prepare: placeAs ? undefined : (deltas) => this.placeBelowNotes(deltas), authors },
     );
     if (!result.ok) return { ok: false, reason: result.reason };
+    // ゴミ箱から戻した付箋は、ゴミ箱へ移した記録を消す（戻した付箋を、Undo の戻りと見なさない）
+    if (placeAs) this.forgetTrashed(createdNoteIds(result.deltas));
     return { ok: true, seq: result.seq, noteIds: createdNoteIds(result.deltas), versions };
   }
 
@@ -1152,6 +1474,9 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    *   同じ操作の再送（適用済み）では、呼ばない
    * @param options.matchColors 適用した後に、子ページの色と、その付箋の色をそろえる（matchChildColors）。既定は true
    * @param options.authors 作成する付箋の作成者（付箋の id から）。applyDeltas を参照
+   * @param options.trash 人や agent の操作として扱う。消した付箋をゴミ箱へ移し（sendToTrash）、ゴミ箱へ
+   *   移した付箋が戻ったら、ゴミ箱の写しを消す（untrash）。他のページへの移動、子ページの削除に伴う
+   *   付箋の削除、ゴミ箱への受け入れでは、付けない
    */
   private async applyOpsInOrder(
     input: ApplyInput,
@@ -1159,9 +1484,10 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       prepare?: (deltas: HistoryDelta[]) => void;
       matchColors?: boolean;
       authors?: ReadonlyMap<string, string | null>;
+      trash?: boolean;
     } = {},
   ): Promise<ApplyResult> {
-    const { prepare, matchColors = true, authors } = options;
+    const { prepare, matchColors = true, authors, trash = false } = options;
     let deltas: HistoryDelta[];
     let sanitized: Sanitized;
     try {
@@ -1193,12 +1519,14 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
 
     prepare?.(deltas);
 
+    let removedAuthors: ReadonlyMap<string, string | null> = new Map();
     const apply = (): ApplyResult => {
       let deliver: (() => void) | undefined;
       try {
         const result = this.ctx.storage.transactionSync((): ApplyResult => {
           const now = Date.now();
           const applied = applyDeltas(this.sql, deltas, input.actor, now, sanitized.cleanBefore, authors);
+          removedAuthors = applied.removedAuthors;
           const fixups = [...sanitized.fixups, ...applied.fixups];
           if (applied.deltas.length === 0) {
             return { ok: true, seq: this.getSeq(), deltas: [], fixups, broadcast: false };
@@ -1218,6 +1546,10 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     const result = await this.withChildren(deltas, apply, (reason): ApplyResult => ({ ok: false, reason }));
     // 同じ操作の再送と、何も変えなかった操作では、そろえ直さない
     if (matchColors && result.ok && result.broadcast) await this.matchChildColors(result.deltas, input.actor);
+    if (trash && result.ok && result.broadcast) {
+      await this.sendToTrash(result.deltas, removedAuthors, input.actor);
+      await this.untrash(result.deltas, input.actor);
+    }
     return result;
   }
 
@@ -1316,6 +1648,9 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       // 取り消しで子ページの付箋が戻るなら、もう一度子にする。置けなければ、取り消しを断る
       const result = await this.withChildren(inverse, apply, (reason) => fail('conflict', reason));
       await this.matchChildColors(reverted, actor);
+      // 削除を取り消して付箋が戻ったら、ゴミ箱の写しを消す。作成を取り消して消した付箋は、ゴミ箱へ
+      // 移さない（取り消しで消えるのは、取り消した操作が作った付箋）
+      await this.untrash(reverted, actor);
       return result;
     } catch (e) {
       if (e instanceof RejectError || e instanceof SanitizeError) return fail('invalid', e.message);

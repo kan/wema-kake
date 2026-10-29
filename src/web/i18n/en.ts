@@ -28,6 +28,8 @@ export const en = {
   'failed.delete': (reason) => `Could not delete the page (${reason})`,
   'failed.create': (reason) => `Could not create the page (${reason})`,
   'failed.transfer': (reason) => `Could not send the notes to the child page (${reason})`,
+  'failed.expiry': (reason) => `Could not change the auto-delete setting (${reason})`,
+  'failed.restore': (reason) => `Could not restore the notes (${reason})`,
 
   'zoom.reset': 'Reset to 100%',
   'zoom.out': 'Zoom out',
@@ -105,6 +107,22 @@ export const en = {
   'menu.history': 'Operation history…',
   'menu.exportJson': 'Export as JSON',
   'menu.deletePage': 'Delete page…',
+  'menu.expiry': 'Auto-delete old notes',
+  'menu.expiryOff': 'Off',
+  'menu.expiryDays': (days) => count(days, 'day'),
+  'menu.checked': '✓ ',
+
+  'trash.title': 'Trash',
+  'trash.open': 'Trash (deleted notes)',
+  'trash.hint': (days) => `Notes are removed after ${count(days, 'day')}`,
+  'trash.restore': 'Restore the selected notes to their pages',
+  'trash.restoreOne': 'Restore',
+  'trash.restored': (notes) => `Restored ${count(notes, 'note')}`,
+  'trash.restoreFailed': (pages) => `Could not restore to some pages: ${pages.join(', ')}`,
+  'trash.restoreFailedPage': (page, reason) => `${page} (${reason})`,
+  'trash.restoreUnknown': 'notes whose original page is unknown',
+  'trash.empty': 'Empty the trash…',
+  'trash.emptyConfirm': 'All notes in the trash will be removed. This cannot be undone.',
 
   'ops.title': 'Operation history',
   'ops.agentOnly': 'Agent operations only',
@@ -120,6 +138,9 @@ export const en = {
   'ops.summary.notesReceived': (page) => `Notes received from page ${page}`,
   'ops.summary.notesSent': (page) => `Notes moved to page ${page}`,
   'ops.summary.childRecolored': (page) => `Matched the color of child page ${page}`,
+  'ops.summary.trashed': (page) => `Received notes deleted on page ${page}`,
+  'ops.summary.expired': 'Removed old notes automatically',
+  'ops.summary.untrashed': (page) => `Removed notes restored on page ${page}`,
 
   'revert.done': 'Reverted',
   'revert.none': (why) => `There was nothing to revert${why}`,
@@ -157,6 +178,7 @@ export const en = {
   'child.reject.duplicate': 'It is already placed on this page',
   'child.reject.ancestor': 'It is an ancestor of this page, so it would make a loop',
   'child.reject.too-deep': (max) => `Pages can be nested up to ${max} levels`,
+  'child.reject.trash': 'The trash cannot be a parent or child page',
 
   'help.unsaved': 'This board is not saved',
 } satisfies typeof ja;

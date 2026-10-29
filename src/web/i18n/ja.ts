@@ -33,6 +33,8 @@ export const ja = {
   'failed.delete': (reason: string) => `削除に失敗しました（${reason}）`,
   'failed.create': (reason: string) => `作成に失敗しました（${reason}）`,
   'failed.transfer': (reason: string) => `子ページへ付箋を送れませんでした（${reason}）`,
+  'failed.expiry': (reason: string) => `自動で消す設定の変更に失敗しました（${reason}）`,
+  'failed.restore': (reason: string) => `元のページへ戻せませんでした（${reason}）`,
 
   // --- ヘッダーの部品 ---
   'zoom.reset': '等倍に戻す',
@@ -122,6 +124,29 @@ export const ja = {
   'menu.history': '操作の履歴…',
   'menu.exportJson': 'JSON を書き出す',
   'menu.deletePage': 'ページを削除…',
+  /** 古い付箋を自動で消す設定の見出し。続けて、日数の選択肢を並べる */
+  'menu.expiry': '古い付箋を自動で消す',
+  'menu.expiryOff': 'しない',
+  'menu.expiryDays': (days: number) => `${days} 日`,
+  /** 今の設定の項目の前に付ける */
+  'menu.checked': '✓ ',
+
+  // --- ゴミ箱（src/shared/trash.ts） ---
+  'trash.title': 'ゴミ箱',
+  'trash.open': 'ゴミ箱（消した付箋）',
+  /** ゴミ箱の画面の見出しの後ろに出す説明 */
+  'trash.hint': (days: number) => `消した付箋は ${days} 日で消えます`,
+  'trash.restore': '選んだ付箋を元のページへ戻す',
+  /** ゴミ箱の付箋の下に出すボタン */
+  'trash.restoreOne': '元のページへ戻す',
+  'trash.restored': (notes: number) => `付箋 ${notes} 枚を元のページへ戻しました`,
+  /** `pages` は、`trash.restoreFailedPage` で作った、ページごとの文言 */
+  'trash.restoreFailed': (pages: string[]) => `戻せなかったページがあります: ${pages.join('、')}`,
+  'trash.restoreFailedPage': (page: string, reason: string) => `${page}（${reason}）`,
+  /** 元のページの記録がない付箋（ゴミ箱で作った付箋など）があったとき */
+  'trash.restoreUnknown': '元のページが分からない付箋',
+  'trash.empty': 'ゴミ箱を空にする…',
+  'trash.emptyConfirm': 'ゴミ箱の付箋をすべて消します。取り消しはできません。',
 
   // --- 操作の履歴 ---
   'ops.title': '操作の履歴',
@@ -140,6 +165,9 @@ export const ja = {
   'ops.summary.notesReceived': (page: string) => `ページ ${page} から付箋を受け取り`,
   'ops.summary.notesSent': (page: string) => `ページ ${page} へ付箋を移動`,
   'ops.summary.childRecolored': (page: string) => `子ページ ${page} の色に合わせる`,
+  'ops.summary.trashed': (page: string) => `ページ ${page} で消した付箋を受け取り`,
+  'ops.summary.expired': '古い付箋を自動で削除',
+  'ops.summary.untrashed': (page: string) => `ページ ${page} で戻った付箋を削除`,
 
   // 取り消しの結果。`why` は、`revert.reasons` で作った理由（なければ空文字）
   'revert.done': '取り消しました',
@@ -185,6 +213,7 @@ export const ja = {
   'child.reject.duplicate': 'このページにすでに置いてあります',
   'child.reject.ancestor': 'このページの先祖なので、輪になります',
   'child.reject.too-deep': (max: number) => `階層は ${max} 段までです`,
+  'child.reject.trash': 'ゴミ箱とは親子にできません',
 
   // --- 使い方の画面 ---
   'help.unsaved': 'このボードは保存されません',

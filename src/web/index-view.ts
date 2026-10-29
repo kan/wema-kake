@@ -21,7 +21,7 @@ import { navigate, onViewEnd, pageSlugOf, setPopLeave, type Transition, viewSign
 import { checkedSlug, pageFields } from './page-form';
 import { site } from './site';
 import { stackOnNarrow } from './stacked-view';
-import { header, langButton, popover, separator, toast, WEMA_LABELS, zoomControls } from './toolbar';
+import { header, langButton, popover, separator, toast, trashLink, WEMA_LABELS, zoomControls } from './toolbar';
 import { zoomTransitions } from './viewport-motion';
 
 /** 入力が止まってから検索するまでの時間 */
@@ -130,7 +130,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
     header(
       [el('h1', { textContent: site.siteName })],
       [search, count, zoomSlot],
-      [pageNavMenu(), langButton(), newPage.root],
+      [pageNavMenu(), trashLink(), langButton(), newPage.root],
     ),
     canvas,
   );

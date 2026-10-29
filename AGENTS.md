@@ -111,7 +111,9 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 ```sql
 CREATE TABLE meta (
-  key   TEXT PRIMARY KEY,   -- 'slug', 'title', 'color'（ページの色）, 'seq', 'version', 'epoch', 'index_hash', 'parent'（親ページのスラッグ）
+  key   TEXT PRIMARY KEY,   -- 'slug', 'title', 'color'（ページの色）, 'seq', 'version', 'epoch', 'index_hash', 'parent'（親ページのスラッグ）,
+                            -- 'expire_days'（古い付箋を自動で消す日数）, 'index_clean'（D1 へ反映済みなら '1'）,
+                            -- 'expire_paused_until'（期限の処理に失敗したときに、処理を止める時刻）
   value TEXT NOT NULL
 );
 
@@ -158,6 +160,21 @@ CREATE TABLE ops (
 
 CREATE INDEX ops_reverted_by ON ops (reverted_by) WHERE reverted_by IS NOT NULL;
 CREATE UNIQUE INDEX ops_client_op ON ops (actor, client_id, op_id);
+
+-- このページで消して、ゴミ箱へ移した付箋（「ゴミ箱と、古い付箋の自動削除」の節）
+CREATE TABLE trashed (
+  note_id    TEXT PRIMARY KEY,     -- このページでの id
+  trash_id   TEXT NOT NULL,        -- ゴミ箱での id
+  trashed_at INTEGER NOT NULL
+);
+
+-- ゴミ箱のページだけが使う。ゴミ箱の付箋が、元はどのページのどの付箋だったか
+CREATE TABLE trash_origins (
+  note_id     TEXT PRIMARY KEY,    -- ゴミ箱での id
+  page        TEXT NOT NULL,
+  original_id TEXT NOT NULL,
+  x REAL NOT NULL, y REAL NOT NULL -- 元のページでの位置
+);
 ```
 
 - `ops` は再接続時の差分送信・履歴表示・取り消し（後述）に使う。件数か日数で古いものを間引くが、agent の操作は取り消し可能期間のあいだ残す
@@ -219,6 +236,7 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 - DO は自分のスラッグを `ctx.id.name` から得て、スキーマを作るとき（最初の書き込み）に `meta` の `slug` に保存する。alarm は保存した値だけを使う（alarm はリクエストを伴わずに起動されるので、そこで名前を取得できない場合に備えている）。ローカルでは `ctx.id.name` を取得できることを `test/runtime.test.ts` で固定した。本番では未確認なので、最初のデプロイ時に索引ができるか確認すること
 - 検索とリンクに関わる内容（表示名、テキスト、リンク先）が前回の反映から変わっていなければ、`pages` の `note_count`、`updated_at`、`parent`、`layout`、`color` だけを書く。付箋の移動や色の変更のたびに全文検索の索引を書き直さないため。前回の内容のハッシュは DO の `meta` の `index_hash` に持つ
 - alarm が設定済みかどうかは `ctx.storage.getAlarm()` で確かめる（メモリには持たない）
+- **alarm は 1 つしかなく、古い付箋を自動で消す時刻（「ゴミ箱と、古い付箋の自動削除」の節）と共用している。** 反映が要ることは、`meta` の `index_clean` を消して記録する（`scheduleIndexing`）。alarm は、`index_clean` がないときだけ反映する（期限の処理だけで起きたときに、変更のないページの `updated_at` を進めないため）。alarm を設定するときは、すでに設定してある時刻より早いときだけ書き換える（`scheduleAlarm`）。**`setAlarm` を直接呼んで、早い時刻を遠い時刻で上書きしないこと**
 - 絶対 URL のリンクを拾うには `wrangler.jsonc` の `vars` の `SITE_ORIGIN` を設定する。空のときは相対 URL（`/p/<slug>`）だけを拾う
 - `ops` は 30 日以内か直近 1000 件のどちらかに収まっていれば残す
 
@@ -243,6 +261,8 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | `DELETE /api/bookmarks/<slug>` | ブックマークを外す。付いていなくても成功を返す |
 | `PUT /api/pages/<slug>/title` | 表示名の変更（本文は `{ "title": "..." }`）。空文字で未設定に戻す。書き込みのないページに対して呼ぶとページが作られる。本文に `"mustExist": true` を付けると、作らずに 404 を返す（一覧の画面が使う。古い一覧に残った削除済みのページを作り直さないため） |
 | `PUT /api/pages/<slug>/color` | ページの色の変更（本文は `{ "color": "#BBDEFB" }`）。`src/shared/api.ts` の `PAGE_COLORS` のどれか。null で、付けていない状態に戻す。ほかの値と、`color` のない本文は 400。ページがなければ 404（作らない）。親ページがあれば、そこにある自分の付箋も同じ色にする |
+| `PUT /api/pages/<slug>/expiry` | 古い付箋を自動で消すまでの日数の変更（本文は `{ "days": 30 }`）。`src/shared/trash.ts` の `EXPIRE_DAYS_CHOICES` のどれか。null で、消さない。ほかの値と、`days` のない本文は 400。ページがなければ 404（作らない）。ゴミ箱の日数は変えられない（400） |
+| `POST /api/trash/restore` | ゴミ箱の付箋を、元のページへ戻す（本文は `{ "clientId", "opId", "noteIds" }`）。元の id と位置で置き、作成者は引き継ぐ。元のページごとの結果（`{ "pages": [{ "page", "noteIds", "error"? }] }`）を返す。元のページの記録がない付箋は、`page` が null の結果にまとめ、残りは戻す。戻せなかったものがあれば 409、どの付箋にも記録がなければ 404 |
 | `POST /api/pages/<slug>/transfer` | このページの付箋を、他のページ（`to`）へ移す（写す）（本文は `{ "clientId", "opId", "to", "noteIds", "positions"?, "copy"? }`）。付箋の中身と、送る付箋どうしの接続線は、サーバーが元のページから読む。移すときは作成者を引き継ぎ、このページから消す。写すときは、作成者は写した人になる。`positions`（付箋の id から `{ x, y }`）は、このページでの位置の代わりに使う。送り先では、互いの位置関係を保って、今ある付箋の下に置く。同じ `opId` で送り直しても二重には置かない。置いた後の送り先の概要（`page`。`POST /api/pages-info` と同じ形で、索引への反映を待たない）を返す。ページか付箋がなければ 404、送り先に置けたのに元のページから消せなかった付箋があれば 409（移動の途中に元のページで変わった付箋は、消さずに残す） |
 | `POST /api/pages/<slug>/notes` | 他のページから移す（写す）付箋を置く（本文は `{ "clientId", "opId", "from", "notes", "edges" }`。`from` は付箋が元あったページのスラッグ）。付箋の中身を送る側が渡すので、作成者は送った人になる。**今の画面は使わない。** 更新の前に開いた画面のタブのために残している。ページがなければ 404（作らない） |
 | `POST /api/images` | 画像のアップロード（本文は画像のバイト列、`Content-Type` は png / jpeg / gif / webp / avif）。`{ "url": "/img/<key>" }` を返す。10MB まで |
@@ -269,6 +289,30 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
     - ページに付けられる色は `PAGE_COLORS` だけ。付箋には、MCP からほかの色も付けられる。その色は子ページに付かず（`setOwnColor` が断る）、子ページの次の索引の更新で、付箋が子ページの色に戻る
     - 相手の DO の呼び出しが失敗しても、元の変更は取り消さない。食い違いは、子ページの索引の更新（`reindex`）で、付箋を子ページの色に合わせて直す（色の付いていないページでは、付箋の色のままにする）。子ページの色を選び直しても直る（`setColor` は、色が変わっていなくても、親ページの付箋を合わせる）
   - 一覧の色は、D1 の索引から読むので、変更の数秒後に変わる（表示名と同じ）
+
+## ゴミ箱と、古い付箋の自動削除
+
+設計と経緯は `docs/plan.md` の「ゴミ箱」（[#27](https://github.com/kan/wema-kake/issues/27)）。定数と判定は `src/shared/trash.ts`。
+
+- **付箋を消すと、すぐには消さずに、ゴミ箱のページ（スラッグは `trash`）へ移す。** ゴミ箱は、ふつうのページと同じ DO で、古い付箋を自動で消す日数が 30 日に固定されている
+- **古い付箋を自動で消す日数は、ページの設定**（`meta` の `expire_days`。`PUT /api/pages/<slug>/expiry`）。最後に更新した時刻（`updated_at`）から数える。ゴミ箱以外のページで期限を過ぎた付箋は、ゴミ箱へ移る。ゴミ箱で期限を過ぎた付箋は消える。子ページの付箋は、期限の対象にしない。消すのは alarm（`expireNotes`）で、操作の主体は `system`、要約は `system:expired`。消すのに失敗したら、1 時間、期限の処理を止める（`expire_paused_until`）。**止めずに続けると、期限を過ぎた時刻（過去）に alarm を設定し直して、すぐに起き続ける**
+- **ゴミ箱へ移すのは、`applyOps`（画面と MCP の書き込み口）と、期限の処理での削除だけ**（`applyOpsInOrder` の `trash`）。次の削除は移さない
+  - 他のページへの移動（`removeNotes`）。付箋は移した先にある
+  - 操作の取り消し（`revert`）で、作成を取り消して消えた付箋
+  - 子ページの付箋（ページを表す付箋。ゴミ箱に置くと、ゴミ箱の子ページになる）。子ページが削除されたときの付箋の削除（`removeChildNotes`）
+  - ゴミ箱のページの中での削除
+- 移すのは、消した後（`sendToTrash`）。ゴミ箱の DO の `trashNotes` が、新しい id で、今ある付箋の下に置く。作成者は引き継ぎ、操作の主体は消した人、要約は `system:trashed:<元のページ>`。消した付箋どうしの接続線も一緒に移る。**失敗しても、消した操作は取り消さない**（消した付箋は、その操作の ops に残っていて、操作の履歴から取り消せば戻る）
+- 元のページは、ゴミ箱へ移した付箋の id の対応を `trashed` に持つ。**同じ id の付箋が作り直されたら（ブラウザの Undo、削除の取り消し）、ゴミ箱の写しを消す**（`untrash`。要約は `system:untrashed:<元のページ>`）。消さないと、Undo のたびに同じ付箋がゴミ箱へ残る
+- ゴミ箱は、元のページ、元の id、元の位置を `trash_origins` に持つ。ゴミ箱の画面の「元のページへ戻す」（`POST /api/trash/restore`、`src/worker/trash.ts`）は、元のページごとに `transferNotes` を呼び、元の id と位置で置く（`TakeInput` の `placeAs`。今ある付箋の下へずらさない）。同じ id の付箋が元のページにあれば、戻さない
+- **ゴミ箱の DO から、他のページの DO の書き込みを呼ばないこと。** 他のページの DO は、自分の書き込みの順番待ちの中から、ゴミ箱の書き込み（`trashNotes`、`removeNotes`）を呼ぶ。逆向きの呼び出しを足すと、互いに待って止まることがある
+- **ゴミ箱は、一覧、検索、リンクの索引（D1）に出さない**（`reindex` が何も書かない）。消した付箋を、検索に出さないため。画面は、ヘッダーのゴミ箱のアイコン（`src/web/toolbar.ts` の `trashLink`）から開く
+- ゴミ箱の画面は、常に参照モードで出す（編集用のポップアップを出さない。メニューに切り替えも出さない）。付箋を戻すのは、付箋の下の「元のページへ戻す」（wema の `renderNoteAccessory` に描く。ゴミ箱では作成者と日時の代わりに、同じ見た目で、ホバー中と選択中だけ出す）と、選んだ付箋をまとめて戻すヘッダーのボタン。ヘッダーのボタンは、参照モードでも押せるようにしてある
+- ゴミ箱は、子ページにできず、ゴミ箱に子ページを置けない（`ChildRejectCode` の `trash`）
+- ゴミ箱のページも削除できる（画面のメニューでは「ゴミ箱を空にする」）。次に付箋を消したときに、作り直される
+- **スラッグ `trash` は予約してある。** 利用側に、この名前のふつうのページがあれば、それがゴミ箱になる（中の付箋は 30 日で消え始める）
+- 画面は、付箋を、期限に近いほど薄く出す。wema 0.17.0 の `decorateNote` で、付箋の要素に古さ（`noteAge`。0 から 1）を `--note-age` として当て、不透明度は `style.css` で決める（ホバー中と選択中は濃く戻す）。**`@kanf/wema` を 0.17.0 より前に下げないこと**
+  - `decorateNote` は付箋の移動では呼ばれない。更新時刻が変わった付箋（`onNoteInfo`）、日数の変更、1 時間ごとに、`refreshNoteDecoration()` で描き直す
+  - 不透明度を、付箋の要素へ直接 `opacity` で当てないこと（CSS でホバー中に戻すには `!important` が要り、`note-leaving` の 0 を上書きしてしまう）
 
 ## ページの階層
 
@@ -331,9 +375,10 @@ type ClientMsg =
 
 // Server → Client
 type ServerMsg =
-  | { type: 'snapshot'; seq: number; title: string | null; color: string | null; epoch: string | null; data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] };
+  | { type: 'snapshot'; seq: number; title: string | null; color: string | null; epoch: string | null; expireDays: number | null;
+      data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] };
       info: Record<NoteId, { createdBy: string | null; updatedAt: number }> }   // 付箋ごとの付加情報（後述）
-  | { type: 'meta'; title: string | null; color: string | null; epoch: string | null }   // 表示名かページの色が変わった、またはページができた。seq は進まない
+  | { type: 'meta'; title: string | null; color: string | null; epoch: string | null; expireDays: number | null }   // 表示名、ページの色、自動で消す日数が変わった、またはページができた。seq は進まない
   | { type: 'ops'; seq: number; actor: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
       createdAt?: number;         // 操作を記録した時刻。配信と、再接続のときの差分に付く。送信元にだけ返す確定（再送への応答など）には付かない
       reverts?: number;           // 取り消しなら、取り消した対象の seq（「取り消し」の節を参照）
@@ -421,7 +466,7 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 | `read_board` | 1 ページの付箋（id・タグ除去したテキスト・座標・サイズ・色・作成者）と接続線（from/to/label）を返す。子ページの付箋には `child_page`（子ページの名前）が付く |
 | `add_notes` | 付箋を複数追加する。位置を省略した場合は関連付け先の付箋の近くに自動配置。大きさも指定できる。省略すると、幅は 200、高さは本文の量と幅からの見積もり（サーバーでは描画の大きさを測れない） |
 | `update_notes` | テキスト・色・位置・サイズを複数更新する |
-| `delete_notes` | 付箋を削除する（接続線も合わせて削除） |
+| `delete_notes` | 付箋を削除する（接続線も合わせて削除）。画面からの削除と同じく、付箋はゴミ箱へ移る（「ゴミ箱と、古い付箋の自動削除」の節） |
 | `move_notes` | 付箋を、別のページ（すでにあるページ）へ移す。作成者は引き継ぐ。画面からの移動と同じ処理（`src/worker/transfer.ts`）を使う |
 | `connect_notes` / `disconnect_notes` | 接続線の追加・削除（ラベル指定可） |
 | `auto_layout` | 接続線に基づく自動レイアウト。wema のレイアウト関数を DO 側で実行する（末尾の wema 側の変更を参照） |

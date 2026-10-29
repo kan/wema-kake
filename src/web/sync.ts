@@ -60,6 +60,8 @@ export interface SyncHooks {
   onTitle?(title: string | null): void;
   /** ページの色。付けていなければ null */
   onColor?(color: string | null): void;
+  /** 古い付箋を自動で消すまでの日数。付けていなければ null */
+  onExpireDays?(days: number | null): void;
   /** 認証の期限が切れた。再接続はできないので、ページを読み込み直して認証し直す */
   onAuthExpired?(): void;
   /**
@@ -254,12 +256,15 @@ export class BoardSync {
         for (const op of this.pending) op.applied = false;
         this.hooks.onTitle?.(msg.title);
         this.hooks.onColor?.(msg.color);
+        // 返さない古い Worker につながることがある（デプロイの途中）
+        this.hooks.onExpireDays?.(msg.expireDays ?? null);
         this.synced();
         break;
       case 'meta':
         this.epoch = msg.epoch ?? undefined;
         this.hooks.onTitle?.(msg.title);
         this.hooks.onColor?.(msg.color);
+        this.hooks.onExpireDays?.(msg.expireDays ?? null);
         // 差分で追いつく場合は、最初に meta が届く
         this.synced();
         break;

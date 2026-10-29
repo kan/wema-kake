@@ -256,6 +256,8 @@ export interface Applied {
   deltas: HistoryDelta[];
   /** 送信元が送っていないのにサーバーが足したデルタ（付箋の削除に伴う接続線の削除） */
   fixups: HistoryDelta[];
+  /** 消した付箋の id から、その作成者（ゴミ箱へ移すときに引き継ぐ） */
+  removedAuthors: Map<string, string | null>;
 }
 
 /**
@@ -281,6 +283,7 @@ export function applyDeltas(
 ): Applied {
   const applied: HistoryDelta[] = [];
   const fixups: HistoryDelta[] = [];
+  const removedAuthors = new Map<string, string | null>();
 
   for (const d of deltas) {
     switch (d.type) {
@@ -336,8 +339,9 @@ export function applyDeltas(
       }
 
       case 'note:delete': {
-        const cur = readNote(sql, d.note.id);
-        if (!cur) break;
+        const row = sql.exec(`SELECT * FROM notes WHERE id = ?`, d.note.id).toArray()[0];
+        if (!row) break;
+        const cur = rowToNote(row);
         // wema は接続線の削除を先に送ってくる。残っているのは他の人が同時に足したものか、
         // 接続線を指定しない呼び出し（MCP）なので、ここで削除のデルタを作って記録に残す
         const rest = sql
@@ -352,6 +356,7 @@ export function applyDeltas(
         if (rest.length > 0) {
           sql.exec(`DELETE FROM edges WHERE from_id = ? OR to_id = ?`, cur.id, cur.id);
         }
+        removedAuthors.set(cur.id, row.created_by as string | null);
         sql.exec(`DELETE FROM notes WHERE id = ?`, cur.id);
         applied.push({ type: 'note:delete', note: cur });
         break;
@@ -411,5 +416,5 @@ export function applyDeltas(
     }
   }
 
-  return { deltas: applied, fixups };
+  return { deltas: applied, fixups, removedAuthors };
 }

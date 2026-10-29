@@ -199,6 +199,7 @@ const REJECTION: Record<ChildRejectCode, string> = {
   duplicate: t('child.reject.duplicate'),
   ancestor: t('child.reject.ancestor'),
   'too-deep': t('child.reject.too-deep', MAX_DEPTH),
+  trash: t('child.reject.trash'),
 };
 
 /**

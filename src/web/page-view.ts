@@ -4,6 +4,7 @@ import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type SkipReason }
 import { CHILD_NOTE_SIZE, CHILD_PAGE_KEY, childPageOf } from '../shared/hierarchy';
 import { parseSystemSummary } from '../shared/op-summary';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
+import { EXPIRE_DAYS_CHOICES, isExpirable, isTrash, noteAge, TRASH_EXPIRE_DAYS } from '../shared/trash';
 import * as api from './api';
 import { bookmarkStar, pageLinks, pageNavMenu } from './bookmarks';
 import { ChildNotes, childPageForm } from './child-notes';
@@ -46,6 +47,7 @@ import {
   settings,
   switchLang,
   toast,
+  trashLink,
   WEMA_LABELS,
   zoomControls,
 } from './toolbar';
@@ -53,6 +55,8 @@ import { zoomTransitions } from './viewport-motion';
 import { rememberViewport } from './viewport-store';
 
 const NOTICE_MS = 8000;
+/** 付箋の古さ（薄さ）を描き直す間隔。時間が経つだけで変わるので、付箋の変更とは別に描き直す */
+const FADE_REFRESH_MS = 60 * 60 * 1000;
 /** 他のページへ切り替える前に、保存中の変更を待つ時間の上限 */
 const LEAVE_WAIT_MS = 1500;
 
@@ -111,6 +115,12 @@ function summaryText(op: OpSummary): string {
       return t('ops.summary.notesSent', system.page);
     case 'childRecolored':
       return t('ops.summary.childRecolored', system.page);
+    case 'trashed':
+      return t('ops.summary.trashed', system.page);
+    case 'expired':
+      return t('ops.summary.expired');
+    case 'untrashed':
+      return t('ops.summary.untrashed', system.page);
     default:
       return op.summary;
   }
@@ -129,6 +139,12 @@ function connect(slug: string): Promise<SyncSocket> {
 /** `arrival` は、どのように切り替わってきたか。最初の同期が済んだときに、最初の表示位置を決めるのに使う */
 export function openPage(app: HTMLElement, slug: string, arrival?: Transition): void {
   let currentTitle: string | null = null;
+  /** 古い付箋を自動で消すまでの日数（サーバーから届く）。付けていなければ null */
+  let expireDays: number | null = null;
+  /** ゴミ箱のページか（src/shared/trash.ts）。付箋を足す代わりに、元のページへ戻すボタンを出す */
+  const inTrash = isTrash(slug);
+  /** 表示名を付けていないときに出す名前 */
+  const defaultName = inTrash ? t('trash.title') : slug;
   /** このタブで削除を実行中か。完了を待ってから一覧へ戻るので、切断の通知では戻らない */
   let deleting = false;
 
@@ -149,7 +165,31 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     onLinkClick: openInternalLink,
     renderNote: childNotes.render,
     // 付箋の下に、作成者と更新日時を出す（wema 0.16.0）。出るのは、ホバーしたときと、付箋を選んだとき
-    renderNoteAccessory: noteAuthors.render,
+    renderNoteAccessory: inTrash
+      ? (note, accessory) => {
+          // ゴミ箱では、作成者と日時の代わりに、戻すボタンを同じ場所と見た目で出す（ホバー中と選択中だけ）。
+          // ゴミ箱は参照モードで、付箋のポップアップが出ないため
+          accessory.append(
+            el('button', {
+              type: 'button',
+              className: 'note-restore',
+              textContent: t('trash.restoreOne'),
+              onclick: () => restoreNotes([note.id]),
+            }),
+          );
+          return true;
+        }
+      : noteAuthors.render,
+    // 古い付箋を自動で消すページでは、期限に近い付箋ほど薄く出す（wema 0.17.0）。古さだけを渡し、
+    // 不透明度は CSS で決める（ホバー中と選択中は濃く戻す）。子ページの付箋は消さないので、薄くしない。
+    // 移動では呼ばれないので、更新時刻が変わったら refreshNoteDecoration() で描き直す。
+    // ボードは空で作るので、最初に呼ばれるのは同期（sync）ができた後
+    decorateNote(note) {
+      if (expireDays === null || !isExpirable(note)) return undefined;
+      const updatedAt = sync.noteInfo(note.id)?.updatedAt;
+      if (updatedAt === undefined) return undefined;
+      return { style: { '--note-age': noteAge(updatedAt, expireDays, Date.now()).toFixed(3) } };
+    },
     // 付箋を縦に積んでいる間は、接続線の代わりに、つながっている相手を付箋の下に出す（wema 0.15.0）。
     // 相手が子ページの付箋なら、本文（空）の代わりに、子ページの表示名を出す。表示名が後から
     // 分かったときは、ChildNotes がその付箋を refreshNote() で描き直し、wema が相手の印も描き直す
@@ -233,8 +273,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   const showTitle = (value: string | null) => {
     currentTitle = value;
-    title.textContent = value ?? slug;
-    document.title = t('documentTitle', value ?? slug, site.siteName);
+    title.textContent = value ?? defaultName;
+    document.title = t('documentTitle', value ?? defaultName, site.siteName);
   };
   showTitle(null);
   // ページの色。ヘッダーの地の色にする。変更は、サーバーから届いたときにも反映する（他の人の変更）。
@@ -276,6 +316,36 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   });
   const childButton = iconButton('childPage', t('child.place'));
   const childPopover = popover(childButton, childForm.root, { onOpen: childForm.opened });
+
+  // ゴミ箱では、選んだ付箋をまとめて、元のページの元の位置へ戻す（1 枚ずつは、付箋の下のボタン）
+  const restoreButton = iconButton('restore', t('trash.restore'), () => {
+    const selected = board.getSelection();
+    if (selected.length === 0) return;
+    restoreButton.disabled = true;
+    restoreNotes(selected);
+  });
+
+  /**
+   * ゴミ箱の付箋を、元のページの元の位置へ戻す。戻した付箋は、サーバーがゴミ箱から消し、その操作が
+   * 届いてボードから消える（手元では消さない。transfer と同じ）
+   */
+  function restoreNotes(noteIds: string[]) {
+    api
+      .restoreFromTrash(sync.clientId, noteIds)
+      .then((pages) => {
+        const restored = pages.reduce((n, page) => n + page.noteIds.length, 0);
+        const failed = pages.filter((page) => page.error !== undefined);
+        if (failed.length > 0) {
+          notify(t('trash.restoreFailed', failed.map((page) =>
+            page.page === null ? t('trash.restoreUnknown') : t('trash.restoreFailedPage', page.page, page.error!),
+          )));
+        } else {
+          notify(t('trash.restored', restored));
+        }
+      })
+      .catch(fail('failed.restore'))
+      .finally(updateTools);
+  }
 
   /** 自動配置。並べ直した付箋全体の中央へ動かす（倍率は変えない） */
   const autoLayout = () => {
@@ -330,6 +400,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     addButton.disabled = locked;
     childButton.disabled = locked;
     const selected = board.getSelection().length;
+    // ゴミ箱は常に参照モードなので、参照モードでも押せるようにする
+    restoreButton.disabled = board.isReadOnly() || selected === 0;
     for (const [button, needs] of layoutButtons) button.disabled = locked || selected < needs;
     // メニューを開かずに自動配置するときは、編集できなければ押せなくする
     const direct = layoutDirect();
@@ -364,15 +436,28 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   const pageHeader = header(
     // 一覧へ戻るときは、このページのルートの付箋へ縮む
-    [leaveOnClick(el('a', { href: '/', textContent: t('list') }), root), crumbs, title, colorPicker.root, star, status],
+    [
+      leaveOnClick(el('a', { href: '/', textContent: t('list') }), root),
+      // ゴミ箱は、親がなく、色とブックマークも要らない。代わりに、消えるまでの日数を出す
+      ...(inTrash
+        ? [title, el('span', { className: 'page-hint', textContent: t('trash.hint', TRASH_EXPIRE_DAYS) })]
+        : [crumbs, title, colorPicker.root, star]),
+      status,
+    ],
     [
       el('span', { className: 'tool-group' }, undoButton, redoButton),
       separator(),
-      el('span', { className: 'tool-group' }, addButton, childPopover.root),
+      // ゴミ箱には、付箋も子ページも足さない
+      el('span', { className: 'tool-group' }, ...(inTrash ? [restoreButton] : [addButton, childPopover.root])),
       separator(),
       el('span', { className: 'tool-group optional' }, layout.root, separator(), zoomControls(board, container)),
     ],
-    [popover(backlinksButton, backlinksPanel, { align: 'right' }).root, pageNavMenu(), menu.root],
+    [
+      popover(backlinksButton, backlinksPanel, { align: 'right' }).root,
+      pageNavMenu(),
+      ...(inTrash ? [] : [trashLink()]),
+      menu.root,
+    ],
   );
   app.append(pageHeader, body);
   const showColor = (color: string | null) => {
@@ -397,12 +482,17 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   // --- 同期 ---
   const sync = new BoardSync(board, () => connect(slug), {
-    onNoteInfo: noteAuthors.refresh,
+    onNoteInfo(noteIds) {
+      noteAuthors.refresh(noteIds);
+      // 更新時刻が変わった付箋の古さを描き直す（消えた付箋の id も入っているが、wema は何もしない）
+      if (expireDays !== null) for (const id of noteIds) board.refreshNoteDecoration(id);
+    },
     // 最初の同期が済んだときに、1 回だけ呼ばれる
     onReady() {
       board.setReadOnly(false);
       // 参照モードは、サーバーの内容を読み込んだ後に入る（入った時点の位置を wema が覚えるため）
-      if (settings.get(VIEW_ONLY_KEY) === '1') board.setViewOnly(true);
+      // ゴミ箱は、常に参照モードで出す（付箋を編集する場所ではない。編集用のポップアップを出さない）
+      if (inTrash || settings.get(VIEW_ONLY_KEY) === '1') board.setViewOnly(true);
       // 縦積みの切り替えは、付箋を読み込んでから始める
       stack.start();
       // 付箋全体の中央から始める。倍率は、前に見ていた倍率か、なければ全体が収まる倍率
@@ -419,6 +509,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     },
     onTitle: showTitle,
     onColor: showColor,
+    onExpireDays: showExpiry,
     // 認証し直すには、Access を通る通常のページ読み込みが要る
     onAuthExpired: () => location.reload(),
     isAuthenticated: api.isAuthenticated,
@@ -438,6 +529,11 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   });
   noteAuthors.attach(board, (noteId) => sync.noteInfo(noteId));
   sync.start();
+  // 時間が経つだけで古くなるので、ときどき全体を描き直す
+  const fadeTimer = setInterval(() => {
+    if (expireDays !== null) board.refreshNoteDecoration();
+  }, FADE_REFRESH_MS);
+  onViewEnd(() => clearInterval(fadeTimer));
 
   // 付箋を、子ページの付箋の上へドラッグして放すと、その子ページへ移す（Ctrl / Cmd で写す）
   const drops = dropOntoChildPages(board, container, {
@@ -599,9 +695,34 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     menu.close();
   };
 
+  // 古い付箋を自動で消す日数。今の設定の項目に印を付ける。ゴミ箱の日数は変えられないので出さない
+  const expiryItems = new Map<number | null, HTMLButtonElement>();
+  const expiryLabel = (days: number | null) => (days === null ? t('menu.expiryOff') : t('menu.expiryDays', days));
+  for (const days of [null, ...EXPIRE_DAYS_CHOICES]) {
+    expiryItems.set(
+      days,
+      menuItem(expiryLabel(days), () => {
+        menu.close();
+        api
+          .setExpiry(slug, days)
+          .then((result) => showExpiry(result.expireDays))
+          .catch(fail('failed.expiry'));
+      }, 'menu-sub'),
+    );
+  }
+  function showExpiry(days: number | null) {
+    if (days !== expireDays) {
+      expireDays = days;
+      board.refreshNoteDecoration();
+    }
+    for (const [value, item] of expiryItems) {
+      item.textContent = (value === days ? t('menu.checked') : '') + expiryLabel(value);
+    }
+  }
+
   const deletePage = () => {
     menu.close();
-    if (!confirmDeletePage(currentTitle ?? slug)) return;
+    if (inTrash ? !confirm(t('trash.emptyConfirm')) : !confirmDeletePage(currentTitle ?? defaultName)) return;
     deleting = true;
     api
       .deletePage(slug)
@@ -614,7 +735,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   };
 
   menuPanel.append(
-    viewOnlyItem,
+    // ゴミ箱は常に参照モードなので、切り替えを出さない
+    ...(inTrash ? [] : [viewOnlyItem]),
     themeItem,
     menuItem(t('menu.history'), () => {
       menu.close();
@@ -627,8 +749,12 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     menuItem(t('help'), () => navigate('/help')),
     // 切り替え先の言語の名前を出す。選ぶと、この端末に記憶して、読み込み直す
     menuItem(t('lang.switch'), switchLang),
+    ...(inTrash
+      ? []
+      : [el('hr'), el('div', { className: 'menu-heading', textContent: t('menu.expiry') }), ...expiryItems.values()]),
     el('hr'),
-    // 削除は、常に見える場所には置かない
-    menuItem(t('menu.deletePage'), deletePage, 'danger'),
+    // 削除は、常に見える場所には置かない。ゴミ箱の削除は、ゴミ箱を空にすること
+    menuItem(inTrash ? t('trash.empty') : t('menu.deletePage'), deletePage, 'danger'),
   );
+  showExpiry(expireDays);
 }

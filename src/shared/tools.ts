@@ -415,7 +415,8 @@ export const TOOLS: Tool[] = [
 
   tool({
     name: 'delete_notes',
-    description: '付箋を削除する。その付箋につながる接続線も削除される。',
+    description:
+      '付箋を削除する。その付箋につながる接続線も削除される。削除した付箋（子ページを表す付箋を除く）は、ゴミ箱のページ（スラッグは trash）へ移り、30 日後に消える。ゴミ箱のページで削除した付箋は、すぐに消える。',
     readOnly: false,
     destructive: true,
     // 2 回目は、付箋がもうないので断られる

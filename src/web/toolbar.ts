@@ -4,7 +4,8 @@
 //   左: 今いる場所   中央: 付箋の操作   右: Wiki の機能
 import { enLabels, jaLabels, type WemaBoard, type WemaLabels } from '@kanf/wema';
 import { PAGE_COLORS, type PageColor } from '../shared/api';
-import { type Child, el } from './dom';
+import { TRASH_SLUG } from '../shared/trash';
+import { appLink, type Child, el } from './dom';
 import { LANG_COOKIE } from '../shared/i18n';
 import { lang, otherLang, t } from './i18n';
 import { type IconName, icon } from './icons';
@@ -29,6 +30,14 @@ export function iconButton(name: IconName, title: string, onClick?: () => void):
 }
 
 export const separator = () => el('span', { className: 'separator' });
+
+/** ゴミ箱のページへのリンク（アイコン）。ゴミ箱は一覧に出ないので、ヘッダーから開く */
+export function trashLink(): HTMLAnchorElement {
+  const link = appLink(`/p/${TRASH_SLUG}`, icon('trash'));
+  link.className = 'icon-button';
+  link.title = link.ariaLabel = t('trash.open');
+  return link;
+}
 
 /**
  * `panel` が出ている間に、`root` の外が押されたら `close` を呼ぶ。

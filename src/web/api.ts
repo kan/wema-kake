@@ -1,5 +1,13 @@
 // サーバーの HTTP API の呼び出し。形は AGENTS.md の「HTTP API」を参照。
-import type { IndexLink, IndexPage, OpSummary, PageSummary, RevertOutcome, RootHit } from '../shared/api';
+import type {
+  IndexLink,
+  IndexPage,
+  OpSummary,
+  PageSummary,
+  RestoreOutcome,
+  RevertOutcome,
+  RootHit,
+} from '../shared/api';
 
 /** ページへのリンクを出すのに要るもの。表示名が未設定なら null（スラッグを出す） */
 export interface PageLink {
@@ -84,6 +92,21 @@ export const setTitle = (slug: string, title: string, mustExist = false) =>
 /** ページの色を変える。null で、付けていない状態に戻す */
 export const setColor = (slug: string, color: string | null) =>
   request<{ color: string | null }>('PUT', `/api/pages/${slug}/color`, { color });
+
+export const setExpiry = (slug: string, days: number | null) =>
+  request<{ expireDays: number | null }>('PUT', `/api/pages/${slug}/expiry`, { days });
+
+/** ゴミ箱の付箋を、元のページへ戻す。戻せなかったページがあれば、`error` の付いた結果で 409 になる */
+export async function restoreFromTrash(clientId: string, noteIds: string[]): Promise<RestoreOutcome[]> {
+  const res = await fetch('/api/trash/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ clientId, opId: crypto.randomUUID(), noteIds }),
+  });
+  const json = (await res.json().catch(() => null)) as { pages?: RestoreOutcome[]; error?: string } | null;
+  if (json?.pages) return json.pages;
+  throw new ApiError(json?.error ?? `restore: ${res.status}`, res.status);
+}
 
 export const deletePage = (slug: string) => request<{ ok: true }>('DELETE', `/api/pages/${slug}`);
 

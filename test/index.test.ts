@@ -229,7 +229,9 @@ describe('ページの API', () => {
     expect(await env.DB.prepare(`SELECT title, note_count FROM pages WHERE name = ?`).bind(slug).first())
       .toEqual({ title: '新しい表示名', note_count: 0 });
     // ページができた通知（表示名はまだない）に続いて、表示名の変更が届く
-    expect(await browser.nextMeta()).toEqual({ type: 'meta', title: null, color: null, epoch: expect.any(String) });
+    expect(await browser.nextMeta()).toEqual({
+      type: 'meta', title: null, color: null, epoch: expect.any(String), expireDays: null,
+    });
     expect(await browser.nextMeta()).toMatchObject({ type: 'meta', title: '新しい表示名' });
 
     // 空文字で未設定に戻す
@@ -410,7 +412,8 @@ describe('ページの削除', () => {
     expect(await browser.closed).toMatchObject({ code: 4410 });
 
     expect(await stub.getSnapshot()).toEqual({
-      seq: 0, title: null, color: null, epoch: null, data: { version: 1, notes: [], edges: [] }, info: {},
+      seq: 0, title: null, color: null, epoch: null, expireDays: null, data: { version: 1, notes: [], edges: [] },
+      info: {},
     });
     const tables = await runInDurableObject(stub, (_do, state) =>
       state.storage.sql.exec(`SELECT count(*) AS c FROM sqlite_master`).one().c,

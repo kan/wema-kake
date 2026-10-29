@@ -15,6 +15,7 @@ describe('WebSocket', () => {
       title: null,
       color: null,
       epoch: null,
+      expireDays: null,
       data: { version: 1, notes: [], edges: [] },
       info: {},
     });
@@ -108,7 +109,9 @@ describe('WebSocket', () => {
     const again = await open(slug);
     again.send({ type: 'hello', clientId: 'ca', lastSeq: 1 });
     // 表示名は差分に出ないので、現在値が先に届く
-    expect(await again.nextMeta()).toEqual({ type: 'meta', title: null, color: null, epoch: expect.any(String) });
+    expect(await again.nextMeta()).toEqual({
+      type: 'meta', title: null, color: null, epoch: expect.any(String), expireDays: null,
+    });
     const second = await again.next();
     expect(second).toMatchObject({ type: 'ops', seq: 2, clientId: 'ca', opId: 'o2' });
     expect(second).toHaveProperty('fixups');

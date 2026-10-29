@@ -102,6 +102,16 @@ export interface Skipped {
   reason: SkipReason;
 }
 
+/** ゴミ箱の付箋を元のページへ戻した結果（`POST /api/trash/restore`）。元のページごとに 1 つ */
+export interface RestoreOutcome {
+  /** 元のページ。元のページの記録がない付箋をまとめた結果では null */
+  page: string | null;
+  /** 元のページに置いた付箋の id。戻せなかったら空 */
+  noteIds: string[];
+  /** 戻せなかった理由 */
+  error?: string;
+}
+
 /** 取り消しの結果 */
 export interface RevertOutcome {
   /** 取り消しとして記録した操作の seq。取り消せるものが 1 つもなかった場合は null */

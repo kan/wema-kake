@@ -20,6 +20,12 @@ export const systemSummary = {
   notesSent: (page: string) => `${PREFIX}notes-sent:${page}`,
   /** 子ページ `page` の色に、その付箋の色を合わせた */
   childRecolored: (page: string) => `${PREFIX}child-recolored:${page}`,
+  /** ページ `page` で消された付箋を、ゴミ箱に置いた */
+  trashed: (page: string) => `${PREFIX}trashed:${page}`,
+  /** 古い付箋を、期限を過ぎたので消した */
+  expired: () => `${PREFIX}expired`,
+  /** ページ `page` で、Undo や取り消しで付箋が戻ったので、ゴミ箱の写しを消した */
+  untrashed: (page: string) => `${PREFIX}untrashed:${page}`,
 };
 
 export type SystemSummary =
@@ -28,7 +34,10 @@ export type SystemSummary =
   | { kind: 'revert'; seq: number }
   | { kind: 'notesReceived'; page: string }
   | { kind: 'notesSent'; page: string }
-  | { kind: 'childRecolored'; page: string };
+  | { kind: 'childRecolored'; page: string }
+  | { kind: 'trashed'; page: string }
+  | { kind: 'expired' }
+  | { kind: 'untrashed'; page: string };
 
 /** 要約が、サーバーの付けた符号なら、その中身を返す。符号でなければ（知らない符号も）null */
 export function parseSystemSummary(summary: string): SystemSummary | null {
@@ -41,5 +50,8 @@ export function parseSystemSummary(summary: string): SystemSummary | null {
   if (kind === 'notes-received' && value !== '') return { kind: 'notesReceived', page: value };
   if (kind === 'notes-sent' && value !== '') return { kind: 'notesSent', page: value };
   if (kind === 'child-recolored' && value !== '') return { kind: 'childRecolored', page: value };
+  if (kind === 'trashed' && value !== '') return { kind: 'trashed', page: value };
+  if (kind === 'expired' && value === '') return { kind: 'expired' };
+  if (kind === 'untrashed' && value !== '') return { kind: 'untrashed', page: value };
   return null;
 }

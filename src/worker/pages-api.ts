@@ -9,6 +9,7 @@ import { createFirstPage } from './first-page';
 import { REASON_PAGE_NOT_FOUND, type RevertFailure } from './page-do';
 import { listPages, searchPages, searchRoots } from './page-queries';
 import { type TransferFailure, transferNotes } from './transfer';
+import { restoreNotes } from './trash';
 
 const REVERT_STATUS = {
   'not-found': 404,
@@ -310,6 +311,35 @@ pagesApi.put('/pages/:slug/title', validSlug, async (c) => {
   });
   if (result.ok) return c.json(result);
   return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
+});
+
+/**
+ * 古い付箋を自動で消すまでの日数の変更（本文は `{ "days": 30 }`。`EXPIRE_DAYS_CHOICES` のどれか。
+ * null で、消さない）。ページがなければ 404（作らない）。ゴミ箱の日数は変えられない（400）
+ */
+pagesApi.put('/pages/:slug/expiry', validSlug, async (c) => {
+  const body = await c.req.json<{ days?: unknown }>().catch(() => null);
+  // `days` のない本文を、「消さない」として扱わない
+  if (body?.days === undefined) return c.json({ error: 'invalid days' }, 400);
+  const result = await c.env.PAGE.getByName(c.req.param('slug')).setExpiry(body.days);
+  if (result.ok) return c.json(result);
+  return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
+});
+
+/**
+ * ゴミ箱の付箋を、元のページへ戻す（本文は `{ clientId, opId, noteIds }`）。元の id と位置で置き、
+ * 作成者は引き継ぐ。元のページごとの結果（`pages`）を返す。戻せなかったページがあれば 409
+ */
+pagesApi.post('/trash/restore', async (c) => {
+  const body = await c.req.json<{ clientId?: unknown; opId?: unknown; noteIds?: unknown }>().catch(() => null);
+  const result = await restoreNotes(c.env, {
+    actor: c.get('actor'),
+    clientId: String(body?.clientId ?? ''),
+    opId: String(body?.opId ?? ''),
+    noteIds: body?.noteIds,
+  });
+  if (!result.ok) return c.json({ error: result.reason }, result.code === 'invalid' ? 400 : 404);
+  return c.json(result, result.pages.some((page) => page.error !== undefined) ? 409 : 200);
 });
 
 /**

@@ -29,6 +29,8 @@ export interface TransferInput {
   copy: boolean;
   /** 操作の履歴に出す説明。省略すると、相手のページを表す符号 */
   summary?: string;
+  /** 送り先に置くときの id と位置（TakeInput の `placeAs`）。サーバーが記録した値だけを渡すこと */
+  placeAs?: Map<string, { id: string; x: number; y: number }>;
 }
 
 /**
@@ -52,7 +54,7 @@ export type TransferResult =
   | { ok: false; code: TransferFailure; reason: string };
 
 export async function transferNotes(env: WemaKakeEnv, input: TransferInput): Promise<TransferResult> {
-  const { actor, clientId, opId, from, to, copy, summary } = input;
+  const { actor, clientId, opId, from, to, copy, summary, placeAs } = input;
   let noteIds: string[];
   let positions: Map<string, { x: number; y: number }>;
   try {
@@ -67,7 +69,7 @@ export async function transferNotes(env: WemaKakeEnv, input: TransferInput): Pro
   }
 
   const taken = await env.PAGE.getByName(to).takeNotes({
-    actor, clientId, opId, from, noteIds, positions, keepAuthors: !copy, summary,
+    actor, clientId, opId, from, noteIds, positions, keepAuthors: !copy, summary, placeAs,
   });
   if (!taken.ok) return { ok: false, code: taken.notFound ? 'not-found' : 'invalid', reason: taken.reason };
   if (copy) return { ok: true, noteIds: taken.noteIds, received: taken.seq, removed: null };

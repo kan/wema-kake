@@ -48,6 +48,10 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 .icon-button:hover:not(:disabled), .zoom-level:hover, .text-button:hover,
 .icon-button[aria-expanded='true'], .text-button[aria-expanded='true'] { background: #eaeaea; }
 .icon-button:disabled { color: #bbb; cursor: default; }
+/* リンクのアイコン（ゴミ箱へのリンク） */
+a.icon-button { box-sizing: border-box; text-decoration: none; }
+/* 見出しの後ろの説明（ゴミ箱の「〜日で消えます」） */
+.page-hint { font-size: 12px; color: #888; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 
 /* 同期の状態。同期済みのときは何も出さない */
 .sync-status { font-size: 12px; color: #b45309; white-space: nowrap; flex: none; }
@@ -77,6 +81,9 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 }
 .menu-item:hover { background: #eee; }
 .menu-item.danger { color: #b91c1c; }
+/* 選択肢の見出しと、その下の項目（古い付箋を自動で消す日数） */
+.menu-heading { font-size: 12px; color: #888; padding: 4px 10px 2px; }
+.menu-item.menu-sub { padding-left: 20px; }
 .menu hr { border: none; border-top: 1px solid #e5e5e5; margin: 4px 0; width: 100%; }
 .link-list { display: flex; flex-direction: column; min-width: 180px; max-width: 320px; max-height: 60vh; overflow-y: auto; }
 .link-list a {
@@ -131,14 +138,14 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 .wema-note-accessory { justify-content: flex-end; padding-right: 2px; }
 /* 余白は、中の要素の側に付ける（要素を出さないときに、領域の高さが残らないように） */
 .wema-note-accessory > * { margin: 8px 0 4px; }
-.note-agent, .note-author {
+.note-agent, .note-author, .note-restore {
   box-sizing: border-box; height: 18px; border: 1px solid rgb(0 0 0 / 0.15); border-radius: 9px;
   background: #fff;
   /* 出し入れは visibility で行う。display で切り替えると高さが変わり、縦に積んでいる間は、
      ホバーのたびに列が積み直されて、付箋がポインタの下で動く */
   visibility: hidden;
 }
-.note-author {
+.note-author, .note-restore {
   padding: 0 7px; color: #555; font-size: 11px; line-height: 16px; white-space: nowrap;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis;
 }
@@ -147,17 +154,26 @@ body { font-family: system-ui, sans-serif; font-size: 14px; color: #222; }
 .note-agent svg { width: 12px; height: 12px; }
 .note-agent-claude { color: #d97757; }
 .note-agent-openai { color: #000; }
-.wema-note:hover :is(.note-agent, .note-author),
-.wema-note-selected :is(.note-agent, .note-author) { visibility: visible; }
+/* ゴミ箱の付箋の下の「元のページへ戻す」。作成者と日時の表示と同じ見た目で、同じときに出す */
+.note-restore { flex: none; font-family: inherit; cursor: pointer; }
+.note-restore:hover { background: #eee; }
+.wema-note:hover :is(.note-agent, .note-author, .note-restore),
+.wema-note-selected :is(.note-agent, .note-author, .note-restore) { visibility: visible; }
 /* 出している間は、付箋ごと手前へ上げる（下の領域が、後から触った付箋に隠れないように）。付箋は
    それぞれが重なりの単位なので、下の領域だけを上げることはできない。wema が付箋の要素に直接書く
    z-index に勝たせるため、!important を付ける。値は、wema の範囲選択の枠（9999）より下にする */
 .wema-note-has-accessory:is(:hover, .wema-note-selected) { z-index: 9998 !important; }
 /* 縦に積んでいる間は、隠している分の高さを空けない（すべての付箋の間隔が広がるため）。ホバーのない
    画面なので、出すのは、付箋を選んだときだけ。高さが変わり、列が積み直される */
-.wema-board.wema-stacked :is(.note-agent, .note-author) { display: none; }
-.wema-board.wema-stacked .wema-note-selected .note-author { display: block; }
+.wema-board.wema-stacked :is(.note-agent, .note-author, .note-restore) { display: none; }
+.wema-board.wema-stacked .wema-note-selected :is(.note-author, .note-restore) { display: block; }
 .wema-board.wema-stacked .wema-note-selected .note-agent { display: inline-flex; }
+/* 古い付箋を自動で消すページでは、期限に近い付箋ほど薄くする。`--note-age`（0 から 1）は、
+   page-view.ts の decorateNote が付箋の要素に当てる。最も薄いときの不透明度は 0.35。
+   ホバー中と選択中は濃く戻す。下の note-leaving（送っている途中で見えなくする）より前に置き、
+   そちらが勝つようにする */
+.wema-note { opacity: calc(1 - var(--note-age, 0) * 0.65); transition: opacity 0.2s; }
+.wema-note:is(:hover, .wema-note-selected) { opacity: 1; }
 /* 運んでいる付箋を放すと、中へ移る子ページの付箋（note-drop.ts） */
 .wema-note.drop-target { outline: 3px solid #2563eb; outline-offset: 2px; }
 /* 子ページへ送っている途中の付箋。放した直後から見えなくし、送り終えたら消す */

@@ -43,6 +43,8 @@ export interface Snapshot {
    * 削除して作り直したページを、前のページと見分けるのに使う
    */
   epoch: string | null;
+  /** 古い付箋を自動で消すまでの日数（src/shared/trash.ts）。付けていなければ null */
+  expireDays: number | null;
   data: BoardData;
   /** 付箋ごとの付加情報（作成者、更新日時）。`data` の付箋と同じ id を持つ */
   info: NoteInfos;
