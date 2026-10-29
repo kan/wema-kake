@@ -11,3 +11,5 @@ build-types.d.ts
 # npm pack のときに作る、雛形の .gitignore の複製（scripts/pack-template.mjs）
 template/gitignore
 *.tgz
+# Playwright の MCP サーバーが、ブラウザで確かめたときのスクリーンショットとログを置く
+.playwright-mcp/
