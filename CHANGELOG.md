@@ -11,6 +11,10 @@
 
 - `agents` を 0.32.0 に、`@modelcontextprotocol/server` を 2.4.0 に、`jose` を 6.2.14 に上げた
 
+### セキュリティ
+
+- MCP のクライアントの主体の名前（`agent:<名前>`）を redirect URI のホスト名から作る処理で、`-` が長く続くホスト名を与えると、照合の時間が長さの 2 乗で増えていた（CodeQL の `js/polynomial-redos`）。正規表現をやめ、長さに比例する時間で終わるようにした
+
 ### 内部
 
 - リリースの準備を [tagpr](https://github.com/Songmu/tagpr) で行うようにした。リリース PR が版の更新とこのファイルの節を持ち、マージするとタグが打たれて npm へ publish される。GitHub Release の本文は、commit の一覧ではなく、このファイルのその版の節になる

@@ -1,7 +1,7 @@
 import { createExecutionContext, env } from 'cloudflare:test';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { agentActor } from '../src/worker/access';
+import { agentActor, agentName } from '../src/worker/access';
 import { createApp } from '../src/worker/index';
 
 const app = createApp();
@@ -236,6 +236,20 @@ describe('agent と人の入口を分ける', () => {
     expect(agentActor('cursor://anysphere.cursor-mcp/oauth/callback')).toBe('agent:anysphere.cursor-mcp');
     expect(agentActor('not a url')).toBe('agent:unknown');
     expect(agentActor(undefined)).toBe('agent:unknown');
+  });
+
+  it('主体の名前は、両端の - と . を落とし、64 文字に切る', () => {
+    expect(agentName('.-Example.COM-.')).toBe('example.com');
+    expect(agentName('a__b')).toBe('a-b');
+    expect(agentName('---')).toBe('');
+    expect(agentName(`${'a'.repeat(63)}-b`)).toBe('a'.repeat(63));
+  });
+
+  it('- が長く続くホスト名でも、すぐに返す（正規表現の ReDoS を避ける）', () => {
+    const host = `a${'-'.repeat(100_000)}a`;
+    const start = Date.now();
+    expect(agentName(host)).toBe('a');
+    expect(Date.now() - start).toBeLessThan(1000);
   });
 });
 

@@ -82,7 +82,16 @@ export function agentActor(redirectUri: unknown): string {
  * これを使う（名前の形を 2 か所で決めると食い違い、並べた名前が黙ってどの主体にも当たらなくなる）
  */
 export function agentName(host: string): string {
-  const trim = (s: string) => s.replace(/^[-.]+|[-.]+$/g, '');
+  // 両端の - と . を落とす。正規表現（/[-.]+$/）にしないのは、末尾でない - が長く続くと、照合の時間が
+  // 長さの 2 乗で増えるため（ホスト名は MCP のクライアントが redirect URI で決められる）
+  const trim = (s: string) => {
+    const edge = (c: string | undefined) => c === '-' || c === '.';
+    let start = 0;
+    let end = s.length;
+    while (start < end && edge(s[start])) start++;
+    while (end > start && edge(s[end - 1])) end--;
+    return s.slice(start, end);
+  };
   // 切った後の末尾に - や . が残らないよう、切ってからもう一度落とす
   return trim(trim(host.toLowerCase().replace(/[^a-z0-9.-]+/g, '-')).slice(0, 64));
 }
