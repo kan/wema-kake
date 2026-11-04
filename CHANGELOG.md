@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-11-05
+
 ### 変更
 
 - `agents` を 0.32.0 に、`@modelcontextprotocol/server` を 2.4.0 に、`jose` を 6.2.14 に上げた
@@ -81,6 +83,7 @@
 
 最初の公開版。利用側が雛形（`npx @kanf/wema-kake init`）から自分の Worker を作り、npm のこのパッケージを使ってデプロイする。
 
+[0.1.6]: https://github.com/kan/wema-kake/releases/tag/v0.1.6
 [0.1.5]: https://github.com/kan/wema-kake/releases/tag/v0.1.5
 [0.1.4]: https://github.com/kan/wema-kake/releases/tag/v0.1.4
 [0.1.3]: https://github.com/kan/wema-kake/releases/tag/v0.1.3
