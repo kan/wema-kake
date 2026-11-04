@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### 変更
+
+- `agents` を 0.32.0 に、`@modelcontextprotocol/server` を 2.4.0 に、`jose` を 6.2.14 に上げた
+
 ### 内部
 
 - リリースの準備を [tagpr](https://github.com/Songmu/tagpr) で行うようにした。リリース PR が版の更新とこのファイルの節を持ち、マージするとタグが打たれて npm へ publish される。GitHub Release の本文は、commit の一覧ではなく、このファイルのその版の節になる
