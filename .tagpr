@@ -1,0 +1,18 @@
+# tagpr: main に向けたリリース PR を開いたままにし、マージされたらタグを打つ。
+# ワークフローは .github/workflows/tagpr.yml、手順と理由は AGENTS.md の「リリース」。
+[tagpr]
+	releaseBranch = main
+	vPrefix = true
+	# 版は package.json で持つ。tagpr は package-lock.json を書き換えないので、
+	# scripts/tagpr/release-prepare.mjs が揃える
+	versionFile = package.json
+	# CHANGELOG.md は各 PR で "## [Unreleased]" に手で書く。
+	# scripts/tagpr/release-prepare.mjs がその節をリリースの節にする
+	changelog = false
+	postVersionCommand = node scripts/tagpr/release-prepare.mjs
+	# GitHub Release は publish.yml が npm publish の後に作る（publish に
+	# 失敗した版の Release を残さない）
+	release = false
+	# enhancement ラベルの PR がマージされていれば minor。無ければ patch
+	# （リリース PR に tagpr:minor / tagpr:major を付けたときを除く）
+	minorLabels = enhancement
