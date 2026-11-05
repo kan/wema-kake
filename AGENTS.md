@@ -136,7 +136,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
 - **main に push があるたびに `tagpr.yml` がリリース PR を作り直す。** ブランチは `tagpr-from-v<前回の版>`。マージすると、次の run がマージコミットにタグを打つ。設定は `.tagpr`
 - **版は `package.json` で持つ**（`versionFile`）。**tagpr は `package-lock.json` を書き換えない**ので、`scripts/tagpr/release-prepare.mjs`（`postVersionCommand`）が揃える
 - **`release-prepare.mjs` は `## [Unreleased]` を `## [X.Y.Z] - 日付` にし、その上に空の `## [Unreleased]` を置き直し、末尾のリンク定義の先頭にその版のリンクを足す。** 検査をすべて済ませてから書き、落ちるときは何も書き換えない。落ちるのは `## [Unreleased]` が無いか空か重複しているとき、`## [X.Y.Z]` が既にあるとき（タグが打たれていない）、`package.json` の版や `repository` が合わないとき。失敗しても tagpr はリリース PR を作るので、**run が赤ならマージしない**
-- **tagpr のジョブでは依存のコードを走らせない。** リポジトリへ push できるトークンを持つため。`npm ci` をせず、`scripts/tagpr/` は Node の組み込みだけで書く。tagpr の action は SHA で固定する
+- **tagpr のジョブでは依存のコードを走らせない。** リポジトリへ push できるトークンを持つため。`npm ci` をせず、`scripts/tagpr/` は Node の組み込みだけで書く。tagpr の action の commit は `actions.lock` が固定する（下の「CI と GitHub の設定」）
 - **CHANGELOG と GitHub の Release は tagpr に作らせない**（`changelog = false` / `release = false`）。tagpr の CHANGELOG は PR のタイトルを並べるだけ。Release は `publish.yml` が npm publish の**後**に作る（publish に失敗した版の Release を残さない）
 - **CHANGELOG の読み方（節の見出し、コードフェンス、末尾のリンク定義）は `scripts/tagpr/changelog.mjs` の 1 か所に置く。** `release-prepare.mjs` と `release-notes.mjs` はそれを import する。2 か所に書くと、リリース PR は通るのに `publish.yml` の検査で落ちる
 - **`scripts/tagpr/` は [kan/tagpr-scripts](https://github.com/kan/tagpr-scripts) の git subtree**（lily / wema と共有）。**ここでは編集しない。** upstream を直してから取り込む
@@ -157,6 +157,17 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 - npmjs.com の Trusted Publisher（`publish.yml` を登録してある）。direct publish を許可しておく（既定のままだと `403 OIDC permission denied` で落ちる）
 - GitHub の Settings → Actions → General の「Allow GitHub Actions to create and approve pull requests」は ON。tagpr が GITHUB_TOKEN でリリース PR を作るのに要る（GitHub App は作っていない）
+
+## CI と GitHub の設定
+
+- `.github/workflows/ci.yml`: main への push と PR で lint、テスト、雛形の検査（ビルドを兼ねる）を回す
+- `.github/workflows/verify-lockfile.yml`: `actions.lock` が `uses:` と食い違っていないか、固定した commit を上流で検証できるかを、PR と main への push で確かめる
+- `.github/dependabot.yml`: npm と GitHub Actions を週 1 回見る
+- **action の固定は `.github/workflows/actions.lock`（`gh actions-lock` が作る）に任せる。** `uses:` は完全な版のタグ（`@v7.0.1`）で書き、SHA は書かない。`uses:` を足したり変えたりしたら `gh actions-lock` を再実行し、lockfile も同じコミットに入れる。**lockfile は手で編集しない**
+  - Dependabot は Actions の更新 PR で lockfile の該当行も作り直す
+  - 検査が入れる拡張の版（`verify-lockfile.yml` の `--pin`）は、Dependabot と lockfile のどちらも追わない。lockfile の形式が上がって `--verify` が落ちたら、手元の `gh actions-lock` と同じ版に手で上げる
+  - 別の repo の reusable workflow を呼ぶ行（`jobs.<id>.uses`）は lockfile では固定されない。足すときは commit の SHA で書く
+- `scripts/tagpr/.github/` は tagpr-scripts の写しで、GitHub は読まない。ここでは触らない
 
 ## デプロイ
 
