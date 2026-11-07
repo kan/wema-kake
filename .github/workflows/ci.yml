@@ -20,6 +20,11 @@ jobs:
           node-version: 24
           cache: npm
 
+      # scripts/tagpr/（subtree）と tagpr.yml の呼ぶ行の SHA が同じ commit を指すか
+      # （AGENTS.md「リリース PR（tagpr）の仕組み」）
+      - name: Check scripts/tagpr/ against the tagpr workflow pin
+        run: node scripts/tagpr/verify-subtree.mjs
+
       - run: npm ci
       - run: npm run lint
       - run: npm test
