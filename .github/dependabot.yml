@@ -11,6 +11,26 @@ updates:
         patterns:
           - "agents"
           - "@modelcontextprotocol/*"
+  # template の wema-kake を、出したばかりの版に上げる PR を作る（kan/lily の template と同じ設計）。
+  # template は利用者が写して使う雛形なので、上げ忘れると古い wema-kake で始まる。
+  - package-ecosystem: "npm"
+    directory: "/template"
+    schedule:
+      interval: "daily"
+    # 範囲も動かす。`^0.1.6` は `0.2.0` を受けないので、lock だけ上げると minor を上げたときに古いまま残る
+    versioning-strategy: increase
+    # version update は既定で公開から 3 日待つ。wema-kake は自分で出した版なので待たない
+    cooldown:
+      exclude:
+        - "@kanf/wema-kake"
+    # version update は wema-kake だけ。`allow` で絞ると security update まで止まるので、ほかは
+    # `update-types` 付きの `ignore` で止める（`update-types` だけの ignore は security update を除外しない）。
+    # template に依存を足したら、ここにも足す
+    ignore:
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "wrangler"
+        update-types: ["version-update:semver-major", "version-update:semver-minor", "version-update:semver-patch"]
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:

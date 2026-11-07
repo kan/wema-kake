@@ -121,7 +121,9 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 4. **確認と後始末**
    - `publish.yml` の run が通り、npm（`npm view @kanf/wema-kake version`）と GitHub Release に新しい版があること。Release の本文が CHANGELOG の節であること
-   - **雛形のロックを新しい版に合わせる PR を入れる**（Deploy to Cloudflare のボタンが `npm ci` で使う）。`cd template && npm install @kanf/wema-kake@latest --package-lock-only`。minor を上げたときは、`template/package.json` の範囲も上げる（`^0.1.0` は `0.2.0` を受けない）。リリース PR に入れられないのは、準備の時点ではその版が npm に無いため。CHANGELOG には書かない（このマージで走る tagpr の run は上のとおり失敗する）
+   - **雛形の wema-kake を上げる Dependabot の PR をマージする**（Deploy to Cloudflare のボタンが `npm ci` で雛形のロックを使う）。`.github/dependabot.yml` の `/template` の項が、毎日 `@kanf/wema-kake` の新しい版を見て、`template/package.json` の範囲とロックを上げる PR を作る（`versioning-strategy: increase`。`^0.1.0` は `0.2.0` を受けないため）。CI が通ったら squash でマージする。リリース PR に入れられないのは、準備の時点ではその版が npm に無いため。CHANGELOG には書かない（このマージで走る tagpr の run は上のとおり失敗する）
+     - 次の日を過ぎても PR が来なければ、手で上げる。`cd template && npm install @kanf/wema-kake@latest --package-lock-only`。minor を上げたときは、`template/package.json` の範囲も上げる
+     - **template に依存を足したら、`dependabot.yml` の `/template` の `ignore` にも足す**（version update を wema-kake だけに絞るため）
 
 **やり直し**
 
