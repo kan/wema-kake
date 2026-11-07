@@ -88,10 +88,10 @@ MCP クライアント ──/mcp──> MCP ┘          │
    gh run list --workflow tagpr.yml --branch main -L 3
    ```
 
-   - **最新の tagpr の run が success であること。** 失敗した run はリリース PR を draft にする（ready に戻す動きは tagpr-scripts の README の「The tagpr workflow」）。失敗していたら `scripts/tagpr/release-prepare.mjs` の出力を読む。多いのは `## [Unreleased]` が空のとき。CHANGELOG を書く PR をマージすると作り直される。「already has `## [X.Y.Z]`」なら、前のリリース PR のマージにタグが打たれていない（下の 3 の「置き換えられたら」）
-   - **版（PR のタイトル）が正しいこと。** 既定は patch。`enhancement` の PR が入っていれば minor になる。手で変えるときは、リリース PR にラベルを付けて作り直す（`gh pr edit <番号> --add-label tagpr:minor` → `gh workflow run tagpr.yml --ref main`）
+   - **最新の tagpr の run が success であること。** 失敗した run はリリース PR を draft にする（ready に戻す動きは tagpr-scripts の README の「The tagpr workflow」）。失敗していたら `scripts/tagpr/release-prepare.mjs` の出力を読む。`## [Unreleased]` が空なら、CHANGELOG を書く PR をマージすると作り直される。「already has `## [X.Y.Z]`」なら、前のリリース PR のマージにタグが打たれていない（下の 3 の「置き換えられたら」）
+   - **版（PR のタイトル）が正しいこと。** 既定は patch。`enhancement` の PR が入っていれば minor になる。手で変えるときは、リリース PR にラベルを付ける（`gh pr edit <番号> --add-label tagpr:minor`）。`tagpr-label.yml` がリリース PR を draft にして作り直し、作り直しの run が ready に戻す
    - Files changed が `package.json` / `package-lock.json`（版の行だけ）と `CHANGELOG.md`（見出しとリンク定義）だけであること
-   - **ラベルを付け外ししたら、作り直してからマージする。** タグの版はマージの時点の `package.json` で決まり、`package.json` と CHANGELOG の見出しは最後に作り直した時点の版のまま。作り直さずにマージすると、**ラベルの版ではなく前の版がそのまま出る**（どこも食い違わないので、何も止まらない）
+   - **ラベルを付け外ししたら、作り直しの run が終わって ready に戻ってからマージする。** タグの版はマージの時点の `package.json` で決まり、`package.json` と CHANGELOG の見出しは最後に作り直した時点の版のまま。作り直さずにマージすると、**ラベルの版ではなく前の版がそのまま出る**（どこも食い違わないので、何も止まらない）
    - リリース PR の CI は承認待ち（`action_required`）で止まることがある（GITHUB_TOKEN が作った PR のため）。そのときは今の head の run を承認する（`gh api -X POST repos/kan/wema-kake/actions/runs/<id>/approve`）
 
 2. **CHANGELOG の節を確かめる**
@@ -115,13 +115,13 @@ MCP クライアント ──/mcp──> MCP ┘          │
    gh run list --workflow publish.yml -L 1
    ```
 
-   マージの push で走る tagpr の run がマージコミットにタグを打ち（annotated に打ち直す）、同じ run が `publish.yml` をそのタグで起動する。`publish.yml` は、タグと版の一致、CHANGELOG の節、lint、テスト、tgz から作った雛形を見てから publish し、CHANGELOG の節を本文にして GitHub Release を作る。**タグが打たれるまで main へ何もマージしない。** tagpr の run は前の run が終わるまで待ち、待っている run は新しい push の run に置き換えられる（cancelled になる）。置き換えられたら、マージコミットの run を `gh run rerun <run-id>` で再実行するとタグが打たれる。置き換えた側の run は「already has `## [X.Y.Z]`」で赤になり、版だけ上がったリリース PR が draft で残ることがある。**その PR はマージしない。** タグが打たれた後に main への push の run が成功すると、共通の workflow がその PR を閉じる（tagpr-scripts の README の「The tagpr workflow」）。開き直してマージしない。
+   マージの push で走る tagpr の run がマージコミットにタグを打ち（annotated に打ち直す）、同じ run が `publish.yml` をそのタグで起動する。`publish.yml` は、タグと版の一致、CHANGELOG の節、lint、テスト、tgz から作った雛形を見てから publish し、CHANGELOG の節を本文にして GitHub Release を作る。**タグが打たれるまで main へ何もマージしない。** tagpr の run は前の run が終わるまで待ち、待っている run は新しい push の run に置き換えられる（cancelled になる）。置き換えられたら、次の run がマージコミットの run を再実行してタグを打たせる（tagpr-scripts の README の「The tagpr workflow」）。再実行できなかったとき（run に警告が出て、「already has `## [X.Y.Z]`」で赤になる）だけ、マージコミットの run を `gh run rerun <run-id>` で手で再実行する。このとき版だけ上がったリリース PR が draft で残ることがある。**その PR はマージしない。** タグが打たれた後に main への push の run が成功すると、共通の workflow がその PR を閉じる（tagpr-scripts の README の「The tagpr workflow」）。開き直してマージしない。
 
-   リリースの直後は `## [Unreleased]` が空なので、次に CHANGELOG を書くまで main への push ごとに tagpr の run が失敗する。これは想定どおりで、その間のリリース PR はマージしない。
+   リリースの直後は `## [Unreleased]` が空なので、次に CHANGELOG を書くまで、main への push の run は tagpr を走らせずに成功する（notice に「tagpr is not run」と出て、リリース PR は作られない）。
 
 4. **確認と後始末**
    - `publish.yml` の run が通り、npm（`npm view @kanf/wema-kake version`）と GitHub Release に新しい版があること。Release の本文が CHANGELOG の節であること
-   - **雛形の wema-kake を上げる Dependabot の PR をマージする**（Deploy to Cloudflare のボタンが `npm ci` で雛形のロックを使う）。`.github/dependabot.yml` の `/template` の項が、毎日 `@kanf/wema-kake` の新しい版を見て、`template/package.json` の範囲とロックを上げる PR を作る（`versioning-strategy: increase`。`^0.1.0` は `0.2.0` を受けないため）。CI が通ったら squash でマージする。リリース PR に入れられないのは、準備の時点ではその版が npm に無いため。CHANGELOG には書かない（`## [Unreleased]` が空なら、このマージで走る tagpr の run は上のとおり失敗する）
+   - **雛形の wema-kake を上げる Dependabot の PR をマージする**（Deploy to Cloudflare のボタンが `npm ci` で雛形のロックを使う）。`.github/dependabot.yml` の `/template` の項が、毎日 `@kanf/wema-kake` の新しい版を見て、`template/package.json` の範囲とロックを上げる PR を作る（`versioning-strategy: increase`。`^0.1.0` は `0.2.0` を受けないため）。CI が通ったら squash でマージする。リリース PR に入れられないのは、準備の時点ではその版が npm に無いため。CHANGELOG には書かない
      - 次の日を過ぎても PR が来なければ、手で上げる。`cd template && npm install @kanf/wema-kake@latest --package-lock-only`。minor を上げたときは、`template/package.json` の範囲も上げる
      - **template に依存を足したら、`dependabot.yml` の `/template` の `ignore` にも足す**（version update を wema-kake だけに絞るため）
 
@@ -136,7 +136,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 ### リリース PR（tagpr）の仕組み
 
-- **main に push があるたびに `tagpr.yml` がリリース PR を作り直す。** ブランチは `tagpr-from-v<前回の版>`。マージすると、次の run がマージコミットにタグを打つ。設定は `.tagpr`
+- **main に push があるたびに `tagpr.yml` がリリース PR を作り直す**（出すものが無いときは作らない）。リリース PR のラベルを付け外ししたときは `tagpr-label.yml` が `tagpr.yml` を起動して作り直す。ブランチは `tagpr-from-v<前回の版>`。マージすると、次の run がマージコミットにタグを打つ。設定は `.tagpr`
 - **`tagpr.yml` は kan/tagpr-scripts の共通の workflow を呼ぶだけ**（kan/tagpr-scripts#6）。tagpr のジョブ、落ちた run での draft、前のリリース PR を閉じること、タグを annotated に打ち直すこと、`publish.yml` の起動はそちらにある。動きと落ちたときの扱い（annotated への打ち直しや起動だけが落ちたときの手順を含む）は、tagpr-scripts の README の「The tagpr workflow」
 - **版は `package.json` で持つ**（`versionFile`）。**tagpr は `package-lock.json` を書き換えない**ので、`scripts/tagpr/release-prepare.mjs`（`postVersionCommand`）が揃える
 - **`release-prepare.mjs` は `## [Unreleased]` を `## [X.Y.Z] - 日付` にし、その上に空の `## [Unreleased]` を置き直し、末尾のリンク定義の先頭にその版のリンクを足す。** 検査をすべて済ませてから書き、落ちるときは何も書き換えない。落ちるのは `## [Unreleased]` が無いか空か重複しているとき、`## [X.Y.Z]` が既にあるとき（タグが打たれていない）、`package.json` の版や `repository` が合わないとき。失敗しても tagpr は版だけ上げたリリース PR を作る。その PR は共通の workflow が draft にするが、**run が赤ならマージしない**
@@ -150,7 +150,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
   ```
 
   - **`-S` を付ける。** subtree は `commit-tree` でコミットを作るので、`commit.gpgsign` が効かず未署名になる
-  - **同じ PR で、`tagpr.yml` の呼ぶ行（`uses: kan/tagpr-scripts/...@<SHA>`）の SHA を上げる。** 上げ先は取り込んだ tagpr-scripts の commit で、squash のコミットのメッセージにある `git-subtree-split` の SHA。wema-kake の squash やマージのコミットの SHA ではない。CI の `node scripts/tagpr/verify-subtree.mjs` が、`scripts/tagpr/` の tree とこの SHA の commit の tree を照合する
+  - **同じ PR で、`tagpr.yml` と `tagpr-label.yml` の呼ぶ行（`uses: kan/tagpr-scripts/...@<SHA>`）の SHA を上げる。** 上げ先は取り込んだ tagpr-scripts の commit で、squash のコミットのメッセージにある `git-subtree-split` の SHA。wema-kake の squash やマージのコミットの SHA ではない。CI の `node scripts/tagpr/verify-subtree.mjs` が、`scripts/tagpr/` の tree とこの SHA の commit の tree を照合する
   - **この PR だけはマージコミットで入れる**（`gh pr merge <番号> --merge`）。subtree は前回の取り込みを自分のコミットから探すので、squash すると次の pull が壊れる
   - 取り込む PR は CHANGELOG に書かない（利用側に届かない）
 - **`publish.yml` は権限ごとに 3 つのジョブに分ける**（`build`: `contents: read` / `publish`: `id-token: write` / `release`: `contents: write`）。依存のコードが走るのは `build` だけで、`publish` は checkout も `npm ci` もせず、`build` が作った tgz を publish するだけ。`id-token: write` のジョブで依存のコードが走ると、そのコードが npm 向けの OIDC トークンを取れるため
@@ -167,11 +167,12 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 - `.github/workflows/ci.yml`: main への push と PR で lint、テスト、雛形の検査（ビルドを兼ねる）を回す
 - `.github/workflows/verify-lockfile.yml`: `actions.lock` が `uses:` と食い違っていないか、固定した commit を上流で検証できるかを、PR と main への push で確かめる
+- `.github/workflows/tagpr-label.yml`: リリース PR のラベルを付け外ししたら、`tagpr.yml` を起動してリリース PR を作り直す（「リリース PR（tagpr）の仕組み」）
 - `.github/dependabot.yml`: ルートの npm と GitHub Actions を週 1 回見る。`template/` の npm は毎日見て、`@kanf/wema-kake` だけを上げる（「リリース」の 4）
 - **action の固定は `.github/workflows/actions.lock`（`gh actions-lock` が作る）に任せる。** `uses:` は完全な版のタグ（`@v7.0.1`）で書き、SHA は書かない。`uses:` を足したり変えたりしたら `gh actions-lock` を再実行し、lockfile も同じコミットに入れる。**lockfile は手で編集しない**
   - Dependabot は Actions の更新 PR で lockfile の該当行も作り直す
   - 検査が入れる拡張の版（`verify-lockfile.yml` の `--pin`）は、Dependabot と lockfile のどちらも追わない。lockfile の形式が上がって `--verify` が落ちたら、手元の `gh actions-lock` と同じ版に手で上げる
-  - 別の repo の reusable workflow を呼ぶ行（`jobs.<id>.uses`）は lockfile では固定されない。commit の SHA で書く。今あるのは `tagpr.yml` が kan/tagpr-scripts の共通の workflow を呼ぶ行だけで、SHA は subtree と揃える（「リリース PR（tagpr）の仕組み」）。その中の action（tagpr など）は tagpr-scripts の `actions.lock` が固定する
+  - 別の repo の reusable workflow を呼ぶ行（`jobs.<id>.uses`）は lockfile では固定されない。commit の SHA で書く。今あるのは `tagpr.yml` と `tagpr-label.yml` が kan/tagpr-scripts の共通の workflow を呼ぶ行だけで、SHA は subtree と揃える（「リリース PR（tagpr）の仕組み」）。その中の action（tagpr など）は tagpr-scripts の `actions.lock` が固定する
   - **Dependabot にはこの行を上げさせない**（`dependabot.yml` の `ignore`）。SHA だけが上がると、subtree の写しと実際に動く workflow が食い違う。ignore を外さないこと
 - `scripts/tagpr/.github/` は tagpr-scripts の写しで、GitHub は読まない。ここでは触らない
 
