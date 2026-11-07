@@ -121,7 +121,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 4. **確認と後始末**
    - `publish.yml` の run が通り、npm（`npm view @kanf/wema-kake version`）と GitHub Release に新しい版があること。Release の本文が CHANGELOG の節であること
-   - **雛形の wema-kake を上げる Dependabot の PR をマージする**（Deploy to Cloudflare のボタンが `npm ci` で雛形のロックを使う）。`.github/dependabot.yml` の `/template` の項が、毎日 `@kanf/wema-kake` の新しい版を見て、`template/package.json` の範囲とロックを上げる PR を作る（`versioning-strategy: increase`。`^0.1.0` は `0.2.0` を受けないため）。CI が通ったら squash でマージする。リリース PR に入れられないのは、準備の時点ではその版が npm に無いため。CHANGELOG には書かない（このマージで走る tagpr の run は上のとおり失敗する）
+   - **雛形の wema-kake を上げる Dependabot の PR をマージする**（Deploy to Cloudflare のボタンが `npm ci` で雛形のロックを使う）。`.github/dependabot.yml` の `/template` の項が、毎日 `@kanf/wema-kake` の新しい版を見て、`template/package.json` の範囲とロックを上げる PR を作る（`versioning-strategy: increase`。`^0.1.0` は `0.2.0` を受けないため）。CI が通ったら squash でマージする。リリース PR に入れられないのは、準備の時点ではその版が npm に無いため。CHANGELOG には書かない（`## [Unreleased]` が空なら、このマージで走る tagpr の run は上のとおり失敗する）
      - 次の日を過ぎても PR が来なければ、手で上げる。`cd template && npm install @kanf/wema-kake@latest --package-lock-only`。minor を上げたときは、`template/package.json` の範囲も上げる
      - **template に依存を足したら、`dependabot.yml` の `/template` の `ignore` にも足す**（version update を wema-kake だけに絞るため）
 
@@ -169,7 +169,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 - `.github/workflows/ci.yml`: main への push と PR で lint、テスト、雛形の検査（ビルドを兼ねる）を回す
 - `.github/workflows/verify-lockfile.yml`: `actions.lock` が `uses:` と食い違っていないか、固定した commit を上流で検証できるかを、PR と main への push で確かめる
-- `.github/dependabot.yml`: npm と GitHub Actions を週 1 回見る
+- `.github/dependabot.yml`: ルートの npm と GitHub Actions を週 1 回見る。`template/` の npm は毎日見て、`@kanf/wema-kake` だけを上げる（「リリース」の 4）
 - **action の固定は `.github/workflows/actions.lock`（`gh actions-lock` が作る）に任せる。** `uses:` は完全な版のタグ（`@v7.0.1`）で書き、SHA は書かない。`uses:` を足したり変えたりしたら `gh actions-lock` を再実行し、lockfile も同じコミットに入れる。**lockfile は手で編集しない**
   - Dependabot は Actions の更新 PR で lockfile の該当行も作り直す
   - 検査が入れる拡張の版（`verify-lockfile.yml` の `--pin`）は、Dependabot と lockfile のどちらも追わない。lockfile の形式が上がって `--verify` が落ちたら、手元の `gh actions-lock` と同じ版に手で上げる
