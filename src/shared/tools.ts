@@ -516,16 +516,35 @@ export const TOOLS: Tool[] = [
   tool({
     name: 'auto_layout',
     description:
-      '接続線のつながりに基づいて、付箋を階層に並べ直す。note_ids を省略すると、ページの全付箋が対象になる。1 回で動かせる付箋は 2000 枚まで（超える場合は note_ids で対象を絞る）。',
+      '接続線のつながりに基づいて、付箋を階層に並べ直す。接続線のない付箋は、左から右、上から下へ行に折り返して並べる。note_ids を省略すると、ページの全付箋が対象になる。1 回で動かせる付箋は 2000 枚まで（超える場合は note_ids で対象を絞る）。接続線で決まらない順は order で指定できる。日付の子ページを日付順に並べる、のように付箋の内容で並べたいときは、read_board の結果を並べ替えた id の列を order に渡す。',
     readOnly: false,
     destructive: true,
-    // 並べた結果をもう一度並べると、動くことがある（行に折り返した付箋の順が、今の位置で決まるため）
+    // 並べた結果をもう一度並べると、動くことがある（order に無い付箋の順は、今の位置で決まるため）
     idempotent: false,
-    input: z.object({ page, note_ids: z.array(z.string()).max(2000).optional(), reason }),
+    input: z.object({
+      page,
+      note_ids: z.array(z.string()).max(2000).optional(),
+      order: z
+        .array(z.string())
+        .max(2000)
+        .optional()
+        .describe(
+          '付箋を並べる順（付箋の id の列）。接続線で決まらない順がこの順になる。接続線のない付箋の並びと、つながった付箋のまとまり同士の並びはこの順に従う。同じ段の付箋は、接続線が交差しない並びが優先され、それで決まらないときにこの順になる。order に無い付箋は、その後ろに今の位置の順（左から、同じ列なら上から）で並ぶ。省略すると、全部の付箋が今の位置の順になる。note_ids を指定したときは、その中の id だけを書ける',
+        ),
+      reason,
+    }),
     async run(access, input) {
       const board = await existingBoard(access, input.page);
       input.note_ids?.forEach((id) => findNote(board, id));
-      const positions = computeAutoLayout(board.notes, board.edges, { noteIds: input.note_ids });
+      if (input.order) {
+        assertUnique(input.order);
+        const targets = input.note_ids && new Set(input.note_ids);
+        for (const id of input.order) {
+          findNote(board, id);
+          if (targets && !targets.has(id)) throw new ToolError(`order has a note outside note_ids: ${id}`);
+        }
+      }
+      const positions = computeAutoLayout(board.notes, board.edges, { noteIds: input.note_ids, order: input.order });
       const deltas: HistoryDelta[] = [];
       for (const { id, x, y } of positions) {
         const note = findNote(board, id);
