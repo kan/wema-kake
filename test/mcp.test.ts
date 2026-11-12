@@ -192,6 +192,26 @@ describe('書き込みのツール', () => {
     expect(at.n2.y).toBeGreaterThanOrEqual(at.n1.y + at.n1.height);
   });
 
+  it('auto_layout は、order の順に付箋を並べる', async () => {
+    const { page, notesOf } = await newPage([
+      createNote('d1', { x: 600, y: 0 }), createNote('d2', { x: 0, y: 0 }), createNote('d3', { x: 300, y: 0 }),
+    ]);
+    await call('auto_layout', { page, order: ['d1', 'd2', 'd3'] });
+    const read = (await notesOf()).sort((a, b) => a.y - b.y || a.x - b.x).map((n) => n.id);
+    expect(read).toEqual(['d1', 'd2', 'd3']);
+
+    // order に無い付箋は、その後ろに今の位置の順で並ぶ（今は d1, d2, d3 の順に並んでいる）
+    await call('auto_layout', { page, order: ['d3'] });
+    const partial = (await notesOf()).sort((a, b) => a.y - b.y || a.x - b.x).map((n) => n.id);
+    expect(partial).toEqual(['d3', 'd1', 'd2']);
+
+    await expect(call('auto_layout', { page, order: ['d1', 'd1'] })).rejects.toThrow('duplicate id: d1');
+    await expect(call('auto_layout', { page, order: ['nope'] })).rejects.toThrow('note not found: nope');
+    await expect(call('auto_layout', { page, note_ids: ['d1', 'd2'], order: ['d3'] })).rejects.toThrow(
+      'order has a note outside note_ids: d3',
+    );
+  });
+
   it('存在しない付箋や、ページのないスラッグへの書き込みは断り、ページを作らない', async () => {
     const { page } = await newPage([createNote('n1')]);
     await expect(call('update_notes', { page, notes: [{ id: 'nope', x: 1 }] })).rejects.toThrow('note not found: nope');
