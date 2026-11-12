@@ -115,24 +115,38 @@ MCP クライアント ──/mcp──> MCP ┘          │
    gh run list --workflow publish.yml -L 1
    ```
 
-   マージの push で走る tagpr の run がマージコミットにタグを打ち（annotated に打ち直す）、同じ run が `publish.yml` をそのタグで起動する。`publish.yml` は、タグと版の一致、CHANGELOG の節、lint、テスト、tgz から作った雛形を見てから publish し、CHANGELOG の節を本文にして GitHub Release を作る。**タグが打たれるまで main へ何もマージしない。** tagpr の run は前の run が終わるまで待ち、待っている run は新しい push の run に置き換えられる（cancelled になる）。置き換えられたら、次の run がマージコミットの run を再実行してタグを打たせる（tagpr-scripts の README の「The tagpr workflow」）。再実行できなかったとき（run に警告が出て、「already has `## [X.Y.Z]`」で赤になる）だけ、マージコミットの run を `gh run rerun <run-id>` で手で再実行する。このとき版だけ上がったリリース PR が draft で残ることがある。**その PR はマージしない。** タグが打たれた後に main への push の run が成功すると、共通の workflow がその PR を閉じる（tagpr-scripts の README の「The tagpr workflow」）。開き直してマージしない。
+   マージの push で走る tagpr の run がマージコミットにタグを打ち（annotated に打ち直す）、同じ run が `publish.yml` をそのタグで起動する。`publish.yml` は kan/tagpr-scripts の共通の workflow `publish-npm.yml` を呼ぶだけで、ジョブは `publish / Build and check`、`publish / Stage on npm`、`publish / Create the GitHub release` の 3 つ。lint、テスト、tgz から作った雛形（`check-tarball`）を見てから tgz を npm へ **stage** し（まだ公開されない）、その直後に CHANGELOG の節を本文にして GitHub Release を作る。動きは `scripts/tagpr/README.md` の「The npm publish workflow」。**タグが打たれるまで main へ何もマージしない。** tagpr の run は前の run が終わるまで待ち、待っている run は新しい push の run に置き換えられる（cancelled になる）。置き換えられたら、次の run がマージコミットの run を再実行してタグを打たせる（tagpr-scripts の README の「The tagpr workflow」）。再実行できなかったとき（run に警告が出て、「already has `## [X.Y.Z]`」で赤になる）だけ、マージコミットの run を `gh run rerun <run-id>` で手で再実行する。このとき版だけ上がったリリース PR が draft で残ることがある。**その PR はマージしない。** タグが打たれた後に main への push の run が成功すると、共通の workflow がその PR を閉じる（tagpr-scripts の README の「The tagpr workflow」）。開き直してマージしない。
 
    リリースの直後は `## [Unreleased]` が空なので、次に CHANGELOG を書くまで、main への push の run は tagpr を走らせずに成功する（notice に「tagpr is not run」と出て、リリース PR は作られない）。
 
-4. **確認と後始末**
+4. **stage した版を approve して公開する**（ユーザーが 2FA で行う）
+
+   `publish.yml` の run の Job Summary に stage ID が出る（`npm stage list @kanf/wema-kake` でも引ける）。中身を見てから approve する。**approve するまで npm には公開されない。** GitHub Release は approve を待たずに stage の直後に作られている。
+
+   ```bash
+   npm stage view <stage ID>
+   npm stage approve <stage ID>   # 2FA を求められる
+   ```
+
+   出さないと決めたら `npm stage reject <stage ID>` で捨て、GitHub Release を手で消す。
+
+5. **確認と後始末**（approve の後）
    - `publish.yml` の run が通り、npm（`npm view @kanf/wema-kake version`）と GitHub Release に新しい版があること。Release の本文が CHANGELOG の節であること
+   - `publish / Build and check` の「Check the tarball」のステップで、雛形の `npm run typecheck` と `wrangler deploy --dry-run` が走って通っていること
+   - provenance が付いていること（`npm view @kanf/wema-kake@X.Y.Z dist.attestations.provenance` が空でない）
    - **雛形の wema-kake を上げる Dependabot の PR をマージする**（Deploy to Cloudflare のボタンが `npm ci` で雛形のロックを使う）。`.github/dependabot.yml` の `/template` の項が、毎日 `@kanf/wema-kake` の新しい版を見て、`template/package.json` の範囲とロックを上げる PR を作る（`versioning-strategy: increase`。`^0.1.0` は `0.2.0` を受けないため）。CI が通ったら squash でマージする。リリース PR に入れられないのは、準備の時点ではその版が npm に無いため。CHANGELOG には書かない
      - 次の日を過ぎても PR が来なければ、手で上げる。`cd template && npm install @kanf/wema-kake@latest --package-lock-only`。minor を上げたときは、`template/package.json` の範囲も上げる
      - **template に依存を足したら、`dependabot.yml` の `/template` の `ignore` にも足す**（version update を wema-kake だけに絞るため）
 
 **やり直し**
 
-- **やり直す前に `npm view @kanf/wema-kake@X.Y.Z version` で npm に出たかを見る。** `publish` ジョブが赤でも、npm には届いていることがある（応答の前に切れたとき）
-- `publish.yml` が npm へ出す前に落ちたら、直してから `gh workflow run publish.yml --ref vX.Y.Z` で起動し直す
+- 落ちたときの扱いと再実行の仕方は `scripts/tagpr/README.md` の「The npm publish workflow」にある。この repo で守ることは次のとおり
+- `publish.yml` が npm へ stage する前に落ちたら、直してから `gh workflow run publish.yml --ref vX.Y.Z` で起動し直す
 - タグは打たれたのに `publish.yml` が起動していないときは、**マージの tagpr の run を再実行する**（タグを annotated に打ち直すステップか、起動が落ちたとき）。**`publish.yml` が既に起動した run は再実行しない**（同じタグでもう一度走る）。再実行できない run（30 日を過ぎたもの）を手で直す手順は、tagpr-scripts の README の「The tagpr workflow」。wema-kake の `publish.yml` は `push: tags` を持つので、タグを手で push したら `gh workflow run` は重ねない（同じタグで 2 回走る）
-- npm へは出て Release の作成（`release` ジョブ）だけが落ちたら、`gh run rerun <run-id> --failed` で落ちたジョブだけをやり直す（run 全体を再実行しても、`publish` ジョブは npm にある版を飛ばすので落ちない）。artifact の保持期間（7 日）を過ぎていたら、`node scripts/tagpr/release-notes.mjs vX.Y.Z > notes.md` から `gh release create vX.Y.Z --title vX.Y.Z --verify-tag --notes-file notes.md` を手で回す
-- **`publish.yml` はタグの指すコミットで動く。** npm へ出る前に落ちた原因がコードや CHANGELOG にあるなら、直した PR をマージしてタグを打ち直す。`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z` で消し、直したマージコミットに **annotated で**打って push する（`git tag -a -m "Release vX.Y.Z" vX.Y.Z <コミット>`）。手で push したタグは `push: tags` で `publish.yml` を起動する。CHANGELOG は、main ではもう `## [X.Y.Z] - 日付` になっている節を直す。**タグを消している間に main へ入ると、その tagpr の run は「already has `## [X.Y.Z]`」で赤になり、版だけ上がったリリース PR が残ることがある。** そのリリース PR はマージしない。タグを打ち直した後に main への push の run が成功すると閉じられる（3 と同じ）。打ち直しが済むまで他の PR はマージしない（まだ踏んでいない手順なので、初回はリリース PR の状態を見ながら進める）
-- **npm へ出た版は打ち直せない**（同じ版は二度と publish できない）。次の版で直す
+- **stage の後、approve の前にやり直すときは、必ず `gh run rerun <run-id> --failed` を使う。「Re-run all jobs」にしない。** stage 済みで未承認の版は `npm view` で見えないので、もう一度 stage して registry に断られる。approve の後なら「Re-run all jobs」でもよい（npm に公開済みの版は stage を飛ばす）
+- stage が `403 OIDC permission denied` で落ちたら、npmjs.com の Trusted Publisher（`publish.yml` で登録）が「npm stage publish」を許しているかを見る。direct publish だけを許す登録では stage できない
+- **`publish.yml` はタグの指すコミットで動く。** npm へ stage する前に落ちた原因がコードや CHANGELOG にあるなら、直した PR をマージしてタグを打ち直す。`git push origin :refs/tags/vX.Y.Z && git tag -d vX.Y.Z` で消し、直したマージコミットに **annotated で**打って push する（`git tag -a -m "Release vX.Y.Z" vX.Y.Z <コミット>`）。手で push したタグは `push: tags` で `publish.yml` を起動する。CHANGELOG は、main ではもう `## [X.Y.Z] - 日付` になっている節を直す。**タグを消している間に main へ入ると、その tagpr の run は「already has `## [X.Y.Z]`」で赤になり、版だけ上がったリリース PR が残ることがある。** そのリリース PR はマージしない。タグを打ち直した後に main への push の run が成功すると閉じられる（3 と同じ）。打ち直しが済むまで他の PR はマージしない（まだ踏んでいない手順なので、初回はリリース PR の状態を見ながら進める）
+- **npm へ公開した版は打ち直せない**（同じ版は二度と publish できない）。次の版で直す
 
 ### リリース PR（tagpr）の仕組み
 
@@ -141,7 +155,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
 - **版は `package.json` で持つ**（`versionFile`）。**tagpr は `package-lock.json` を書き換えない**ので、`scripts/tagpr/release-prepare.mjs`（`postVersionCommand`）が揃える
 - **`release-prepare.mjs` は `## [Unreleased]` を `## [X.Y.Z] - 日付` にし、その上に空の `## [Unreleased]` を置き直し、末尾のリンク定義の先頭にその版のリンクを足す。** 検査をすべて済ませてから書き、落ちるときは何も書き換えない。落ちるのは `## [Unreleased]` が無いか空か重複しているとき、`## [X.Y.Z]` が既にあるとき（タグが打たれていない）、`package.json` の版や `repository` が合わないとき。失敗しても tagpr は版だけ上げたリリース PR を作る。その PR は共通の workflow が draft にするが、**run が赤ならマージしない**
 - **tagpr のジョブでは依存のコードを走らせない。** リポジトリへ push できるトークンを持つため。`npm ci` をせず、`scripts/tagpr/` は Node の組み込みだけで書く。tagpr の action の commit は tagpr-scripts の `actions.lock` が固定する（下の「CI と GitHub の設定」）
-- **CHANGELOG と GitHub の Release は tagpr に作らせない**（`changelog = false` / `release = false`）。tagpr の CHANGELOG は PR のタイトルを並べるだけ。Release は `publish.yml` が npm publish の**後**に作る（publish に失敗した版の Release を残さない）
+- **CHANGELOG と GitHub の Release は tagpr に作らせない**（`changelog = false` / `release = false`）。tagpr の CHANGELOG は PR のタイトルを並べるだけ。Release は `publish.yml` が npm への stage の**後**に作る（stage に失敗した版の Release を残さない）
 - **CHANGELOG の読み方（節の見出し、コードフェンス、末尾のリンク定義）は `scripts/tagpr/changelog.mjs` の 1 か所に置く。** `release-prepare.mjs` と `release-notes.mjs` はそれを import する。2 か所に書くと、リリース PR は通るのに `publish.yml` の検査で落ちる
 - **`scripts/tagpr/` は [kan/tagpr-scripts](https://github.com/kan/tagpr-scripts) の git subtree**（lily / wema と共有）。**ここでは編集しない。** upstream を直してから取り込む
 
@@ -150,17 +164,19 @@ MCP クライアント ──/mcp──> MCP ┘          │
   ```
 
   - **`-S` を付ける。** subtree は `commit-tree` でコミットを作るので、`commit.gpgsign` が効かず未署名になる
-  - **同じ PR で、`tagpr.yml` と `tagpr-label.yml` の呼ぶ行（`uses: kan/tagpr-scripts/...@<SHA>`）の SHA を上げる。** 上げ先は取り込んだ tagpr-scripts の commit で、squash のコミットのメッセージにある `git-subtree-split` の SHA。wema-kake の squash やマージのコミットの SHA ではない。CI の `node scripts/tagpr/verify-subtree.mjs` が、`scripts/tagpr/` の tree とこの SHA の commit の tree を照合する
+  - **同じ PR で、`tagpr.yml` / `tagpr-label.yml` / `publish.yml` の呼ぶ行（`uses: kan/tagpr-scripts/...@<SHA>`）の SHA を上げる。** 上げ先は取り込んだ tagpr-scripts の commit で、squash のコミットのメッセージにある `git-subtree-split` の SHA。wema-kake の squash やマージのコミットの SHA ではない。CI の `node scripts/tagpr/verify-subtree.mjs` が、`scripts/tagpr/` の tree とこの SHA の commit の tree を照合する
   - **この PR だけはマージコミットで入れる**（`gh pr merge <番号> --merge`）。subtree は前回の取り込みを自分のコミットから探すので、squash すると次の pull が壊れる
   - 取り込む PR は CHANGELOG に書かない（利用側に届かない）
-- **`publish.yml` は権限ごとに 3 つのジョブに分ける**（`build`: `contents: read` / `publish`: `id-token: write` / `release`: `contents: write`）。依存のコードが走るのは `build` だけで、`publish` は checkout も `npm ci` もせず、`build` が作った tgz を publish するだけ。`id-token: write` のジョブで依存のコードが走ると、そのコードが npm 向けの OIDC トークンを取れるため
-- **`publish.yml` は `workflow_dispatch` でタグを ref にして起動する**（共通の workflow の `release` ジョブ）。GITHUB_TOKEN で push したタグでは `push: tags` が起動しないが、`workflow_dispatch` は例外として起動できる。`workflow_call` で同じ run から呼ぶ形にしないこと。run の主体が `tagpr.yml`、ref が `refs/heads/main` になり、npm の Trusted Publisher（`publish.yml` を登録してある）と provenance がそれを名乗る。**`publish.yml` の名前を変えない**
+- **`publish.yml` は kan/tagpr-scripts の共通の workflow `publish-npm.yml` を呼ぶだけ**（kan/tagpr-scripts#15）。ジョブの分け方（依存のコードを書き込みの権限の無いジョブだけで走らせる）、stage、GitHub Release の作成はそちらにある。動きは `scripts/tagpr/README.md` の「The npm publish workflow」。この repo で渡すのは `check`（lint、テスト）、`check-tarball`（tgz から雛形を作って typecheck と `wrangler deploy --dry-run`）、`access: public` だけ。tgz は `prepack`（`npm run build`）で作られる
+  - **呼ぶ行の SHA は `tagpr.yml` / `tagpr-label.yml` と同じにする**（`verify-subtree.mjs` がこの行も照合する）。subtree を取り込む PR で 3 行とも上げる
+  - `publish.yml` には `concurrency` を置く（1 つのタグに 1 run、止めない）。共通の workflow には置かれていないので deadlock しない
+- **`publish.yml` は `workflow_dispatch` でタグを ref にして起動する**（共通の `tagpr.yml` の `release` ジョブ）。GITHUB_TOKEN で push したタグでは `push: tags` が起動しないが、`workflow_dispatch` は例外として起動できる。`workflow_call` で同じ run から呼ぶ形にしないこと。run の主体が `tagpr.yml`、ref が `refs/heads/main` になり、npm の Trusted Publisher（`publish.yml` を登録してある）と provenance がそれを名乗る。**`publish.yml` の名前を変えない**
 - **`tagpr.yml` の呼ぶジョブには、権限を 4 つとも書く**（`actions: write` を含む）。共通の workflow が使える上限で、`actions: write` は中の `release` ジョブだけが使う
 - **`tagpr.yml` に `concurrency` を付けない。** run を並べるのは共通の workflow の tagpr のジョブ（`cancel-in-progress: false`）。呼ぶ側にも付けると deadlock として止まる
 
 ### リポジトリの外にある設定
 
-- npmjs.com の Trusted Publisher（`publish.yml` を登録してある）。direct publish を許可しておく（既定のままだと `403 OIDC permission denied` で落ちる）
+- npmjs.com の Trusted Publisher（`publish.yml` を登録してある）。**「npm stage publish」だけを許し、direct publish は許さない**（workflow が乗っ取られても、approve なしには公開されない）。stage publish を許していないと `403 OIDC permission denied` で落ちる
 - GitHub の Settings → Actions → General の「Allow GitHub Actions to create and approve pull requests」は ON。tagpr が GITHUB_TOKEN でリリース PR を作るのに要る（GitHub App は作っていない）
 
 ## CI と GitHub の設定
