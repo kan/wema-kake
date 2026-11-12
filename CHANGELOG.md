@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-11-12
+
 ### 追加
 
 - MCP の `auto_layout` に `order` を足した。付箋を並べる順を、付箋の id の列で指定できる。日付の子ページを日付順に並べる、のように付箋の内容で並べたいときに使う。`order` に無い付箋は、その後ろに今の位置の順で並ぶ
@@ -97,6 +99,7 @@
 
 最初の公開版。利用側が雛形（`npx @kanf/wema-kake init`）から自分の Worker を作り、npm のこのパッケージを使ってデプロイする。
 
+[0.1.8]: https://github.com/kan/wema-kake/releases/tag/v0.1.8
 [0.1.7]: https://github.com/kan/wema-kake/releases/tag/v0.1.7
 [0.1.6]: https://github.com/kan/wema-kake/releases/tag/v0.1.6
 [0.1.5]: https://github.com/kan/wema-kake/releases/tag/v0.1.5
