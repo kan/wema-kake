@@ -13,6 +13,7 @@ updates:
           - "@modelcontextprotocol/*"
   # template の wema-kake を、出したばかりの版に上げる PR を作る（kan/lily の template と同じ設計）。
   # template は利用者が写して使う雛形なので、上げ忘れると古い wema-kake で始まる。
+  # この PR は ci.yml の automerge-template のジョブが、CI が通ったらマージする。
   - package-ecosystem: "npm"
     directory: "/template"
     schedule:
