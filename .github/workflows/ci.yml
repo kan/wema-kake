@@ -42,3 +42,76 @@ jobs:
           npm install "$tgz"
           npm run typecheck
           npx wrangler deploy --dry-run
+
+  # 雛形（template/）を、その package-lock.json のまま入れて通るか。Deploy to Cloudflare のボタンと
+  # 同じく npm ci で入れる。上の build の template は手元の tgz を入れるので、雛形の lock は確かめない。
+  # 雛形の wema-kake を上げる Dependabot の PR を自動でマージする前の検査も兼ねる
+  template-lock:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: template/package-lock.json
+
+      - name: Install the template from its lock
+        working-directory: template
+        run: |
+          npm ci
+          npm run typecheck
+          npx wrangler deploy --dry-run
+
+  # 雛形の wema-kake を上げる Dependabot の PR を、build と template-lock が通ったら squash でマージする。
+  # Deploy to Cloudflare のボタンは main の template/ を lock ごと使うので、マージを待つ間は前の版で作られる
+  # （AGENTS.md「リリース」の 5）。
+  #
+  # - リポジトリの auto-merge（gh pr merge --auto）は使わない。main に必須のチェックが無いので、
+  #   有効にすると CI を待たずにマージされる。検査のジョブを needs にして、このジョブの中でマージする
+  # - **このジョブでは依存のコードを走らせない**（書き込みの権限を持つため）。npm ci は template-lock で行う
+  # - マージするのは、/template の @kanf/wema-kake だけを上げる PR に限る。major（1.0 へ上げる PR）は
+  #   手でマージする。0.x の minor（破壊的な変更）は自動でマージする。破壊的な変更に合わせた
+  #   template/src/ はリリース PR で main に入っており、lock が追いつくまでボタンが壊れているため。
+  #   変わったファイルが template/package.json と template/package-lock.json だけであることも確かめる
+  # - PR の作者だけでなく、run を起こした主体も Dependabot に限る（人が同じブランチへ push したり、
+  #   run を再実行したりしたときはマージしない）
+  # - build で試したコミットだけをマージする（--match-head-commit）。Dependabot が rebase して
+  #   head が進んでいたら、新しい head の run に任せる
+  # - GITHUB_TOKEN でのマージなので、main への push の run（この CI、tagpr.yml など）は起動しない。
+  #   PR の run は main とのマージの結果（refs/pull/N/merge）を検査しているので、それで代える。
+  #   リリース PR は、次に main へ push したときにこのコミットを含めて作り直される
+  automerge-template:
+    needs: [build, template-lock]
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.actor == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write       # PR をマージする
+      pull-requests: write  # PR をマージする
+    steps:
+      - id: metadata
+        uses: dependabot/fetch-metadata@v3.1.0
+
+      - name: Merge the template bump
+        if: >-
+          steps.metadata.outputs.package-ecosystem == 'npm_and_yarn' &&
+          steps.metadata.outputs.directory == '/template' &&
+          steps.metadata.outputs.dependency-names == '@kanf/wema-kake' &&
+          steps.metadata.outputs.update-type != 'version-update:semver-major'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          files="$(gh pr diff "$PR" --name-only | sort | tr '\n' ' ')"
+          if [ "$files" != "template/package-lock.json template/package.json " ]; then
+            echo "::error::unexpected files in the template bump: $files"
+            exit 1
+          fi
+          gh pr merge "$PR" --squash --match-head-commit "$HEAD_SHA"

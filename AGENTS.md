@@ -134,7 +134,8 @@ MCP クライアント ──/mcp──> MCP ┘          │
    - `publish.yml` の run が通り、npm（`npm view @kanf/wema-kake version`）と GitHub Release に新しい版があること。Release の本文が CHANGELOG の節であること
    - `publish / Build and check` の「Check the tarball」のステップで、雛形の `npm run typecheck` と `wrangler deploy --dry-run` が走って通っていること
    - provenance が付いていること（`npm view @kanf/wema-kake@X.Y.Z dist.attestations.provenance` が空でない）
-   - **雛形の wema-kake を上げる Dependabot の PR をマージする**（Deploy to Cloudflare のボタンが `npm ci` で雛形のロックを使う）。`.github/dependabot.yml` の `/template` の項が、毎日 `@kanf/wema-kake` の新しい版を見て、`template/package.json` の範囲とロックを上げる PR を作る（`versioning-strategy: increase`。`^0.1.0` は `0.2.0` を受けないため）。CI が通ったら squash でマージする。リリース PR に入れられないのは、準備の時点ではその版が npm に無いため。CHANGELOG には書かない
+   - **雛形の wema-kake を上げる Dependabot の PR がマージされたことを確かめる**（Deploy to Cloudflare のボタンが `npm ci` で雛形のロックを使う。`npx @kanf/wema-kake init` は範囲を自分の版に書き換え、ロックはパッケージに入らないので、この PR を待たない）。`.github/dependabot.yml` の `/template` の項が、毎日 `@kanf/wema-kake` の新しい版を見て、`template/package.json` の範囲とロックを上げる PR を作る（`versioning-strategy: increase`。`^0.1.0` は `0.2.0` を受けないため）。**`ci.yml` の `automerge-template` のジョブが、`build` と `template-lock`（雛形をその lock のまま `npm ci` して typecheck と `wrangler deploy --dry-run`）が通ったら squash でマージする。** リリース PR に入れられないのは、準備の時点ではその版が npm に無いため。CHANGELOG には書かない
+     - **publish の翌日を過ぎたら、PR がマージされて閉じているかを見る。** 開いたままなら、自動でマージされなかった。major の版へ上げる PR（ジョブのマージのステップが飛ばされ、CI は緑のまま）、`template/package.json` と `template/package-lock.json` の他にも変更がある PR（ジョブが赤になる）、検査の失敗やマージの衝突（どこかのジョブが赤になる）のどれか。原因を見て、直すか中身を確かめてから、手で squash でマージする
      - 次の日を過ぎても PR が来なければ、手で上げる。`cd template && npm install @kanf/wema-kake@latest --package-lock-only`。minor を上げたときは、`template/package.json` の範囲も上げる
      - **template に依存を足したら、`dependabot.yml` の `/template` の `ignore` にも足す**（version update を wema-kake だけに絞るため）
 
@@ -181,10 +182,10 @@ MCP クライアント ──/mcp──> MCP ┘          │
 
 ## CI と GitHub の設定
 
-- `.github/workflows/ci.yml`: main への push と PR で lint、テスト、雛形の検査（ビルドを兼ねる）を回す
+- `.github/workflows/ci.yml`: main への push と PR で lint、テスト、雛形の検査（ビルドを兼ねる）と、雛形をその lock のまま入れる検査（`template-lock`）を回す。**`automerge-template` のジョブだけは `contents: write` と `pull-requests: write` を持ち**、雛形の wema-kake を上げる Dependabot の PR をマージする（「リリース」の 5）
 - `.github/workflows/verify-lockfile.yml`: `actions.lock` が `uses:` と食い違っていないか、固定した commit を上流で検証できるかを、PR と main への push で確かめる
 - `.github/workflows/tagpr-label.yml`: リリース PR のラベルを付け外ししたら、`tagpr.yml` を起動してリリース PR を作り直す（「リリース PR（tagpr）の仕組み」）
-- `.github/dependabot.yml`: ルートの npm と GitHub Actions を週 1 回見る。`template/` の npm は毎日見て、`@kanf/wema-kake` だけを上げる（「リリース」の 4）
+- `.github/dependabot.yml`: ルートの npm と GitHub Actions を週 1 回見る。`template/` の npm は毎日見て、`@kanf/wema-kake` だけを上げる（「リリース」の 5）
 - **action の固定は `.github/workflows/actions.lock`（`gh actions-lock` が作る）に任せる。** `uses:` は完全な版のタグ（`@v7.0.1`）で書き、SHA は書かない。`uses:` を足したり変えたりしたら `gh actions-lock` を再実行し、lockfile も同じコミットに入れる。**lockfile は手で編集しない**
   - Dependabot は Actions の更新 PR で lockfile の該当行も作り直す
   - 検査が入れる拡張の版（`verify-lockfile.yml` の `--pin`）は、Dependabot と lockfile のどちらも追わない。lockfile の形式が上がって `--verify` が落ちたら、手元の `gh actions-lock` と同じ版に手で上げる
