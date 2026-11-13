@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.1.9] - 2026-11-13
+
 ### 変更
 
 - `jose` を 6.2.17 に、`hono` を 4.13.17 に上げた
@@ -103,6 +105,7 @@
 
 最初の公開版。利用側が雛形（`npx @kanf/wema-kake init`）から自分の Worker を作り、npm のこのパッケージを使ってデプロイする。
 
+[0.1.9]: https://github.com/kan/wema-kake/releases/tag/v0.1.9
 [0.1.8]: https://github.com/kan/wema-kake/releases/tag/v0.1.8
 [0.1.7]: https://github.com/kan/wema-kake/releases/tag/v0.1.7
 [0.1.6]: https://github.com/kan/wema-kake/releases/tag/v0.1.6
