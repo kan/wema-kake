@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### 変更
+
+- 依存から `agents` を外した。MCP のハンドラを `@modelcontextprotocol/server` の `createMcpHandler` で作るようにした。`/mcp` の振る舞い（受ける MCP の版、`Origin` の検査、ツール）は変わらない（[#87](https://github.com/kan/wema-kake/issues/87)）
+
 ## [0.1.9] - 2026-11-13
 
 ### 変更

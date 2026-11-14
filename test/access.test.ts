@@ -182,7 +182,7 @@ describe('agent と人の入口を分ける', () => {
     mockCerts();
     const jwt = await token({ oauth: CLAUDE });
     expect((await mcp({ 'Cf-Access-Jwt-Assertion': jwt })).status).toBe(200);
-    // 独自ドメインでも通る（MCP のハンドラの既定の許可リストは、localhost と workers.dev しか知らない）
+    // 独自ドメインでも通る（localhost と workers.dev しか許さない検査を挟んでいない）
     const res = await mcp({ 'Cf-Access-Jwt-Assertion': jwt, Origin: 'https://wiki.example.com' });
     expect(res.status).toBe(200);
     expect(res.headers.get('Access-Control-Allow-Origin')).toBeNull();
@@ -205,8 +205,6 @@ describe('agent と人の入口を分ける', () => {
         {
           method: 'POST',
           headers: {
-            // 実際のリクエストなら必ず付く（MCP のハンドラが、localhost の Host を確かめる）
-            Host: 'localhost:8787',
             'Content-Type': 'application/json',
             Accept: 'application/json, text/event-stream',
             ...(origin ? { Origin: origin } : {}),

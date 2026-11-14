@@ -5,11 +5,9 @@ updates:
     schedule:
       interval: "weekly"
     groups:
-      # agents は、@modelcontextprotocol/* を peer 依存で、ちょうどの版に固定している。
-      # 片方だけを上げると npm ci が ERESOLVE で失敗するので、1 つの PR でまとめて上げる
-      agents-mcp:
+      # server と、テストで使う client は、同じ版で出る。食い違わないように、1 つの PR でまとめて上げる
+      mcp-sdk:
         patterns:
-          - "agents"
           - "@modelcontextprotocol/*"
   # template の wema-kake を、出したばかりの版に上げる PR を作る（kan/lily の template と同じ設計）。
   # template は利用者が写して使う雛形なので、上げ忘れると古い wema-kake で始まる。

@@ -1,7 +1,6 @@
 // リモート MCP サーバー。ツールの定義と実装は src/shared/tools.ts にあり、ここでは MCP の
 // サーバーに登録して、結果を MCP の形にするだけ。
-import { McpServer } from '@modelcontextprotocol/server';
-import { createMcpHandler } from 'agents/mcp/server';
+import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { type BoardAccess, TOOLS, ToolError, toolAnnotations } from '../../shared/tools';
 import type { WemaKakeEnv } from '../config';
 import { ServerBoardAccess } from './board-access';
@@ -65,23 +64,22 @@ export function readOnlyAccess(access: BoardAccess): BoardAccess {
  * `/mcp` のハンドラ。認証は呼び出し側（`src/worker/index.ts`）が済ませていて、
  * そこで決めた変更の主体（`agent:<client>`）と、その主体が書き込みのツールを使えるかを受け取る
  */
-export function handleMcp(
-  request: Request,
-  env: WemaKakeEnv,
-  ctx: ExecutionContext,
-  actor: string,
-  write: boolean,
-): Promise<Response> {
+export function handleMcp(request: Request, env: WemaKakeEnv, actor: string, write: boolean): Promise<Response> {
   const server = new ServerBoardAccess(env, actor);
   const access = write ? server : readOnlyAccess(server);
-  // リクエストごとにサーバーを作る（MCP のサーバーは、同時に走るリクエストで共有できない）
+  // リクエストごとにハンドラとサーバーを作る（MCP のサーバーは、同時に走るリクエストで共有できない）。
+  // 2026-07-28 版と、それより前の版（initialize あり）の両方を受ける。前の版はステートレスで受ける
+  // （`legacy: 'stateless'` が既定）
   //
-  // `Origin` は、呼び出し側（`src/worker/index.ts`）が自分のオリジンとの完全一致で確かめている。
-  // ハンドラの検査はホスト名だけを比べ、既定の許可リストは localhost と workers.dev しか知らない。
-  // そのままだと独自ドメインで自分のオリジンを断るので、許すホスト名を自分のものに絞って残す。
-  // 他のオリジンから呼ばせないので、CORS のヘッダー（既定は `*`）も付けない
+  // SDK のハンドラは `Origin` も `Host` も確かめず、CORS のヘッダーも付けない。`Origin` は、呼び出し側
+  // （`src/worker/index.ts`）が自分のオリジンとの完全一致で確かめている。SDK の
+  // `originValidationResponse` はホスト名しか比べないので使わない
+  //
+  // `responseMode: 'json'` は指定しない。指定すると、ハンドラを作るたびに SDK が `console.warn` を出す。
+  // 既定（auto）でも、途中で通知を出さないツールの応答は JSON 1 本になる
+  //
+  // SDK は、内部で捕まえた例外を 500 にして返し、ログには出さない。原因を追えるように `onerror` で出す
   return createMcpHandler(() => createMcpServer(access, write), {
-    allowedOriginHostnames: [new URL(request.url).hostname],
-    corsOptions: false,
-  })(request, env, ctx);
+    onerror: (error) => console.error('MCP handler error:', error),
+  }).fetch(request);
 }
