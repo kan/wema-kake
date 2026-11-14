@@ -41,7 +41,7 @@ export function createApp(options: WemaKakeConfig = {}) {
       requireAccess('agent'),
       (c) => {
         const actor = c.get('actor');
-        return handleMcp(c.req.raw, c.env, c.executionCtx as ExecutionContext, actor, canWrite(mcp, actor));
+        return handleMcp(c.req.raw, c.env, actor, canWrite(mcp, actor));
       },
     );
   } else {

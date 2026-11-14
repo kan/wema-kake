@@ -356,13 +356,8 @@ describe('ツールの注釈', () => {
 async function connect(target = app) {
   const ctx = createExecutionContext();
   const transport = new StreamableHTTPClientTransport(new URL('http://localhost/mcp'), {
-    // テストではネットワークを通さず、Worker の入口を直接呼ぶ（ローカル開発の認証を通る）。
-    // Host は実際のリクエストなら必ず付く
-    fetch: async (input, init) => {
-      const request = new Request(input as string, init as RequestInit);
-      request.headers.set('Host', 'localhost');
-      return target.fetch(request, env, ctx);
-    },
+    // テストではネットワークを通さず、Worker の入口を直接呼ぶ（ローカル開発の認証を通る）
+    fetch: async (input, init) => target.fetch(new Request(input as string, init as RequestInit), env, ctx),
   });
   const client = new Client({ name: 'test', version: '1.0.0' });
   await client.connect(transport);
