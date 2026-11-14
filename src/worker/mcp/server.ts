@@ -10,7 +10,15 @@ import { ServerBoardAccess } from './board-access';
  * しない。名前を指定して呼ばれても、MCP のサーバーが「ツールがない」というエラーを返す
  */
 export function createMcpServer(access: BoardAccess, write: boolean): McpServer {
-  const server = new McpServer({ name: 'wema-kake', version: '0.1.0' });
+  // ツールの一覧は、接続の間に変わらない（主体と設定で決まる）ので、変更の通知を出さないと宣言する。
+  // 宣言しないと、`registerTool` が `listChanged: true` を付ける。そのままだと、2026-07-28 版の
+  // クライアントが `subscriptions/listen` を開き、SDK は要求ごとに作って捨てるハンドラの bus に
+  // 購読させる。通知は届かず、SSE がクライアントが切るまで開いたまま残る。`false` なら、クライアントは
+  // 自分からは開かず、開かれても SDK が受け付けた通知なしで応答してすぐ閉じる
+  const server = new McpServer(
+    { name: 'wema-kake', version: '0.1.0' },
+    { capabilities: { tools: { listChanged: false } } },
+  );
   for (const tool of TOOLS) {
     if (!write && !tool.readOnly) continue;
     server.registerTool(

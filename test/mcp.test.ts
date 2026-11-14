@@ -352,14 +352,20 @@ describe('ツールの注釈', () => {
   });
 });
 
-/** MCP のクライアントで `/mcp` につなぐ。主体は、ローカル開発の `agent:local` */
-async function connect(target = app) {
+/**
+ * MCP のクライアントで `/mcp` につなぐ。主体は、ローカル開発の `agent:local`。
+ * クライアントの既定は 2025 年版（initialize あり）。`modern` なら 2026-07-28 版に固定してつなぐ
+ */
+async function connect(target = app, era: 'legacy' | 'modern' = 'legacy') {
   const ctx = createExecutionContext();
   const transport = new StreamableHTTPClientTransport(new URL('http://localhost/mcp'), {
     // テストではネットワークを通さず、Worker の入口を直接呼ぶ（ローカル開発の認証を通る）
     fetch: async (input, init) => target.fetch(new Request(input as string, init as RequestInit), env, ctx),
   });
-  const client = new Client({ name: 'test', version: '1.0.0' });
+  const client = new Client(
+    { name: 'test', version: '1.0.0' },
+    era === 'modern' ? { versionNegotiation: { mode: { pin: '2026-07-28' } } } : {},
+  );
   await client.connect(transport);
   return client;
 }
@@ -368,9 +374,25 @@ const READ_TOOLS = TOOLS.filter((t) => t.readOnly).map((t) => t.name).sort();
 const WRITE_TOOLS = TOOLS.filter((t) => !t.readOnly).map((t) => t.name);
 
 describe('MCP のハンドラ', () => {
-  it('MCP のクライアントから、ツールの一覧を取得して呼び出せる', async () => {
+  it('ツールの一覧の変更を通知しないと宣言し、subscriptions/listen を開いたままにしない', async () => {
+    // listen は 2026-07-28 版にしかない
+    const client = await connect(app, 'modern');
+    expect(client.getNegotiatedProtocolVersion()).toBe('2026-07-28');
+    expect(client.getServerCapabilities()?.tools?.listChanged).toBe(false);
+
+    // 開かれても、受け付けた通知なしで応答し、サーバーが完了を送って閉じる（閉じなければ、ここで待ち続けて
+    // テストが時間切れになる）
+    const subscription = await client.listen({ toolsListChanged: true });
+    expect(subscription.honoredFilter).toEqual({});
+    expect(await subscription.closed).toBe('graceful');
+    await client.close();
+  });
+
+  // 2025 年版（initialize あり）と 2026-07-28 版の両方を受ける。SDK は版ごとに別の経路で応答する
+  it.each(['legacy', 'modern'] as const)('MCP のクライアントから、ツールの一覧を取得して呼び出せる（%s）', async (era) => {
     const { page, notesOf } = await newPage([createNote('n1')]);
-    const client = await connect();
+    const client = await connect(app, era);
+    expect(client.getNegotiatedProtocolVersion()).toBe(era === 'modern' ? '2026-07-28' : '2025-11-25');
 
     const { tools } = await client.listTools();
     expect(tools.map((t) => t.name).sort()).toEqual(TOOLS.map((t) => t.name).sort());

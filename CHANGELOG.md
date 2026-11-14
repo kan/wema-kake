@@ -11,6 +11,10 @@
 
 - 依存から `agents` を外した。MCP のハンドラを `@modelcontextprotocol/server` の `createMcpHandler` で作るようにした。`/mcp` の振る舞い（受ける MCP の版、`Origin` の検査、ツール）は変わらない（[#87](https://github.com/kan/wema-kake/issues/87)）
 
+### 修正
+
+- MCP の 2026-07-28 版のクライアントが `subscriptions/listen` を開くと、通知が来ないまま接続が開き続けていたのを直した。ツールの一覧の変更を通知しないと宣言し（`tools.listChanged: false`）、listen はすぐ閉じるようにした（[#89](https://github.com/kan/wema-kake/issues/89)）
+
 ## [0.1.9] - 2026-11-13
 
 ### 変更
