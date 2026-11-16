@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-11-17
+
 ### セキュリティ
 
 - `hono` を 4.13.18 に上げ、依存の範囲を `^4.13.18` にした。画像のアップロードの大きさの上限に使っている `bodyLimit()` で、小さく分けて送られた本文が上限の内側でもメモリを使い切ることがあった問題（[GHSA-39q9-qp46-w8xg](https://github.com/advisories/GHSA-39q9-qp46-w8xg)）の修正を含む
@@ -119,6 +121,7 @@
 
 最初の公開版。利用側が雛形（`npx @kanf/wema-kake init`）から自分の Worker を作り、npm のこのパッケージを使ってデプロイする。
 
+[0.1.11]: https://github.com/kan/wema-kake/releases/tag/v0.1.11
 [0.1.10]: https://github.com/kan/wema-kake/releases/tag/v0.1.10
 [0.1.9]: https://github.com/kan/wema-kake/releases/tag/v0.1.9
 [0.1.8]: https://github.com/kan/wema-kake/releases/tag/v0.1.8
