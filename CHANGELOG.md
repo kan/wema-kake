@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-11-17
+
 ### 追加
 
 - 雛形の README の「Access の設定」に、Muse のコールバック URL（`https://agent.meta.ai/api/hatch/oauth/callback`）を足した。Allowed redirect URIs に入れないと、Muse でコネクタを登録する途中で Access が `redirect_uri is not allowed by the account configuration` を返して断る。「MCP で書き込めるクライアントを限る」で並べる名前は `agent.meta.ai`
@@ -125,6 +127,7 @@
 
 最初の公開版。利用側が雛形（`npx @kanf/wema-kake init`）から自分の Worker を作り、npm のこのパッケージを使ってデプロイする。
 
+[0.1.12]: https://github.com/kan/wema-kake/releases/tag/v0.1.12
 [0.1.11]: https://github.com/kan/wema-kake/releases/tag/v0.1.11
 [0.1.10]: https://github.com/kan/wema-kake/releases/tag/v0.1.10
 [0.1.9]: https://github.com/kan/wema-kake/releases/tag/v0.1.9
