@@ -7,6 +7,10 @@
 
 ## [Unreleased]
 
+### 追加
+
+- 雛形の README の「Access の設定」に、Muse のコールバック URL（`https://agent.meta.ai/api/hatch/oauth/callback`）を足した。Allowed redirect URIs に入れないと、Muse でコネクタを登録する途中で Access が `redirect_uri is not allowed by the account configuration` を返して断る。「MCP で書き込めるクライアントを限る」で並べる名前は `agent.meta.ai`
+
 ## [0.1.11] - 2026-11-17
 
 ### セキュリティ

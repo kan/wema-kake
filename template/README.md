@@ -36,6 +36,7 @@ npm run deploy:first
 3. MCP を使うなら、そのアプリケーションの Additional settings の「OAuth」で **Managed OAuth** を有効にし、Allowed redirect URIs に、つなぐクライアントのコールバックを入れる
    - claude.ai: `https://claude.ai/api/mcp/auth_callback`
    - ChatGPT: `https://chatgpt.com/connector_platform_oauth_redirect`
+   - Muse: `https://agent.meta.ai/api/hatch/oauth/callback`
    - 手元のクライアント（Claude Code など）: Allow localhost clients と Allow loopback clients を有効にする
    - 定期タスクから使うなら、Grant session duration を 1 か月（上限）にする。既定のままだと、アプリケーションのセッションの長さで切れて、そのたびにコネクタの再認可が要る
 4. 未ログインの `curl` で確かめる。Managed OAuth を有効にしていれば、`/api/session` と `POST /mcp` は 401 を返し、`WWW-Authenticate` に `resource_metadata` が入る
@@ -55,7 +56,7 @@ MCP のサーバーの URL は `https://<ホスト名>/mcp` です。
 | `mcp: { write: false }` | なし。どのクライアントも読み取りのツール（`list_pages`、`search_pages`、`read_board`）だけを使える |
 | `mcp: { write: ['localhost'] }` | 並べたものだけ。ほかのクライアントは読み取りだけ |
 
-- 並べる名前は、認可のリダイレクト先のホスト名です。claude.ai は `claude.ai`、ChatGPT は `chatgpt.com`、手元のクライアント（Claude Code など）は `localhost`、ローカルでの開発（Access なし）は `local`。付箋の作成者や操作の履歴に出る `agent:<名前>` の部分と同じです
+- 並べる名前は、認可のリダイレクト先のホスト名です。claude.ai は `claude.ai`、ChatGPT は `chatgpt.com`、Muse は `agent.meta.ai`、手元のクライアント（Claude Code など）は `localhost`、ローカルでの開発（Access なし）は `local`。付箋の作成者や操作の履歴に出る `agent:<名前>` の部分と同じです
 - `agent:claude.ai` や `https://claude.ai` のように、名前でない書き方は、Worker の起動の時点でエラーにします（黙って読み取りだけにはしません）
 - 読み取りだけのクライアントには、書き込みのツールが一覧に出ません。名前を指定して呼ばれても断ります
 - 区別できるのはクライアントの種類までです。同じ claude.ai の、別の接続（別のコネクタ）を分けることはできません。手元のクライアントも、すべて `localhost` になります
