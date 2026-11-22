@@ -106,6 +106,26 @@ describe('revert', () => {
     expect((await board()).notes.map((n) => n.id)).toEqual(['edited']);
   });
 
+  it('書き込み者が変わっていても、取り消すかどうかは値で決める。取り消した人が書き込み者になる', async () => {
+    const { stub, apply, revert, board } = newPage();
+    const created = await apply([createNote('n1'), createNote('n2', { text: 'v1' })]);
+    // 人が色を変えると、書き込み者は人になる。それでも agent の作成の取り消しで消える（色は判定に使わない）
+    await apply([update('n1', {}, { color: '#000' })], USER);
+    expect((await stub.getSnapshot()).info.n1.createdBy).toBe(USER);
+
+    // agent が人の付箋（n2 は agent の作成だが、人が書き換えた）の本文を書き換え、取り消す
+    await apply([update('n2', { text: 'v1' }, { text: 'v2' })], USER);
+    const edited = await apply([update('n2', { text: 'v2' }, { text: 'v3' })], 'agent:other');
+    expect((await stub.getSnapshot()).info.n2.createdBy).toBe('agent:other');
+    expect(await revert(edited)).toMatchObject({ ok: true, applied: 1 });
+    // 本文は戻るが、書き込み者は前の人に戻らず、取り消した人になる（前の書き込み者は記録していない）
+    expect((await stub.getSnapshot()).info.n2.createdBy).toBe(USER);
+    expect((await board()).notes.find((n) => n.id === 'n2')?.text).toBe('v2');
+
+    expect(await revert(created)).toMatchObject({ ok: true, skipped: [{ id: 'n2', reason: 'modified' }] });
+    expect((await board()).notes.map((n) => n.id)).toEqual(['n2']);
+  });
+
   it('取り消す対象がすでにない場合と、戻す先がふさがっている場合', async () => {
     const { apply, revert, board } = newPage();
     await apply([createNote('n1'), createNote('n2')], USER);

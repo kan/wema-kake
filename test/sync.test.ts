@@ -20,6 +20,10 @@ class FakeBoard implements SyncBoard {
   edges = new Map<string, WemaEdge>();
   private handlers: ((payload: { deltas: HistoryDelta[] }) => void)[] = [];
 
+  getNote(id: string) {
+    return this.notes.get(id);
+  }
+
   on(_event: 'history:commit', handler: (payload: { deltas: HistoryDelta[] }) => void) {
     this.handlers.push(handler);
   }
@@ -459,11 +463,29 @@ describe('BoardSync', () => {
     await until(() => (a.sync.noteInfo('n2')?.updatedAt ?? 0) > created.updatedAt);
     expect(a.sync.noteInfo('n2')?.createdBy).toBe('agent:claude.ai');
 
+    // 移動以外の変更（色）をすると、書き込み者がその人になる。委任者は消える
+    b.board.act([{ type: 'note:update', noteId: 'n2', before: { color: '#FFF9C4' }, after: { color: '#BBDEFB' } }]);
+    await synced(b);
+    await until(() => a.sync.noteInfo('n2')?.createdBy === DEV);
+    expect(a.sync.noteInfo('n2')?.delegate).toBeNull();
+
+    // autoSize の付箋は、測った大きさが移動に載っても、書き込み者を変えない（wema が送る形）
+    await stub.applyOps({
+      actor: 'agent:claude.ai', clientId: 'mcp', opId: 'op2', deltas: [createNote('n3', { autoSize: true })],
+    });
+    await until(() => b.sync.noteInfo('n3') !== undefined);
+    b.board.act([
+      { type: 'note:update', noteId: 'n3', before: { x: 10, width: 200, height: 150 }, after: { x: 50, width: 240, height: 90 } },
+    ]);
+    await synced(b);
+    await until(() => (a.sync.noteInfo('n3')?.updatedAt ?? 0) > 0 && a.board.notes.get('n3')?.x === 50);
+    expect(a.sync.noteInfo('n3')?.createdBy).toBe('agent:claude.ai');
+
     // 変わった付箋を通知し、手元の値はサーバーのスナップショットと一致する
     expect(a.infoChanges).toEqual(expect.arrayContaining(['n1', 'n2']));
     const { info } = await stub.getSnapshot();
-    expect(Object.keys(info).sort()).toEqual(['n1', 'n2']);
-    for (const id of ['n1', 'n2']) {
+    expect(Object.keys(info).sort()).toEqual(['n1', 'n2', 'n3']);
+    for (const id of ['n1', 'n2', 'n3']) {
       expect(a.sync.noteInfo(id)).toEqual(info[id]);
       expect(b.sync.noteInfo(id)).toEqual(info[id]);
     }

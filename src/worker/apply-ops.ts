@@ -1,6 +1,6 @@
 import type { BoardData, HistoryDelta, WemaEdge, WemaNote } from '../shared/delta';
 import { CHILD_PAGE_KEY, childPageOf, childRejection } from '../shared/hierarchy';
-import type { NoteInfos } from '../shared/note-info';
+import { changesWriter, type NoteInfos } from '../shared/note-info';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import type { BoardState } from '../shared/tools';
 import { sanitizeHtml } from './sanitize';
@@ -286,6 +286,8 @@ export interface Applied {
  * - 更新で `after` にキーがなく `before` にあるものは、未設定に戻す
  * - 作成した付箋の作成者は `actor`（委任者は `delegate`）。`authors` に付箋の id があれば、その値にする
  *   （他のページから移した付箋の作成者を引き継ぐ）。`authors` はサーバーが読んだ値だけを渡すこと
+ * - 更新では、移動（と内容で決まる大きさ）以外の変更なら、書き込み者（`created_by`、`delegate`）を
+ *   `actor` にする（src/shared/note-info.ts の `changesWriter`。画面の `applyOpToInfos` と同じ規則）
  */
 export function applyDeltas(
   sql: SqlStorage,
@@ -328,7 +330,8 @@ export function applyDeltas(
         if (!('meta' in next) && 'meta' in d.before) next.meta = {};
         const keys = Object.keys(NOTE_COLUMNS).filter((k) => next[k] !== undefined);
         if (keys.length === 0) break;
-        const cur = readNoteFields(sql, d.noteId, keys);
+        // 大きさの決まり方（autoSize、foldable）は、書き込み者を変えるかの判定に使うので、いつも読む
+        const cur = readNoteFields(sql, d.noteId, [...new Set([...keys, ...FLAG_FIELDS])]);
         if (!cur) break;
         if (
           next.text !== undefined &&
@@ -340,11 +343,19 @@ export function applyDeltas(
         const changed = keys.filter((k) => !sameNoteValue(k, next[k], cur[k]));
         if (changed.length === 0) break;
         if (changed.includes('meta')) assertNotPlaced(sql, next as Pick<WemaNote, 'meta'>, d.noteId);
+        // 移動（と内容で決まる大きさ）以外の変更なら、書き込み者を、この操作の主体にする
+        const sized = {
+          autoSize: (next.autoSize ?? cur.autoSize) === true,
+          foldable: (next.foldable ?? cur.foldable) === true,
+        };
+        const writer = changesWriter(actor, changed, sized) ? [actor, delegate] : null;
         sql.exec(
           `UPDATE notes SET ${changed.map((k) => `${NOTE_COLUMNS[k]} = ?`).join(', ')},
+                            ${writer ? 'created_by = ?, delegate = ?,' : ''}
                             updated_at = ?, updated_by = ?
            WHERE id = ?`,
           ...changed.map((k) => toColumn(k, next[k])),
+          ...(writer ?? []),
           now, actor, d.noteId,
         );
         // 未設定の値（取り除いた meta、もともとなかった meta）は、キーごと入れない

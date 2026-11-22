@@ -194,6 +194,19 @@ describe('書き込みのツール', () => {
     expect(at.n2.y).toBeGreaterThanOrEqual(at.n1.y + at.n1.height);
   });
 
+  it('auto_layout は位置だけを変えるので、付箋の書き込み者を変えない。本文を変えると agent が書き込み者になる', async () => {
+    const { page, stub } = await newPage([
+      createNote('n1', { x: 500, y: 500 }), createNote('n2', { x: 500, y: 500 }),
+      { type: 'edge:create', edge: edge('e1', 'n1', 'n2') },
+    ]);
+    expect((await call('auto_layout', { page })).moved).toBe(1);
+    const { info } = await stub.getSnapshot();
+    expect([info.n1.createdBy, info.n2.createdBy]).toEqual(['user:a', 'user:a']);
+
+    await call('update_notes', { page, notes: [{ id: 'n1', text: '書き換え' }] });
+    expect((await stub.getSnapshot()).info.n1).toMatchObject({ createdBy: AGENT, delegate: ADMIN });
+  });
+
   it('auto_layout は、order の順に付箋を並べる', async () => {
     const { page, notesOf } = await newPage([
       createNote('d1', { x: 600, y: 0 }), createNote('d2', { x: 0, y: 0 }), createNote('d3', { x: 300, y: 0 }),
