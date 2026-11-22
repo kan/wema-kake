@@ -11,7 +11,6 @@
 
 - 設定に `admins`（管理者の email の一覧）を足した。設定すると、MCP（`/mcp`）を使えるのは、管理者が認可したコネクタだけになり、ほかは 403 を返す。省くと、これまでどおり全員を管理者として扱う。雛形の README の「管理者を決める」（[#106](https://github.com/kan/wema-kake/issues/106)）
 - AI（MCP）の操作と付箋に、そのコネクタを認可した人（委任者）を記録するようにした。付箋の作成者は「claude.ai（a さんの代理）」のように出る。`revert_operation` が「自分の操作」として取り消せるのは、同じクライアントで委任者も同じ操作だけになった。この版より前の AI の操作は委任者なしとして扱うので、`revert_operation` では取り消せない（画面の「操作の履歴」からは取り消せる）（[#106](https://github.com/kan/wema-kake/issues/106)）
-
 - 雛形の README の「Access の設定」に、Muse のコールバック URL（`https://agent.meta.ai/api/hatch/oauth/callback`）を足した。Allowed redirect URIs に入れないと、Muse でコネクタを登録する途中で Access が `redirect_uri is not allowed by the account configuration` を返して断る。「MCP で書き込めるクライアントを限る」で並べる名前は `agent.meta.ai`
 
 ## [0.1.11] - 2026-11-17
