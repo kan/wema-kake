@@ -31,6 +31,7 @@ export const en = {
   'failed.expiry': (reason) => `Could not change the auto-delete setting (${reason})`,
   'failed.restore': (reason) => `Could not restore the notes (${reason})`,
   'failed.lock': (reason) => `Could not change the lock (${reason})`,
+  'failed.reaction': (reason) => `Could not change the like (${reason})`,
 
   'zoom.reset': 'Reset to 100%',
   'zoom.out': 'Zoom out',
@@ -81,6 +82,8 @@ export const en = {
   'note.add': 'Add a note',
   'author.agentTitle': (name) => `Note made by AI (${name})`,
   'author.detail': (name, date) => `${name} · ${date}`,
+  'reaction.like': 'Like',
+  'reaction.by': (names) => `Liked by ${names}`,
   'author.onBehalf': (name, delegate) => `${name} (on behalf of ${delegate})`,
   'layout.title': 'Align and arrange',
   'align.left': 'Align left edges',

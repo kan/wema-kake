@@ -159,7 +159,30 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   const body = el('div', { className: 'page-body' }, container);
   // 子ページの付箋は、本文の代わりに子ページの概要を出す。表示名を押すと、子ページへ入る
   const childNotes = new ChildNotes(slug, (child, noteId) => void zoom.enter(noteId, `/p/${child}`));
-  const noteAuthors = new NoteAuthors();
+  /** ログインしている人の主体。いいねのボタンで、自分が付けたかを見分ける */
+  let me: string | null = null;
+  // ゴミ箱では、作成者の代わりに戻すボタンを出すので、いいねも出さない
+  const noteAuthors = new NoteAuthors({
+    me: () => me,
+    // 最初の同期の前は押せない。参照モードでも押せる（付箋の変更ではない）
+    react(noteId, kind, on) {
+      if (board.isReadOnly()) return;
+      api
+        .react(slug, noteId, kind, on)
+        .then((result) => sync.setReactions(noteId, result.reactions))
+        .catch(fail('failed.reaction'));
+    },
+  });
+  const sessionSignal = viewSignal();
+  // ロックの項目（管理者にだけ出す）でも使う
+  const sessionRequest = api.getSession();
+  sessionRequest
+    .then((session) => {
+      if (sessionSignal.aborted) return;
+      me = session.actor;
+      noteAuthors.refresh(board.getNotes().map((note) => note.id));
+    })
+    .catch(() => undefined);
   const board = new WemaBoard({
     container,
     readOnly: true,
@@ -753,9 +776,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       .catch(fail('failed.lock'));
   });
   lockItem.hidden = true;
-  const sessionSignal = viewSignal();
-  api
-    .getSession()
+  sessionRequest
     .then((session) => {
       if (!sessionSignal.aborted) lockItem.hidden = inTrash || session.admin !== true;
     })

@@ -6,6 +6,32 @@
 // （`meta` と同じく、再接続のときに現在値を送り直す）。
 import type { HistoryDelta } from './delta';
 
+/** 付箋に付けられるリアクションの種類。まず「いいね」だけ。種類を足すときは、末尾に足す */
+export const REACTION_KINDS = ['like'] as const;
+export type ReactionKind = (typeof REACTION_KINDS)[number];
+
+export const isReactionKind = (value: unknown): value is ReactionKind =>
+  (REACTION_KINDS as readonly unknown[]).includes(value);
+
+/**
+ * 付箋へのリアクション 1 つ。利用者ごとに、付箋 1 枚につき種類ごとに 1 つ。agent は、主体と委任者の
+ * 組ごとに 1 つ（管理者が 2 人以上いると、どちらの agent も同じ主体になるため）。
+ * **付箋の変更ではない**ので、付けても外しても、書き込み者と更新日時は変わらず、ops にも積まない
+ */
+export interface Reaction {
+  kind: ReactionKind;
+  /** 付けた主体（'user:<email>' / 'agent:<client>'） */
+  actor: string;
+  /** agent なら、その委任者（'user:<email>'） */
+  delegate?: string;
+  /** 付けた時刻（UNIX ミリ秒） */
+  at: number;
+}
+
+/** 同じ人（主体と委任者）のリアクションか */
+export const sameReactor = (r: Pick<Reaction, 'actor' | 'delegate'>, actor: string, delegate?: string | null) =>
+  r.actor === actor && (r.delegate ?? null) === (delegate ?? null);
+
 export interface NoteInfo {
   /**
    * 書き込み者（'user:<email>' / 'agent:<client>'）。分からなければ null。付箋を作った人で、その後に
@@ -19,6 +45,11 @@ export interface NoteInfo {
   delegate?: string | null;
   /** 最後に変更した時刻（UNIX ミリ秒）。移動や大きさの変更でも変わる */
   updatedAt: number;
+  /**
+   * リアクション（付けた順）。なければ省く。ops では届かず、`reactions` のメッセージで届く
+   * （src/shared/protocol.ts）
+   */
+  reactions?: Reaction[];
 }
 
 /** 付箋の id ごとの付加情報（スナップショットに載せる形） */
@@ -89,6 +120,7 @@ export function applyOpToInfos(
       if (infos.delete(d.note.id)) changed.add(d.note.id);
     } else if (d.type === 'note:update') {
       // 手元にない付箋の更新は、作成者が分からないまま、時刻だけを持つ
+      // リアクションなど、操作で変わらない項目は残す
       const cur = infos.get(d.noteId);
       const before = sizedBy(d.noteId) ?? {};
       const sized: SizedBy = {
@@ -98,6 +130,7 @@ export function applyOpToInfos(
       const keys = new Set([...Object.keys(d.before), ...Object.keys(d.after)]);
       const rewrite = changesWriter(actor, keys, sized);
       infos.set(d.noteId, {
+        ...cur,
         createdBy: rewrite ? actor : (cur?.createdBy ?? null),
         delegate: rewrite ? delegate : (cur?.delegate ?? null),
         updatedAt: at,

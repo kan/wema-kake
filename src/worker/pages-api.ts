@@ -1,5 +1,5 @@
 // ページの一覧、検索、バックリンクは D1 の索引から返す。ページの中身と表示名は DO から返す。
-import { Hono } from 'hono';
+import { type Context, Hono } from 'hono';
 import { createMiddleware } from 'hono/factory';
 import { INDEX_EXCERPT_LENGTH, MAX_BOOKMARKS, MAX_LIST_LIMIT, type PageSummary } from '../shared/api';
 import { requestLang } from '../shared/i18n';
@@ -320,6 +320,25 @@ pagesApi.post('/pages/:slug/notes', validSlug, async (c) => {
   }
   return c.json({ error: result.reason }, settingStatus(result.reason));
 });
+
+/**
+ * 付箋のリアクションを付ける（PUT）、外す（DELETE）。`kind` は `REACTION_KINDS` のどれか。付箋の変更では
+ * ないので、操作の履歴に積まず、付箋の書き込み者と更新日時も変えない。付箋の今のリアクションを返す。
+ * ページか付箋がなければ 404、知らない種類は 400
+ */
+const react = (on: boolean) =>
+  async (c: Context<AuthEnv, '/pages/:slug/notes/:noteId/reactions/:kind'>) => {
+    const result = await c.env.PAGE.getByName(c.req.param('slug')).react({
+      actor: c.get('actor'),
+      noteId: c.req.param('noteId'),
+      kind: c.req.param('kind'),
+      on,
+    });
+    if (result.ok) return c.json({ reactions: result.reactions });
+    return c.json({ error: result.reason }, result.reason === 'invalid reaction' ? 400 : 404);
+  };
+pagesApi.put('/pages/:slug/notes/:noteId/reactions/:kind', validSlug, react(true));
+pagesApi.delete('/pages/:slug/notes/:noteId/reactions/:kind', validSlug, react(false));
 
 /**
  * 表示名の変更。まだ書き込みのないページに対して呼ぶと、ページが作られる。

@@ -1,6 +1,6 @@
 import type { BoardData, HistoryDelta, WemaEdge, WemaNote } from '../shared/delta';
 import { CHILD_PAGE_KEY, childPageOf, childRejection } from '../shared/hierarchy';
-import { changesWriter, type NoteInfos } from '../shared/note-info';
+import { changesWriter, type NoteInfos, type Reaction, type ReactionKind } from '../shared/note-info';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
 import type { BoardState } from '../shared/tools';
 import { sanitizeHtml } from './sanitize';
@@ -178,23 +178,58 @@ const authorOf = (row: Obj): Author => ({
   delegate: (row.delegate as string | null | undefined) ?? null,
 });
 
-/** ボードと、付箋ごとの付加情報（作成者、更新日時）。画面に渡す */
+/**
+ * 付箋ごとのリアクション（付けた順）。`noteIds` を渡すと、その付箋だけ。リアクションのない付箋は入らない。
+ * 付箋のない行（付箋の削除と同時に付けたもの）は入れない
+ */
+export function readReactions(sql: SqlStorage, noteIds?: string[]): Map<string, Reaction[]> {
+  const rows = sql
+    .exec<{ note_id: string; kind: string; actor: string; delegate: string; created_at: number }>(
+      `SELECT note_id, kind, actor, delegate, created_at FROM reactions
+       WHERE (?1 IS NULL OR note_id IN (SELECT value FROM json_each(?1)))
+         AND note_id IN (SELECT id FROM notes)
+       ORDER BY created_at, rowid`,
+      noteIds === undefined ? null : JSON.stringify(noteIds),
+    )
+    .toArray();
+  const out = new Map<string, Reaction[]>();
+  for (const row of rows) {
+    const reaction: Reaction = { kind: row.kind as ReactionKind, actor: row.actor, at: row.created_at };
+    // 委任者のない主体は、空文字で保存している（主キーに NULL を入れないため）
+    if (row.delegate !== '') reaction.delegate = row.delegate;
+    const list = out.get(row.note_id);
+    if (list) list.push(reaction);
+    else out.set(row.note_id, [reaction]);
+  }
+  return out;
+}
+
+/** ボードと、付箋ごとの付加情報（作成者、更新日時、リアクション）。画面に渡す */
 export function readBoardWithInfos(sql: SqlStorage): { data: BoardData; info: NoteInfos } {
   const rows = noteRows(sql);
+  const reactions = readReactions(sql);
   // 代入で組み立てない。`__proto__` という id の付箋が、表から落ちる
   const info: NoteInfos = Object.fromEntries(
-    rows.map((row) => [
-      row.id as string,
-      { ...authorOf(row), updatedAt: row.updated_at as number },
-    ]),
+    rows.map((row) => {
+      const list = reactions.get(row.id as string);
+      return [
+        row.id as string,
+        { ...authorOf(row), updatedAt: row.updated_at as number, ...(list ? { reactions: list } : {}) },
+      ];
+    }),
   );
   return { data: { version: 1, notes: rows.map(rowToNote), edges: readEdges(sql) }, info };
 }
 
-/** 付箋（作成者つき）と接続線。agent に渡す */
+/** 付箋（作成者とリアクションつき）と接続線。agent に渡す */
 export function readBoardWithAuthors(sql: SqlStorage): Pick<BoardState, 'notes' | 'edges'> {
+  const reactions = readReactions(sql);
   return {
-    notes: noteRows(sql).map((row) => ({ ...rowToNote(row), createdBy: row.created_by as string | null })),
+    notes: noteRows(sql).map((row) => ({
+      ...rowToNote(row),
+      createdBy: row.created_by as string | null,
+      reactions: reactions.get(row.id as string) ?? [],
+    })),
     edges: readEdges(sql),
   };
 }
@@ -385,6 +420,8 @@ export function applyDeltas(
         }
         removedAuthors.set(cur.id, authorOf(row));
         sql.exec(`DELETE FROM notes WHERE id = ?`, cur.id);
+        // リアクションは、付箋と一緒に消す（Undo や取り消しで付箋が戻っても、戻らない）
+        sql.exec(`DELETE FROM reactions WHERE note_id = ?`, cur.id);
         applied.push({ type: 'note:delete', note: cur });
         break;
       }

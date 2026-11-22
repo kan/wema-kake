@@ -432,6 +432,29 @@ describe('BoardSync', () => {
     expect(connections).toBe(1);
   });
 
+  it('リアクションが付加情報に届き、付箋の更新では消えない', async () => {
+    const slug = `sync-${++pageCount}`;
+    const a = newClient(slug);
+    await synced(a);
+    a.board.act([createNote('n1')]);
+    await synced(a);
+    await until(() => a.sync.noteInfo('n1') !== undefined);
+
+    await api(`/api/pages/${slug}/notes/n1/reactions/like`, { method: 'PUT' });
+    await until(() => a.sync.noteInfo('n1')?.reactions?.length === 1);
+    expect(a.infoChanges).toContain('n1');
+
+    a.board.act([{ type: 'note:update', noteId: 'n1', before: { x: 10 }, after: { x: 300 } }]);
+    await synced(a);
+    expect(a.sync.noteInfo('n1')?.reactions).toHaveLength(1);
+    // 手元の値は、サーバーのスナップショットと一致する
+    const { info } = await env.PAGE.getByName(slug).getSnapshot();
+    expect(a.sync.noteInfo('n1')).toEqual(info.n1);
+
+    await api(`/api/pages/${slug}/notes/n1/reactions/like`, { method: 'DELETE' });
+    await until(() => a.sync.noteInfo('n1')?.reactions === undefined);
+  });
+
   it('付箋の作成者と更新日時が、操作の確定とスナップショットで届く', async () => {
     const slug = `sync-${++pageCount}`;
     const DEV = 'user:dev@example.com';

@@ -65,6 +65,7 @@ export function readOnlyAccess(access: BoardAccess): BoardAccess {
     apply: deny,
     moveNotes: deny,
     revert: deny,
+    react: deny,
   };
 }
 

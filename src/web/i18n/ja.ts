@@ -36,6 +36,7 @@ export const ja = {
   'failed.expiry': (reason: string) => `自動で消す設定の変更に失敗しました（${reason}）`,
   'failed.restore': (reason: string) => `元のページへ戻せませんでした（${reason}）`,
   'failed.lock': (reason: string) => `ロックの変更に失敗しました（${reason}）`,
+  'failed.reaction': (reason: string) => `いいねの変更に失敗しました（${reason}）`,
 
   // --- ヘッダーの部品 ---
   'zoom.reset': '等倍に戻す',
@@ -96,6 +97,9 @@ export const ja = {
   'author.agentTitle': (name: string) => `AI（${name}）が作った付箋`,
   /** 付箋の作成者と、最後に更新した日時 */
   'author.detail': (name: string, date: string) => `${name}・${date}`,
+  /** 付箋の下のいいねのボタンの説明。付けた人がいれば、その名前を並べる */
+  'reaction.like': 'いいね',
+  'reaction.by': (names: string) => `いいね: ${names}`,
   /** agent の付箋の作成者（委任者が分かるとき）。`delegate` は、agent を認可した人 */
   'author.onBehalf': (name: string, delegate: string) => `${name}（${delegate} さんの代理）`,
   'layout.title': '整列と配置',

@@ -379,6 +379,8 @@ describe('ツールの注釈', () => {
     const child = `mcp-${++pageCount}`;
     await check('create_page', { name: child, parent: a.page }, [a.page, child]);
     await check('move_page', { name: child, parent: b.page }, [a.page, b.page, child]);
+    await check('add_reaction', { page: a.page, note_id: 'n2' }, [a.page]);
+    await check('remove_reaction', { page: a.page, note_id: 'n2' }, [a.page]);
 
     // 冪等と申告したツールは、すべて確かめた
     const idempotent = TOOLS.filter((t) => !t.readOnly && t.idempotent).map((t) => t.name);

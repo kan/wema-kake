@@ -111,7 +111,8 @@ describe('applyOps', () => {
       // バージョン 3 で足したゴミ箱の表も消す
       state.storage.sql.exec(`DROP TABLE trashed`);
       state.storage.sql.exec(`DROP TABLE trash_origins`);
-      // バージョン 4 で足した委任者の列も消す
+      // バージョン 4 で足した委任者の列と、5 で足したリアクションの表も消す
+      state.storage.sql.exec(`DROP TABLE reactions`);
       state.storage.sql.exec(`ALTER TABLE ops DROP COLUMN delegate`);
       state.storage.sql.exec(`ALTER TABLE notes DROP COLUMN delegate`);
       state.storage.sql.exec(`UPDATE meta SET value = '1' WHERE key = 'version'`);
@@ -127,6 +128,7 @@ describe('applyOps', () => {
     const { stub, apply } = newPage();
     await apply([createNote('n1')], 'legacy', 'agent:claude.ai');
     await runInDurableObject(stub, (_do, state) => {
+      state.storage.sql.exec(`DROP TABLE reactions`);
       state.storage.sql.exec(`ALTER TABLE ops DROP COLUMN delegate`);
       state.storage.sql.exec(`ALTER TABLE notes DROP COLUMN delegate`);
       state.storage.sql.exec(`UPDATE meta SET value = '3' WHERE key = 'version'`);

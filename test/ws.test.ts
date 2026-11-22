@@ -127,12 +127,15 @@ describe('WebSocket', () => {
       summary: 'add_notes',
       deltas: [createNote('n3')],
     });
+    // リアクションも差分に出ないので、差分の後に全体が届く
+    expect(await again.next()).toEqual({ type: 'reactions', reactions: {}, replace: true });
 
     // 最新まで受け取っていれば、表示名の現在値だけを返す（切断中に変わっていても追従できる）
     await stub.setTitle('変更後の表示名');
     const upToDate = await open(slug);
     upToDate.send({ type: 'hello', clientId: 'cc', lastSeq: 3 });
     expect(await upToDate.nextMeta()).toMatchObject({ type: 'meta', title: '変更後の表示名' });
+    expect(await upToDate.next()).toEqual({ type: 'reactions', reactions: {}, replace: true });
     await upToDate.expectSilent();
   });
 

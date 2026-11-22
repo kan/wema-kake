@@ -281,3 +281,21 @@ a.icon-button { box-sizing: border-box; text-decoration: none; }
 /* ロックしたページの印（ヘッダーの表示名の後ろ） */
 .lock-badge { color: #888; flex: none; }
 .lock-badge[hidden] { display: none; }
+
+/* 付箋の下のいいね（note-authors.ts）。作成者と日時の表示と同じ見た目。付いていれば、ホバーして
+   いなくても出す（縦に積んでいる間は、ほかの表示と同じく、選んだときだけ） */
+.note-reaction {
+  box-sizing: border-box; height: 18px; border: 1px solid rgb(0 0 0 / 0.15); border-radius: 9px;
+  background: #fff; color: #555; font: inherit; font-size: 11px; line-height: 16px;
+  display: inline-flex; align-items: center; gap: 3px; padding: 0 6px; flex: none; cursor: pointer;
+  visibility: hidden;
+}
+.note-reaction svg { width: 11px; height: 11px; }
+.note-reaction:hover:not(:disabled) { background: #eee; }
+.note-reaction:disabled { cursor: default; }
+.note-reaction.mine { color: #1d4ed8; border-color: rgb(29 78 216 / 0.4); background: #eff6ff; }
+.note-reaction.has-reactions,
+.wema-note:hover .note-reaction,
+.wema-note-selected .note-reaction { visibility: visible; }
+.wema-board.wema-stacked .note-reaction { display: none; }
+.wema-board.wema-stacked .wema-note-selected .note-reaction { display: inline-flex; }

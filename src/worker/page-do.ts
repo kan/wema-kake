@@ -18,6 +18,7 @@ import {
   type WemaNote,
 } from '../shared/delta';
 import { systemSummary } from '../shared/op-summary';
+import { isReactionKind, type Reaction } from '../shared/note-info';
 import { DAY_MS, EXPIRE_DAYS_CHOICES, isExpirable, isTrash, TRASH_EXPIRE_DAYS, TRASH_SLUG } from '../shared/trash';
 import {
   CLOSE_AUTH_EXPIRED,
@@ -41,6 +42,7 @@ import {
 import {
   applyDeltas,
   type Author,
+  readReactions,
   childNoteColors,
   childPages,
   readBoard,
@@ -337,6 +339,18 @@ CREATE TABLE trash_origins (
   `
 ALTER TABLE ops ADD COLUMN delegate TEXT;
 ALTER TABLE notes ADD COLUMN delegate TEXT;
+`,
+  // 付箋へのリアクション（src/shared/note-info.ts の Reaction）。ops には積まない。
+  // delegate は、委任者のない主体では空文字（主キーに NULL を入れると、同じ人の行が重なるため）
+  `
+CREATE TABLE reactions (
+  note_id    TEXT NOT NULL,
+  kind       TEXT NOT NULL,
+  actor      TEXT NOT NULL,
+  delegate   TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (note_id, kind, actor, delegate)
+);
 `,
 ];
 
@@ -1193,6 +1207,47 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * 先に保存まで進むと、同じクライアントの操作が送信順に適用されなくなる（作成より先に
    * その付箋の更新が処理されるなど）ので、呼び出しを 1 つずつ順に処理する。
    */
+  /**
+   * 付箋にリアクションを付ける（`on` が false なら外す）。同じ人（主体と委任者）は、付箋 1 枚につき種類ごとに
+   * 1 つ。付けてあるものを付ける、付けていないものを外すのは、何もしない（成功を返す）。
+   * **付箋の変更ではない**ので、ops に記録せず、付箋の書き込み者と更新日時も変えない。変わったら、
+   * 接続中のブラウザへ `reactions` のメッセージで届ける。付箋の今のリアクションを返す
+   */
+  react(input: {
+    actor: string;
+    delegate?: string;
+    noteId: string;
+    kind: unknown;
+    on: boolean;
+  }): Promise<{ ok: true; reactions: Reaction[] } | { ok: false; reason: string }> {
+    return this.write(
+      async () => {
+        if (!isReactionKind(input.kind)) return { ok: false as const, reason: 'invalid reaction' };
+        if (this.version === 0) return { ok: false as const, reason: REASON_PAGE_NOT_FOUND };
+        const { actor, noteId, kind, on } = input;
+        if (!this.sql.exec(`SELECT 1 FROM notes WHERE id = ?`, noteId).toArray().length) {
+          return { ok: false as const, reason: `note not found: ${noteId}` };
+        }
+        const delegate = input.delegate ?? '';
+        const cursor = on
+          ? this.sql.exec(
+              `INSERT OR IGNORE INTO reactions (note_id, kind, actor, delegate, created_at) VALUES (?, ?, ?, ?, ?)`,
+              noteId, kind, actor, delegate, Date.now(),
+            )
+          : this.sql.exec(
+              `DELETE FROM reactions WHERE note_id = ? AND kind = ? AND actor = ? AND delegate = ?`,
+              noteId, kind, actor, delegate,
+            );
+        const reactions = readReactions(this.sql, [noteId]).get(noteId) ?? [];
+        if (cursor.rowsWritten > 0) {
+          this.broadcast(JSON.stringify({ type: 'reactions', reactions: { [noteId]: reactions } } satisfies ServerMsg));
+        }
+        return { ok: true as const, reactions };
+      },
+      { ok: false, reason: REASON_PAGE_DELETED },
+    );
+  }
+
   applyOps(input: ApplyInput): Promise<ApplyResult> {
     return this.write(() => this.applyOpsInOrder(input, { trash: true, respectLock: true }), {
       ok: false, reason: REASON_PAGE_DELETED,
@@ -1872,6 +1927,16 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       const fixups = own ? (row.fixups as string | null) : null;
       send(ws, opsJson(head, row.body as string, fixups));
     }
+    // リアクションも ops に積まないので、差分に出ない。差分を送った後に（作られた付箋に付けられるよう）、
+    // ページ全体の今の値を送る
+    send(
+      ws,
+      JSON.stringify({
+        type: 'reactions',
+        reactions: Object.fromEntries(readReactions(this.sql)),
+        replace: true,
+      } satisfies ServerMsg),
+    );
   }
 
   /** `lastSeq` 以降の変更を、差分（ops の再送）で返せるか */

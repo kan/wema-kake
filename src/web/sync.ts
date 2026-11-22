@@ -2,7 +2,7 @@
 // ボードの操作の確定（history:commit）を ops として送り、受信した ops を applyRemote() で反映する。
 // DOM には依存しない（ボードとソケットは引数で受け取る）ので、テストからも動かせる。
 import { type BoardData, type HistoryDelta, invertDeltas, type WemaNote } from '../shared/delta';
-import { applyOpToInfos, type NoteInfo } from '../shared/note-info';
+import { applyOpToInfos, type NoteInfo, type Reaction } from '../shared/note-info';
 import {
   CLOSE_AUTH_EXPIRED,
   CLOSE_PAGE_DELETED,
@@ -280,6 +280,9 @@ export class BoardSync {
       case 'ops':
         this.onOps(msg);
         break;
+      case 'reactions':
+        this.onReactions(msg.reactions, msg.replace === true);
+        break;
       case 'reject':
         this.onReject(msg.opId, msg.reason, msg.fixups ?? []);
         break;
@@ -320,6 +323,31 @@ export class BoardSync {
   private applyServer(deltas: HistoryDelta[]): void {
     if (deltas.length === 0) return;
     this.board.applyRemote([...deltas, ...this.pendingUpdates(targetsOf(deltas))]);
+  }
+
+  /**
+   * 付箋のリアクションを、付加情報に反映する。`replace` なら、ここにない付箋のリアクションを消す。
+   * 手元に付加情報のない付箋（まだ確定していない、もうない）は、無視する
+   */
+  private onReactions(reactions: Record<string, Reaction[]>, replace: boolean): void {
+    const changed = new Set<string>();
+    const set = (id: string, list: Reaction[]) => {
+      const info = this.infos.get(id);
+      if (!info) return;
+      const { reactions: _, ...rest } = info;
+      this.infos.set(id, list.length > 0 ? { ...rest, reactions: list } : rest);
+      changed.add(id);
+    };
+    if (replace) {
+      for (const [id, info] of this.infos) if (info.reactions && !Object.hasOwn(reactions, id)) set(id, []);
+    }
+    for (const [id, list] of Object.entries(reactions)) set(id, list);
+    if (changed.size > 0) this.hooks.onNoteInfo?.(changed);
+  }
+
+  /** 付箋の今のリアクション（API の応答）を反映する。切断中で、配信が届かないときのため */
+  setReactions(noteId: string, reactions: Reaction[]): void {
+    this.onReactions({ [noteId]: reactions }, false);
   }
 
   private onOps(msg: OpsMsg): void {

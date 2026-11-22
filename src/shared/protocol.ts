@@ -1,4 +1,5 @@
 import type { HistoryDelta, Snapshot } from './delta';
+import type { Reaction } from './note-info';
 
 /** 認証の期限が切れた接続を、サーバーが閉じるときのコード。クライアントは再読み込みして認証し直す */
 export const CLOSE_AUTH_EXPIRED = 4401;
@@ -58,8 +59,20 @@ export interface OpsMsg {
   fixups?: HistoryDelta[];
 }
 
+/**
+ * 付箋のリアクションが変わった。付箋の id から、その付箋の今のリアクションの全体（なければ空の配列）。
+ * `replace` なら、ページ全体の今のリアクションで、ここにない付箋にはリアクションがない（再接続して
+ * 差分で追いつくときに送る。リアクションは ops に積まないので、差分に出ない）
+ */
+export interface ReactionsMsg {
+  type: 'reactions';
+  reactions: Record<string, Reaction[]>;
+  replace?: true;
+}
+
 /** サーバー → ブラウザ */
 export type ServerMsg =
+  | ReactionsMsg
   | ({ type: 'snapshot' } & Snapshot)
   | OpsMsg
   /**
