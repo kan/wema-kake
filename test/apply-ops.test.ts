@@ -111,6 +111,9 @@ describe('applyOps', () => {
       // バージョン 3 で足したゴミ箱の表も消す
       state.storage.sql.exec(`DROP TABLE trashed`);
       state.storage.sql.exec(`DROP TABLE trash_origins`);
+      // バージョン 4 で足した委任者の列も消す
+      state.storage.sql.exec(`ALTER TABLE ops DROP COLUMN delegate`);
+      state.storage.sql.exec(`ALTER TABLE notes DROP COLUMN delegate`);
       state.storage.sql.exec(`UPDATE meta SET value = '1' WHERE key = 'version'`);
     });
     await evictDurableObject(stub);
@@ -118,6 +121,26 @@ describe('applyOps', () => {
     expect((await stub.getSnapshot()).data.notes).toEqual([note('n1')]);
     await apply([{ type: 'note:update', noteId: 'n1', before: {}, after: { foldable: true } }]);
     expect((await stub.getSnapshot()).data.notes[0].foldable).toBe(true);
+  });
+
+  it('委任者の列がないページ（スキーマのバージョン 3）を移行する。前の行は委任者なし', async () => {
+    const { stub, apply } = newPage();
+    await apply([createNote('n1')], 'legacy', 'agent:claude.ai');
+    await runInDurableObject(stub, (_do, state) => {
+      state.storage.sql.exec(`ALTER TABLE ops DROP COLUMN delegate`);
+      state.storage.sql.exec(`ALTER TABLE notes DROP COLUMN delegate`);
+      state.storage.sql.exec(`UPDATE meta SET value = '3' WHERE key = 'version'`);
+    });
+    await evictDurableObject(stub);
+
+    expect((await stub.getSnapshot()).info.n1).toMatchObject({ createdBy: 'agent:claude.ai', delegate: null });
+    expect((await stub.listOps())[0]).toMatchObject({ actor: 'agent:claude.ai', delegate: null });
+    await stub.applyOps({
+      actor: 'agent:claude.ai', delegate: 'user:a@example.com', clientId: 'mcp', opId: 'with-delegate',
+      deltas: [createNote('n2')],
+    });
+    expect((await stub.getSnapshot()).info.n2).toMatchObject({ delegate: 'user:a@example.com' });
+    expect((await stub.listOps())[0]).toMatchObject({ delegate: 'user:a@example.com' });
   });
 
   it('text をサニタイズして保存し、送信元向けの fixup を返す', async () => {

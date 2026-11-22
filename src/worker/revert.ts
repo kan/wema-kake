@@ -50,12 +50,13 @@ export function applyRevert(
   inverse: HistoryDelta[],
   actor: string,
   now: number,
+  delegate: string | null = null,
 ): { deltas: HistoryDelta[]; skipped: Skipped[] } {
   const deltas: HistoryDelta[] = [];
   const skipped: Skipped[] = [];
   // 1 つずつ適用する。後のデルタの判定が、先のデルタの結果（復活した付箋など）を見られるようにする
   const apply = (d: HistoryDelta) => {
-    deltas.push(...applyDeltas(sql, [d], actor, now).deltas);
+    deltas.push(...applyDeltas(sql, [d], actor, now, undefined, undefined, delegate).deltas);
   };
   /** 更新の取り消しで、戻してよいフィールドだけの before / after を返す。戻さない分は skipped に入れる */
   const restorable = (

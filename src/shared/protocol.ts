@@ -30,6 +30,8 @@ export interface OpsMsg {
   type: 'ops';
   seq: number;
   actor: string;
+  /** agent の操作なら、その委任者（agent を認可した人の 'user:<email>'）。分からなければ付かない */
+  delegate?: string;
   clientId: string;
   opId: string;
   /**

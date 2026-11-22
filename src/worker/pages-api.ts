@@ -5,6 +5,7 @@ import { INDEX_EXCERPT_LENGTH, MAX_BOOKMARKS, MAX_LIST_LIMIT, type PageSummary }
 import { requestLang } from '../shared/i18n';
 import { isValidSlug } from '../shared/slug';
 import type { AuthEnv } from './access';
+import { isAdmin } from './config';
 import { createFirstPage } from './first-page';
 import { REASON_PAGE_NOT_FOUND, type RevertFailure } from './page-do';
 import { listPages, searchPages, searchRoots } from './page-queries';
@@ -27,7 +28,7 @@ export const validSlug = createMiddleware<AuthEnv>(async (c, next) => {
 export const pagesApi = new Hono<AuthEnv>();
 
 /** 認証が有効かを確かめるための、軽い問い合わせ先（切断中に認証が切れたかをブラウザが調べる） */
-pagesApi.get('/session', (c) => c.json({ actor: c.get('actor') }));
+pagesApi.get('/session', (c) => c.json({ actor: c.get('actor'), admin: isAdmin(c.get('config'), c.get('email')) }));
 
 /**
  * 一覧のボード用。ルートのページ（親のないページ）を新しい順に返す。子ページと孫ページは、

@@ -319,7 +319,7 @@ export class BoardSync {
     // 付箋を描く処理が読めるよう、ボードに反映する前に更新する
     const changed =
       msg.createdAt !== undefined && msg.seq > (this.lastSeq ?? 0)
-        ? applyOpToInfos(this.infos, msg.actor, msg.createdAt, msg.deltas)
+        ? applyOpToInfos(this.infos, msg.actor, msg.createdAt, msg.deltas, msg.delegate ?? null)
         : undefined;
     this.lastSeq = Math.max(this.lastSeq ?? 0, msg.seq);
     this.applyOps(msg);

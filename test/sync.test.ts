@@ -445,10 +445,14 @@ describe('BoardSync', () => {
 
     // agent（MCP）が作った付箋を、人が動かす。作成者は agent のまま、時刻だけが進む
     const stub = env.PAGE.getByName(slug);
-    await stub.applyOps({ actor: 'agent:claude.ai', clientId: 'mcp', opId: 'op1', deltas: [createNote('n2')] });
+    await stub.applyOps({
+      actor: 'agent:claude.ai', delegate: 'user:admin@example.com', clientId: 'mcp', opId: 'op1',
+      deltas: [createNote('n2')],
+    });
     await until(() => a.sync.noteInfo('n2') !== undefined);
     const created = a.sync.noteInfo('n2')!;
     expect(created.createdBy).toBe('agent:claude.ai');
+    expect(created.delegate).toBe('user:admin@example.com');
     await new Promise((resolve) => setTimeout(resolve, 5));
     b.board.act([{ type: 'note:update', noteId: 'n2', before: { x: 10 }, after: { x: 300 } }]);
     await synced(b);

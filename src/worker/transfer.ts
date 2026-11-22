@@ -16,6 +16,8 @@ const REMOVE_CLIENT_ID = 'transfer';
 export interface TransferInput {
   /** 変更の主体。呼び出し側が認証結果から決める */
   actor: string;
+  /** 主体が agent なら、その委任者（`ApplyInput.delegate`） */
+  delegate?: string;
   clientId: string;
   /** 同じ値で送り直しても、二重には置かない（消す操作も同じ値で記録する） */
   opId: string;
@@ -54,7 +56,7 @@ export type TransferResult =
   | { ok: false; code: TransferFailure; reason: string };
 
 export async function transferNotes(env: WemaKakeEnv, input: TransferInput): Promise<TransferResult> {
-  const { actor, clientId, opId, from, to, copy, summary, placeAs } = input;
+  const { actor, delegate, clientId, opId, from, to, copy, summary, placeAs } = input;
   let noteIds: string[];
   let positions: Map<string, { x: number; y: number }>;
   try {
@@ -69,13 +71,13 @@ export async function transferNotes(env: WemaKakeEnv, input: TransferInput): Pro
   }
 
   const taken = await env.PAGE.getByName(to).takeNotes({
-    actor, clientId, opId, from, noteIds, positions, keepAuthors: !copy, summary, placeAs,
+    actor, delegate, clientId, opId, from, noteIds, positions, keepAuthors: !copy, summary, placeAs,
   });
   if (!taken.ok) return { ok: false, code: taken.notFound ? 'not-found' : 'invalid', reason: taken.reason };
   if (copy) return { ok: true, noteIds: taken.noteIds, received: taken.seq, removed: null };
 
   const removed = await env.PAGE.getByName(from)
-    .removeNotes({ actor, clientId: REMOVE_CLIENT_ID, opId, noteIds, versions: taken.versions, to, summary })
+    .removeNotes({ actor, delegate, clientId: REMOVE_CLIENT_ID, opId, noteIds, versions: taken.versions, to, summary })
     .catch((e: unknown) => ({ ok: false as const, reason: e instanceof Error ? e.message : String(e) }));
   if (!removed.ok) {
     return {

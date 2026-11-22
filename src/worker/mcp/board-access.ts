@@ -10,14 +10,29 @@ import { transferNotes } from '../transfer';
 /** ops に記録する clientId。MCP にはブラウザのような接続ごとの id がない */
 const MCP_CLIENT_ID = 'mcp';
 
+/** MCP のツールを呼ぶ主体 */
+export interface McpPrincipal {
+  /** 'agent:<client>' */
+  actor: string;
+  /** その agent を認可した人（'user:<email>'） */
+  delegate: string;
+}
+
 export class ServerBoardAccess implements BoardAccess {
+  private readonly actor: string;
+  private readonly delegate: string;
+
   /**
-   * @param actor 変更の主体（'agent:<client>'）。認証結果から決めたものを渡す
+   * @param principal 変更の主体（'agent:<client>'）と、その委任者（agent を認可した人の 'user:<email>'）。
+   *   認証結果から決めたものを渡す
    */
   constructor(
     private readonly env: WemaKakeEnv,
-    private readonly actor: string,
-  ) {}
+    principal: McpPrincipal,
+  ) {
+    this.actor = principal.actor;
+    this.delegate = principal.delegate;
+  }
 
   private page(slug: string) {
     return this.env.PAGE.getByName(slug);
@@ -59,6 +74,7 @@ export class ServerBoardAccess implements BoardAccess {
   async apply(slug: string, deltas: HistoryDelta[], summary: string): Promise<ApplyOutcome> {
     const result = await this.page(slug).applyOps({
       actor: this.actor,
+      delegate: this.delegate,
       clientId: MCP_CLIENT_ID,
       opId: crypto.randomUUID(),
       deltas,
@@ -74,6 +90,7 @@ export class ServerBoardAccess implements BoardAccess {
   async moveNotes(from: string, to: string, ids: string[], summary: string) {
     const result = await transferNotes(this.env, {
       actor: this.actor,
+      delegate: this.delegate,
       clientId: MCP_CLIENT_ID,
       opId: crypto.randomUUID(),
       from,
@@ -88,13 +105,15 @@ export class ServerBoardAccess implements BoardAccess {
   }
 
   async ownOps(slug: string): Promise<OpSummary[]> {
-    return this.page(slug).listOps({ actor: this.actor });
+    // 管理者が 2 人以上いると、どちらの agent も同じ主体になる。委任者でも絞る
+    return this.page(slug).listOps({ actor: this.actor, delegate: this.delegate });
   }
 
   async revert(slug: string, seq: number, summary: string): Promise<RevertOutcome> {
     const result = await this.page(slug).revert({
       seq,
       actor: this.actor,
+      delegate: this.delegate,
       clientId: MCP_CLIENT_ID,
       opId: crypto.randomUUID(),
       // agent が取り消せるのは、自分の操作だけ

@@ -77,6 +77,8 @@ export interface IndexLink {
 export interface OpSummary {
   seq: number;
   actor: string;
+  /** agent の操作なら、その委任者（'user:<email>'）。分からなければ null */
+  delegate: string | null;
   summary: string | null;
   /** この操作が取り消しなら、取り消した対象の seq。取り消しでなければ null */
   reverts: number | null;

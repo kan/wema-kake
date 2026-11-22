@@ -15,6 +15,9 @@ const config: WemaKakeConfig = {
   mcp: true,
   // ページが 1 つもないときに、使い方の付箋を置いたページを 1 回だけ作る。省くと true
   firstPage: true,
+  // 管理者の email。MCP（/mcp）を使えるのは、管理者が認可したクライアントだけになる。省くと、
+  // Access を通ったすべての人を管理者として扱う（README の「管理者を決める」）
+  // admins: ['you@example.com'],
 };
 
 export default config;

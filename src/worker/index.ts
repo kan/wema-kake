@@ -1,7 +1,7 @@
 import { Hono, type HonoRequest } from 'hono';
 import { type AuthEnv, requireAccess } from './access';
 import { assetServer } from './assets';
-import { canWrite, resolveConfig, type WemaKakeConfig } from './config';
+import { canWrite, isAdmin, resolveConfig, type WemaKakeConfig } from './config';
 import { images } from './images';
 import { handleMcp } from './mcp/server';
 import { ACTOR_HEADER, AUTH_EXPIRES_HEADER } from './page-do';
@@ -39,9 +39,14 @@ export function createApp(options: WemaKakeConfig = {}) {
       '/mcp',
       (c, next) => (isForeignOrigin(c.req) ? c.json({ error: 'forbidden origin' }, 403) : next()),
       requireAccess('agent'),
-      (c) => {
+      async (c) => {
+        // コネクタを導入できるのは管理者だけ。OAuth のクライアントの登録と認可は Access が受けるので
+        // 止められないが、管理者でない人が認可した agent は、ここでツールを使えなくなる
+        const email = c.get('email');
+        if (!isAdmin(config, email)) return c.json({ error: 'only administrators can use MCP' }, 403);
         const actor = c.get('actor');
-        return handleMcp(c.req.raw, c.env, actor, canWrite(mcp, actor));
+        // 委任者は、人の主体と同じ形（`user:<email>`）で記録する
+        return handleMcp(c.req.raw, c.env, { actor, delegate: `user:${email}` }, canWrite(mcp, actor));
       },
     );
   } else {

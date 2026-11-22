@@ -31,6 +31,12 @@ export interface WemaKakeConfig {
    * 既定は `true`
    */
   firstPage?: boolean;
+  /**
+   * 管理者の email の一覧。MCP（`/mcp`）のコネクタを使えるのは、管理者が認可したものだけになる
+   * （JWT の `email` で判定する。英字の大文字と小文字は区別しない）。
+   * 省くと、Access を通ったすべての人を管理者として扱う（これまでの動き）。空の配列なら、管理者はいない
+   */
+  admins?: readonly string[];
 }
 
 /** `mcp` を有効にするときの設定 */
@@ -40,7 +46,30 @@ export interface McpConfig {
 }
 
 /** 既定の値を埋めた設定。`mcp` は、無効なら `false` */
-export type ResolvedConfig = SiteConfig & { mcp: false | McpConfig; firstPage: boolean };
+export type ResolvedConfig = SiteConfig & {
+  mcp: false | McpConfig;
+  firstPage: boolean;
+  /** 管理者の email（小文字にしたもの）。null なら、全員が管理者 */
+  admins: ReadonlySet<string> | null;
+};
+
+function resolveAdmins(admins: unknown): ReadonlySet<string> | null {
+  if (admins === undefined) return null;
+  if (!Array.isArray(admins)) throw new TypeError('wema-kake: admins must be an array of emails');
+  for (const email of admins) {
+    // 主体の形（`user:a@example.com`）で書くと、どの email にも当たらず、黙って誰も管理者でなくなる
+    if (typeof email !== 'string' || !/^[^\s@:]+@[^\s@:]+$/.test(email)) {
+      throw new TypeError(`wema-kake: admins: not an email: ${String(email)}`);
+    }
+  }
+  return new Set(admins.map((email: string) => email.toLowerCase()));
+}
+
+/** `email` の人が管理者か。email が分からなければ、管理者ではない */
+export function isAdmin(config: Pick<ResolvedConfig, 'admins'>, email: string | undefined): boolean {
+  if (config.admins === null) return true;
+  return email !== undefined && config.admins.has(email.toLowerCase());
+}
 
 function resolveMcp(mcp: unknown): false | McpConfig {
   if (mcp === false) return false;
@@ -70,14 +99,20 @@ export function canWrite(mcp: McpConfig, actor: string): boolean {
  * リクエストを受けてから気付く形にしない
  */
 export function resolveConfig(config: WemaKakeConfig = {}): ResolvedConfig {
-  const { siteName = DEFAULT_SITE.siteName, defaultLang = DEFAULT_SITE.defaultLang, mcp = true, firstPage = true } = config;
+  const {
+    siteName = DEFAULT_SITE.siteName,
+    defaultLang = DEFAULT_SITE.defaultLang,
+    mcp = true,
+    firstPage = true,
+    admins,
+  } = config;
   if (typeof siteName !== 'string' || siteName.trim() === '') {
     throw new TypeError('wema-kake: siteName must be a non-empty string');
   }
   if (!isLang(defaultLang)) throw new TypeError(`wema-kake: unknown defaultLang: ${String(defaultLang)}`);
   // JavaScript から渡されると型の検査を通らないので、0 のような値をここで断る
   if (typeof firstPage !== 'boolean') throw new TypeError('wema-kake: firstPage must be a boolean');
-  return { siteName, defaultLang, mcp: resolveMcp(mcp), firstPage };
+  return { siteName, defaultLang, mcp: resolveMcp(mcp), firstPage, admins: resolveAdmins(admins) };
 }
 
 /**

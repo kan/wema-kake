@@ -39,6 +39,7 @@ import {
 } from '../shared/hierarchy';
 import {
   applyDeltas,
+  type Author,
   childNoteColors,
   childPages,
   readBoard,
@@ -108,9 +109,17 @@ function isExpired(attachment: Attachment): boolean {
 
 type OpsHead = Omit<OpsMsg, 'deltas' | 'fixups'>;
 
+/** 書き込みの主体と、その委任者（`ApplyInput.delegate`） */
+type Writer = Pick<ApplyInput, 'actor' | 'delegate'>;
+
 export interface ApplyInput {
   /** 'user:<email>' / 'agent:<client>'。呼び出し側（Worker）が認証結果から決める */
   actor: string;
+  /**
+   * agent の操作の委任者（その agent を認可した人の 'user:<email>'）。人の操作と、委任者の分からない
+   * 操作では省く。呼び出し側（Worker）が認証結果から決める
+   */
+  delegate?: string;
   clientId: string;
   opId: string;
   /** 外から来た値をそのまま渡す。検証は applyOps が行う */
@@ -123,7 +132,7 @@ export interface ApplyInput {
 /** ページがないときの `reason`。Worker は、これを 404 にする */
 export const REASON_PAGE_NOT_FOUND = 'page not found';
 
-export interface ReceiveInput extends Pick<ApplyInput, 'actor' | 'clientId' | 'opId'> {
+export interface ReceiveInput extends Pick<ApplyInput, 'actor' | 'delegate' | 'clientId' | 'opId'> {
   /** 置く付箋と、その間の接続線。外から来た値をそのまま渡す。検証は receiveNotes が行う */
   notes: unknown;
   edges: unknown;
@@ -131,7 +140,7 @@ export interface ReceiveInput extends Pick<ApplyInput, 'actor' | 'clientId' | 'o
   from: string;
 }
 
-export interface TakeInput extends Pick<ApplyInput, 'actor' | 'clientId' | 'opId'> {
+export interface TakeInput extends Pick<ApplyInput, 'actor' | 'delegate' | 'clientId' | 'opId'> {
   /** 付箋が今あるページ */
   from: string;
   /** 移す（写す）付箋の、元のページでの id。呼び出し側（Worker）が検証する */
@@ -161,7 +170,7 @@ export type TakeResult =
   | { ok: true; seq: number; noteIds: string[]; versions: NoteVersions | null }
   | { ok: false; reason: string; notFound?: true };
 
-export interface RemoveInput extends Pick<ApplyInput, 'actor' | 'clientId' | 'opId'> {
+export interface RemoveInput extends Pick<ApplyInput, 'actor' | 'delegate' | 'clientId' | 'opId'> {
   noteIds: string[];
   /**
    * takeNotes が読んだときの版。これと違う付箋（読んだ後に変わった、消えた）は消さずに、`kept` で返す
@@ -219,9 +228,14 @@ export interface RevertInput {
   seq: number;
   /** 取り消しを行う主体。呼び出し側（Worker）が認証結果から決める */
   actor: string;
+  /** 主体が agent なら、その委任者（`ApplyInput.delegate`） */
+  delegate?: string;
   clientId: string;
   opId: string;
-  /** 自分（同じ主体）の操作だけを取り消せるようにする。MCP の revert_operation で使う */
+  /**
+   * 自分（同じ主体で、委任者も同じ）の操作だけを取り消せるようにする。MCP の revert_operation で使う。
+   * 委任者を記録する前の操作（委任者なし）は、委任者のある主体からは取り消せない
+   */
   ownOnly?: boolean;
   /** 一覧に出す説明。省略すると、取り消しを表す符号（src/shared/op-summary.ts） */
   summary?: string;
@@ -313,6 +327,12 @@ CREATE TABLE trash_origins (
   original_id TEXT NOT NULL,
   x REAL NOT NULL, y REAL NOT NULL
 );
+`,
+  // agent の操作と付箋の、委任者（その agent を認可した人の 'user:<email>'）。管理者が 2 人以上いると、
+  // どちらの agent も同じ主体（agent:claude.ai）になるため。これより前の行は、委任者なし（NULL）
+  `
+ALTER TABLE ops ADD COLUMN delegate TEXT;
+ALTER TABLE notes ADD COLUMN delegate TEXT;
 `,
 ];
 
@@ -1121,7 +1141,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * 消した後に呼ぶので、失敗しても消した操作は取り消さない。消した付箋は、その操作の記録（ops）に
    * 残っていて、操作の履歴から取り消せば戻る
    */
-  private async sendToTrash(applied: HistoryDelta[], authors: ReadonlyMap<string, string | null>, actor: string) {
+  private async sendToTrash(applied: HistoryDelta[], authors: ReadonlyMap<string, Author>, by: Writer) {
     const slug = this.slug();
     if (isTrash(slug)) return;
     const notes = applied.flatMap((d) => (d.type === 'note:delete' && isExpirable(d.note) ? [d.note] : []));
@@ -1132,9 +1152,9 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     );
     try {
       const placed = await this.env.PAGE.getByName(TRASH_SLUG).trashNotes({
-        actor,
+        ...by,
         from: slug,
-        notes: notes.map((note) => ({ ...note, createdBy: authors.get(note.id) ?? null })),
+        notes: notes.map((note) => ({ ...note, ...(authors.get(note.id) ?? { createdBy: null, delegate: null }) })),
         edges,
       });
       const now = Date.now();
@@ -1153,7 +1173,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * ゴミ箱へ移した付箋が、このページに戻ったら（ブラウザの Undo、操作の取り消し）、ゴミ箱の写しを消す。
    * 消さないと、Undo のたびに、ゴミ箱に同じ付箋が残る。失敗しても、書き込みは取り消さない
    */
-  private async untrash(applied: HistoryDelta[], actor: string): Promise<void> {
+  private async untrash(applied: HistoryDelta[], by: Writer): Promise<void> {
     const created = createdNoteIds(applied);
     if (created.length === 0) return;
     const rows = this.sql
@@ -1167,7 +1187,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     const slug = this.slug();
     try {
       const removed = await this.env.PAGE.getByName(TRASH_SLUG).removeNotes({
-        actor,
+        ...by,
         clientId: 'system',
         opId: crypto.randomUUID(),
         noteIds: rows.map((row) => row.trash_id),
@@ -1191,21 +1211,20 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * 作成者は引き継ぐ。元のページと、元の id と位置を `trash_origins` に記録する（元のページへ戻すときに使う）。
    * 元のページでの id から、ゴミ箱での id への対応を返す
    */
-  trashNotes(input: {
-    actor: string;
+  trashNotes(input: Writer & {
     from: string;
-    notes: (WemaNote & { createdBy: string | null })[];
+    notes: (WemaNote & Author)[];
     edges: WemaEdge[];
   }): Promise<[string, string][]> {
     return this.write(async () => {
       const newIds = new Map<string, string>();
-      const authors = new Map<string, string | null>();
+      const authors = new Map<string, Author>();
       /** ゴミ箱での id、元の id、元の位置（placeBelowNotes でずらす前） */
       const origins: [string, string, number, number][] = [];
-      const notes = input.notes.map(({ createdBy, ...note }) => {
+      const notes = input.notes.map(({ createdBy, delegate, ...note }) => {
         const id = crypto.randomUUID();
         newIds.set(note.id, id);
-        authors.set(id, createdBy);
+        authors.set(id, { createdBy, delegate });
         origins.push([id, note.id, note.x, note.y]);
         return { ...note, id };
       });
@@ -1215,6 +1234,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       const result = await this.applyOpsInOrder(
         {
           actor: input.actor,
+          delegate: input.delegate,
           clientId: 'system',
           opId: crypto.randomUUID(),
           deltas: [
@@ -1327,19 +1347,19 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     const byId = new Map(source.notes.map((note) => [note.id, note]));
     /** 元のページでの id から、このページでの id（同じ付箋を 2 回写しても、重ならない） */
     const newIds = new Map<string, string>();
-    const authors = new Map<string, string | null>();
+    const authors = new Map<string, Author>();
     const versions: NoteVersions = {};
     const notes: WemaNote[] = [];
     for (const id of noteIds) {
       const found = byId.get(id);
       if (!found) return { ok: false, reason: `note not found: ${id}`, notFound: true };
       if (childPageOf(found) !== undefined) return { ok: false, reason: `cannot move a child page note: ${id}` };
-      const { createdBy, updatedAt, ...note } = found;
+      const { createdBy, delegate, updatedAt, ...note } = found;
       const place = placeAs?.get(id);
       const newId = place?.id ?? crypto.randomUUID();
       newIds.set(id, newId);
       notes.push({ ...note, ...(place ? { x: place.x, y: place.y } : positions.get(id)), id: newId });
-      if (keepAuthors) authors.set(newId, createdBy);
+      if (keepAuthors) authors.set(newId, { createdBy, delegate });
       versions[id] = updatedAt;
     }
     // 読んだ接続線は、送る付箋どうしをつなぐものだけ（残る付箋との接続線は、置かない）
@@ -1383,7 +1403,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       const keptSet = new Set(kept);
       const notes = [...current.values()]
         .filter((note) => !keptSet.has(note.id))
-        .map(({ createdBy: _, updatedAt: __, ...note }) => note);
+        .map(({ createdBy: _, delegate: __, updatedAt: ___, ...note }) => note);
       // 空のデルタは記録できない
       if (notes.length === 0) return { ok: true, seq: null, kept };
       const result = await this.applyOpsInOrder({
@@ -1435,7 +1455,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * 戻り値の `deliver` は、トランザクションが確定してから呼ぶ（接続中のクライアントへの配信）。
    */
   private recordOp(
-    op: { actor: string; clientId: string; opId: string; summary?: string; reverts?: number },
+    op: Writer & { clientId: string; opId: string; summary?: string; reverts?: number },
     deltas: HistoryDelta[],
     fixups: HistoryDelta[],
     now: number,
@@ -1449,13 +1469,14 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     const seq = this.getSeq() + 1;
     this.setMeta('seq', String(seq));
     this.sql.exec(
-      `INSERT INTO ops (seq, actor, client_id, op_id, summary, reverts, created_at, body, fixups)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      seq, op.actor, op.clientId, op.opId, summary ?? null, op.reverts ?? null, now, body, fixupsJson,
+      `INSERT INTO ops (seq, actor, delegate, client_id, op_id, summary, reverts, created_at, body, fixups)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      seq, op.actor, op.delegate ?? null, op.clientId, op.opId, summary ?? null, op.reverts ?? null, now, body,
+      fixupsJson,
     );
     const head: OpsHead = {
-      type: 'ops', seq, actor: op.actor, clientId: op.clientId, opId: op.opId, createdAt: now, summary,
-      reverts: op.reverts,
+      type: 'ops', seq, actor: op.actor, delegate: op.delegate ?? undefined, clientId: op.clientId, opId: op.opId,
+      createdAt: now, summary, reverts: op.reverts,
     };
     const deliver = () => {
       // fixups は送信元にだけ付ける
@@ -1483,7 +1504,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     options: {
       prepare?: (deltas: HistoryDelta[]) => void;
       matchColors?: boolean;
-      authors?: ReadonlyMap<string, string | null>;
+      authors?: ReadonlyMap<string, Author>;
       trash?: boolean;
     } = {},
   ): Promise<ApplyResult> {
@@ -1519,13 +1540,15 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
 
     prepare?.(deltas);
 
-    let removedAuthors: ReadonlyMap<string, string | null> = new Map();
+    let removedAuthors: ReadonlyMap<string, Author> = new Map();
     const apply = (): ApplyResult => {
       let deliver: (() => void) | undefined;
       try {
         const result = this.ctx.storage.transactionSync((): ApplyResult => {
           const now = Date.now();
-          const applied = applyDeltas(this.sql, deltas, input.actor, now, sanitized.cleanBefore, authors);
+          const applied = applyDeltas(
+            this.sql, deltas, input.actor, now, sanitized.cleanBefore, authors, input.delegate ?? null,
+          );
           removedAuthors = applied.removedAuthors;
           const fixups = [...sanitized.fixups, ...applied.fixups];
           if (applied.deltas.length === 0) {
@@ -1547,8 +1570,9 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     // 同じ操作の再送と、何も変えなかった操作では、そろえ直さない
     if (matchColors && result.ok && result.broadcast) await this.matchChildColors(result.deltas, input.actor);
     if (trash && result.ok && result.broadcast) {
-      await this.sendToTrash(result.deltas, removedAuthors, input.actor);
-      await this.untrash(result.deltas, input.actor);
+      const by = { actor: input.actor, delegate: input.delegate };
+      await this.sendToTrash(result.deltas, removedAuthors, by);
+      await this.untrash(result.deltas, by);
     }
     return result;
   }
@@ -1557,22 +1581,27 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
 
   /**
    * 最近の操作を新しい順に返す。`agentOnly` なら agent（MCP 経由）の操作に、
-   * `actor` を指定するとその主体の操作に絞る。
+   * `actor` を指定するとその主体の操作に絞る。`delegate` を指定すると（null を含む）、委任者でも絞る。
    */
-  listOps(options: { limit?: number; agentOnly?: boolean; actor?: string } = {}): OpSummary[] {
+  listOps(
+    options: { limit?: number; agentOnly?: boolean; actor?: string; delegate?: string | null } = {},
+  ): OpSummary[] {
     if (this.version === 0) return [];
     return this.sql
       .exec(
-        `SELECT seq, actor, summary, reverts, reverted_by, created_at FROM ops
+        `SELECT seq, actor, delegate, summary, reverts, reverted_by, created_at FROM ops
          WHERE (?1 = 0 OR substr(actor, 1, 6) = 'agent:') AND (?2 IS NULL OR actor = ?2)
+           AND (?4 = 0 OR delegate IS ?5)
          ORDER BY seq DESC LIMIT ?3`,
         options.agentOnly ? 1 : 0, options.actor ?? null,
         clampLimit(options.limit, DEFAULT_LIST_OPS, MAX_LIST_OPS),
+        options.delegate === undefined ? 0 : 1, options.delegate ?? null,
       )
       .toArray()
       .map((row) => ({
         seq: row.seq as number,
         actor: row.actor as string,
+        delegate: row.delegate as string | null,
         summary: row.summary as string | null,
         reverts: row.reverts as number | null,
         revertedBy: row.reverted_by as number | null,
@@ -1594,6 +1623,8 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     const fail = (code: RevertFailure, reason: string): RevertResult => ({ ok: false, code, reason });
     const notFound = () => fail('not-found', 'operation not found');
     const { seq: target, actor, clientId, opId } = input;
+    const delegate = input.delegate ?? null;
+    const by: Writer = { actor, delegate: input.delegate };
     try {
       parseId(clientId, 'clientId');
       parseId(opId, 'opId');
@@ -1624,18 +1655,22 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
         let deliver: (() => void) | undefined;
         const result = this.ctx.storage.transactionSync((): RevertResult => {
           // 対象の状態は、サニタイズを待った後のここで確かめる
-          const op = this.sql.exec(`SELECT actor, reverted_by FROM ops WHERE seq = ?`, target).toArray()[0];
+          const op = this.sql
+            .exec(`SELECT actor, delegate, reverted_by FROM ops WHERE seq = ?`, target)
+            .toArray()[0];
           if (!op) return notFound();
           if (op.reverted_by !== null) return fail('conflict', 'already reverted');
-          if (input.ownOnly && op.actor !== actor) return fail('forbidden', 'not your operation');
+          if (input.ownOnly && (op.actor !== actor || op.delegate !== delegate)) {
+            return fail('forbidden', 'not your operation');
+          }
 
           const now = Date.now();
-          const { deltas, skipped } = applyRevert(this.sql, inverse, actor, now);
+          const { deltas, skipped } = applyRevert(this.sql, inverse, actor, now, delegate);
           if (deltas.length === 0) return { ok: true, seq: null, applied: 0, skipped };
           reverted = deltas;
 
           const summary = input.summary ?? systemSummary.revert(target);
-          const recorded = this.recordOp({ actor, clientId, opId, summary, reverts: target }, deltas, [], now);
+          const recorded = this.recordOp({ ...by, clientId, opId, summary, reverts: target }, deltas, [], now);
           // 取り消しを取り消した場合は、元の操作の内容が戻るので、元の操作をもう一度取り消せるようにする
           this.sql.exec(`UPDATE ops SET reverted_by = NULL WHERE reverted_by = ?`, target);
           this.sql.exec(`UPDATE ops SET reverted_by = ? WHERE seq = ?`, recorded.seq, target);
@@ -1650,7 +1685,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       await this.matchChildColors(reverted, actor);
       // 削除を取り消して付箋が戻ったら、ゴミ箱の写しを消す。作成を取り消して消した付箋は、ゴミ箱へ
       // 移さない（取り消しで消えるのは、取り消した操作が作った付箋）
-      await this.untrash(reverted, actor);
+      await this.untrash(reverted, by);
       return result;
     } catch (e) {
       if (e instanceof RejectError || e instanceof SanitizeError) return fail('invalid', e.message);
@@ -1727,7 +1762,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     // 表示名の変更は seq を進めないので、切断中に変わっていても差分には出ない。現在値を送る
     send(ws, this.metaJson());
     const rows = this.sql.exec(
-      `SELECT seq, actor, client_id, op_id, summary, reverts, created_at, body, fixups FROM ops
+      `SELECT seq, actor, delegate, client_id, op_id, summary, reverts, created_at, body, fixups FROM ops
        WHERE seq > ? ORDER BY seq`,
       lastSeq,
     );
@@ -1736,6 +1771,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
         type: 'ops',
         seq: row.seq as number,
         actor: row.actor as string,
+        delegate: (row.delegate as string | null) ?? undefined,
         clientId: row.client_id as string,
         opId: row.op_id as string,
         createdAt: row.created_at as number,

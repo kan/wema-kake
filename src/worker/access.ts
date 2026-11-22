@@ -13,6 +13,11 @@ export type PrincipalKind = 'user' | 'agent';
 interface Principal {
   /** 'user:<email>' / 'agent:<client>'。DO に渡す変更の主体 */
   actor: string;
+  /**
+   * ログインした人の email。agent では、その agent を認可した人（agent は、その人の代理）。
+   * 管理者かどうかの判定と、agent の委任者の記録に使う
+   */
+  email: string;
   /** 認証の期限（UNIX 秒）。ローカル開発では期限がないので未設定 */
   expiresAt?: number;
 }
@@ -24,6 +29,8 @@ export type AuthEnv = {
     config: ResolvedConfig;
     /** `Principal` の `actor` */
     actor: string;
+    /** `Principal` の `email` */
+    email: string;
     /** `Principal` の `expiresAt` */
     authExpiresAt?: number;
   };
@@ -117,9 +124,9 @@ async function verifyAccessJwt(
     });
     if (typeof payload.email !== 'string' || payload.email === '') return null;
     const { email, exp: expiresAt, oauth } = payload;
-    if (oauth === undefined) return { kind: 'user', actor: `user:${email}`, expiresAt };
+    if (oauth === undefined) return { kind: 'user', actor: `user:${email}`, email, expiresAt };
     const redirectUri = (oauth as { client_redirect_uri?: unknown } | null)?.client_redirect_uri;
-    return { kind: 'agent', actor: agentActor(redirectUri), expiresAt };
+    return { kind: 'agent', actor: agentActor(redirectUri), email, expiresAt };
   } catch {
     return null;
   }
@@ -150,7 +157,7 @@ async function authenticate(request: Request, env: WemaKakeEnv, kind: PrincipalK
   }
 
   if (devEmail && isLocalHost(new URL(request.url).hostname)) {
-    return { principal: { actor: kind === 'user' ? `user:${devEmail}` : 'agent:local' } };
+    return { principal: { actor: kind === 'user' ? `user:${devEmail}` : 'agent:local', email: devEmail } };
   }
   return { status: 500, error: 'authentication is not configured' };
 }
@@ -165,6 +172,7 @@ export const requireAccess = (kind: PrincipalKind) =>
     const result = await authenticate(c.req.raw, c.env, kind);
     if ('error' in result) return c.json({ error: result.error }, result.status);
     c.set('actor', result.principal.actor);
+    c.set('email', result.principal.email);
     c.set('authExpiresAt', result.principal.expiresAt);
     await next();
   });

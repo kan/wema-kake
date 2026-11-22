@@ -49,6 +49,7 @@ export default createWemaKake(config);
 | `defaultLang` | `'en'` | 既定の言語。その端末で選んだ言語（Cookie）も、ブラウザの言語の設定も、対応する言語に当たらないときに使う。画面の言語と、最初のページの言語の両方に効く |
 | `mcp` | `true` | `false` なら `/mcp` は 404 を返す。`{ write: false }` なら、どのクライアントも読み取りのツールだけを使える。`{ write: ['claude.ai'] }` なら、並べたクライアントだけが書き込みのツールも使える。名前は変更の主体（`agent:<名前>`）の名前で、主体の名前の形でない値は例外 |
 | `firstPage` | `true` | ページが 1 つもないときに、使い方の付箋を置いたページを 1 回だけ作るか |
+| `admins` | なし（全員が管理者） | 管理者の email の一覧。`/mcp` は、JWT の `email`（コネクタを認可した人）が管理者でなければ 403 を返す。大文字と小文字は区別しない。email の形でない値は例外。空の配列なら、管理者はいない |
 
 画面が使う値（`siteName` と `defaultLang`）は、Worker が `index.html` に `<meta name="wema-kake-site">` で埋め込む（`src/worker/assets.ts`、`src/shared/site.ts`）。画面の言語はスクリプトの読み込み時に同期で決めるので、API で問い合わせる形にしていない。HTML の読み込みは条件付きの取得にしない（設定だけを変えたデプロイで、304 から古い設定が使われないように）。
 

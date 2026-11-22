@@ -12,6 +12,7 @@ const page = (slug: string) => env.PAGE.getByName(slug);
 /** 開発用の主体（localhost 宛てのリクエストは、この人として認証される） */
 const DEV = 'user:dev@example.com';
 const AGENT = 'agent:claude';
+const ADMIN = 'user:admin@example.com';
 
 /** ページを作り、`deltas` を `actor` の操作として置く */
 async function create(deltas: unknown[] = [], actor = 'user:a'): Promise<string> {
@@ -35,7 +36,7 @@ const board = (slug: string) => page(slug).getBoardState();
 
 async function call(name: string, input: unknown): Promise<any> {
   const tool = TOOLS.find((t) => t.name === name)!;
-  return tool.run(new ServerBoardAccess(env, AGENT), tool.input.parse(input));
+  return tool.run(new ServerBoardAccess(env, { actor: AGENT, delegate: ADMIN }), tool.input.parse(input));
 }
 
 describe('POST /api/pages/:slug/transfer', () => {
@@ -160,6 +161,26 @@ describe('MCP の move_notes', () => {
     }
     expect((await board(to))!.notes).toEqual([]);
     expect((await board(from))!.notes.map((n) => n.id).sort()).toEqual(['a', 'b']);
+  });
+
+  it('agent の付箋は、委任者も引き継いで移す。ゴミ箱へ移すときも引き継ぐ', async () => {
+    const from = unique('transfer');
+    await page(from).createPage(from);
+    await page(from).applyOps({
+      actor: AGENT, delegate: 'user:other@example.com', clientId: 'mcp', opId: unique('op'),
+      deltas: [createNote('a'), createNote('b')],
+    });
+    const to = await create();
+    const result = await call('move_notes', { page: from, note_ids: ['a'], to });
+    // 移した操作の委任者は、移した agent の委任者
+    expect((await page(to).listOps({ limit: 1 }))[0]).toMatchObject({ actor: AGENT, delegate: ADMIN });
+    expect((await page(to).getSnapshot()).info[result.note_ids[0]]).toMatchObject({
+      createdBy: AGENT, delegate: 'user:other@example.com',
+    });
+
+    await call('delete_notes', { page: from, note_ids: ['b'] });
+    const trashed = Object.values((await page('trash').getSnapshot()).info);
+    expect(trashed).toContainEqual(expect.objectContaining({ createdBy: AGENT, delegate: 'user:other@example.com' }));
   });
 
   it('同じページ、重複した id、ない付箋は断る', async () => {
