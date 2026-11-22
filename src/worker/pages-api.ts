@@ -7,6 +7,7 @@ import { isValidSlug } from '../shared/slug';
 import type { AuthEnv } from './access';
 import { isAdmin } from './config';
 import { createFirstPage } from './first-page';
+import { REASON_PAGE_LOCKED } from '../shared/protocol';
 import { REASON_PAGE_NOT_FOUND, type RevertFailure } from './page-do';
 import { listPages, searchPages, searchRoots } from './page-queries';
 import { type TransferFailure, transferNotes } from './transfer';
@@ -17,7 +18,12 @@ const REVERT_STATUS = {
   conflict: 409,
   forbidden: 403,
   invalid: 400,
+  locked: 423,
 } as const satisfies Record<RevertFailure, number>;
+
+/** ページの設定（表示名、色、期限）の変更が断られた理由を、状態のコードにする */
+const settingStatus = (reason: string) =>
+  reason === REASON_PAGE_NOT_FOUND ? 404 : reason === REASON_PAGE_LOCKED ? 423 : 400;
 
 /** パスの `:slug` が不正なら 400 を返す */
 export const validSlug = createMiddleware<AuthEnv>(async (c, next) => {
@@ -147,8 +153,21 @@ pagesApi.post('/pages/:slug', validSlug, async (c) => {
 
 /** ページの削除。取り消しはできない */
 pagesApi.delete('/pages/:slug', validSlug, async (c) => {
-  await c.env.PAGE.getByName(c.req.param('slug')).deletePage(c.get('actor'));
+  const result = await c.env.PAGE.getByName(c.req.param('slug')).deletePage(c.get('actor'));
+  if (!result.ok) return c.json({ error: result.reason }, 423);
   return c.json({ ok: true });
+});
+
+/**
+ * ページのロック（編集の禁止）の設定と解除（本文は `{ "locked": true }`）。管理者だけが呼べる。
+ * ロック中は、管理者も含めて誰も編集できない。ページがなければ 404、ゴミ箱はロックできない（400）
+ */
+pagesApi.put('/pages/:slug/lock', validSlug, async (c) => {
+  if (!isAdmin(c.get('config'), c.get('email'))) return c.json({ error: 'only administrators can lock pages' }, 403);
+  const body = await c.req.json<{ locked?: unknown }>().catch(() => null);
+  const result = await c.env.PAGE.getByName(c.req.param('slug')).setLocked(body?.locked);
+  if (result.ok) return c.json(result);
+  return c.json({ error: result.reason }, settingStatus(result.reason));
 });
 
 /**
@@ -236,6 +255,7 @@ const TRANSFER_STATUS = {
   'not-found': 404,
   invalid: 400,
   partial: 409,
+  locked: 423,
 } as const satisfies Record<TransferFailure, number>;
 
 /**
@@ -298,7 +318,7 @@ pagesApi.post('/pages/:slug/notes', validSlug, async (c) => {
     const summary = await stub.getSummary();
     return c.json({ ok: true, seq: result.seq, page: summary && { name: slug, ...summary } });
   }
-  return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
+  return c.json({ error: result.reason }, settingStatus(result.reason));
 });
 
 /**
@@ -311,7 +331,7 @@ pagesApi.put('/pages/:slug/title', validSlug, async (c) => {
     mustExist: body?.mustExist === true,
   });
   if (result.ok) return c.json(result);
-  return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
+  return c.json({ error: result.reason }, settingStatus(result.reason));
 });
 
 /**
@@ -324,7 +344,7 @@ pagesApi.put('/pages/:slug/expiry', validSlug, async (c) => {
   if (body?.days === undefined) return c.json({ error: 'invalid days' }, 400);
   const result = await c.env.PAGE.getByName(c.req.param('slug')).setExpiry(body.days);
   if (result.ok) return c.json(result);
-  return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
+  return c.json({ error: result.reason }, settingStatus(result.reason));
 });
 
 /**
@@ -353,5 +373,5 @@ pagesApi.put('/pages/:slug/color', validSlug, async (c) => {
   if (body?.color === undefined) return c.json({ error: 'invalid color' }, 400);
   const result = await c.env.PAGE.getByName(c.req.param('slug')).setColor(body.color, c.get('actor'));
   if (result.ok) return c.json(result);
-  return c.json({ error: result.reason }, result.reason === REASON_PAGE_NOT_FOUND ? 404 : 400);
+  return c.json({ error: result.reason }, settingStatus(result.reason));
 });

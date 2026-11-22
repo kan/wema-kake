@@ -45,6 +45,13 @@ export interface Snapshot {
   epoch: string | null;
   /** 古い付箋を自動で消すまでの日数（src/shared/trash.ts）。付けていなければ null */
   expireDays: number | null;
+  /** ロック（編集の禁止）されているか。古い Worker では付かない */
+  locked?: boolean;
+  /**
+   * 期限を数え始める時刻（最後にロックを外した時刻）。付箋の古さは、更新時刻とこれの遅い方から数える。
+   * 外したことがなければ null。古い Worker では付かない
+   */
+  expireSince?: number | null;
   data: BoardData;
   /** 付箋ごとの付加情報（作成者、更新日時）。`data` の付箋と同じ id を持つ */
   info: NoteInfos;

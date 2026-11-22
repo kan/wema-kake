@@ -40,8 +40,9 @@ export interface TransferInput {
  * - `invalid`: 入力が不正か、置けなかった
  * - `partial`: 送り先には置けたが、元のページから消せなかった付箋がある（消せなかった、または
  *   読んだ後に元のページで変わったか消えたので、消さなかった）
+ * - `locked`: 送り先がロックされている。移すとき（写すときでなく）は、元のページのロックでも断る
  */
-export type TransferFailure = 'not-found' | 'invalid' | 'partial';
+export type TransferFailure = 'not-found' | 'invalid' | 'partial' | 'locked';
 
 export type TransferResult =
   | {
@@ -73,7 +74,10 @@ export async function transferNotes(env: WemaKakeEnv, input: TransferInput): Pro
   const taken = await env.PAGE.getByName(to).takeNotes({
     actor, delegate, clientId, opId, from, noteIds, positions, keepAuthors: !copy, summary, placeAs,
   });
-  if (!taken.ok) return { ok: false, code: taken.notFound ? 'not-found' : 'invalid', reason: taken.reason };
+  if (!taken.ok) {
+    const code = taken.notFound ? 'not-found' : taken.locked ? 'locked' : 'invalid';
+    return { ok: false, code, reason: taken.reason };
+  }
   if (copy) return { ok: true, noteIds: taken.noteIds, received: taken.seq, removed: null };
 
   const removed = await env.PAGE.getByName(from)

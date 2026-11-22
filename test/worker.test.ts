@@ -23,6 +23,8 @@ describe('GET /api/pages/:slug', () => {
       color: null,
       epoch: null,
       expireDays: null,
+      locked: false,
+      expireSince: null,
       data: { version: 1, notes: [], edges: [] },
       info: {},
     });

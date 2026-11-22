@@ -235,7 +235,8 @@ MCP クライアント ──/mcp──> MCP ┘          │
 CREATE TABLE meta (
   key   TEXT PRIMARY KEY,   -- 'slug', 'title', 'color'（ページの色）, 'seq', 'version', 'epoch', 'index_hash', 'parent'（親ページのスラッグ）,
                             -- 'expire_days'（古い付箋を自動で消す日数）, 'index_clean'（D1 へ反映済みなら '1'）,
-                            -- 'expire_paused_until'（期限の処理に失敗したときに、処理を止める時刻）
+                            -- 'expire_paused_until'（期限の処理に失敗したときに、処理を止める時刻）,
+                            -- 'locked'（ロック中なら '1'）, 'unlocked_at'（最後にロックを外した時刻）
   value TEXT NOT NULL
 );
 
@@ -385,6 +386,7 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | `DELETE /api/bookmarks/<slug>` | ブックマークを外す。付いていなくても成功を返す |
 | `PUT /api/pages/<slug>/title` | 表示名の変更（本文は `{ "title": "..." }`）。空文字で未設定に戻す。書き込みのないページに対して呼ぶとページが作られる。本文に `"mustExist": true` を付けると、作らずに 404 を返す（一覧の画面が使う。古い一覧に残った削除済みのページを作り直さないため） |
 | `PUT /api/pages/<slug>/color` | ページの色の変更（本文は `{ "color": "#BBDEFB" }`）。`src/shared/api.ts` の `PAGE_COLORS` のどれか。null で、付けていない状態に戻す。ほかの値と、`color` のない本文は 400。ページがなければ 404（作らない）。親ページがあれば、そこにある自分の付箋も同じ色にする |
+| `PUT /api/pages/<slug>/lock` | ページのロック（編集の禁止）の設定と解除（本文は `{ "locked": true }`）。**管理者だけが呼べる**（ほかは 403）。ページがなければ 404、ゴミ箱と不正な値は 400（「ページのロック」の節） |
 | `PUT /api/pages/<slug>/expiry` | 古い付箋を自動で消すまでの日数の変更（本文は `{ "days": 30 }`）。`src/shared/trash.ts` の `EXPIRE_DAYS_CHOICES` のどれか。null で、消さない。ほかの値と、`days` のない本文は 400。ページがなければ 404（作らない）。ゴミ箱の日数は変えられない（400） |
 | `POST /api/trash/restore` | ゴミ箱の付箋を、元のページへ戻す（本文は `{ "clientId", "opId", "noteIds" }`）。元の id と位置で置き、作成者は引き継ぐ。元のページごとの結果（`{ "pages": [{ "page", "noteIds", "error"? }] }`）を返す。元のページの記録がない付箋は、`page` が null の結果にまとめ、残りは戻す。戻せなかったものがあれば 409、どの付箋にも記録がなければ 404 |
 | `POST /api/pages/<slug>/transfer` | このページの付箋を、他のページ（`to`）へ移す（写す）（本文は `{ "clientId", "opId", "to", "noteIds", "positions"?, "copy"? }`）。付箋の中身と、送る付箋どうしの接続線は、サーバーが元のページから読む。移すときは作成者を引き継ぎ、このページから消す。写すときは、作成者は写した人になる。`positions`（付箋の id から `{ x, y }`）は、このページでの位置の代わりに使う。送り先では、互いの位置関係を保って、今ある付箋の下に置く。同じ `opId` で送り直しても二重には置かない。置いた後の送り先の概要（`page`。`POST /api/pages-info` と同じ形で、索引への反映を待たない）を返す。ページか付箋がなければ 404、送り先に置けたのに元のページから消せなかった付箋があれば 409（移動の途中に元のページで変わった付箋は、消さずに残す） |
@@ -413,6 +415,24 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
     - ページに付けられる色は `PAGE_COLORS` だけ。付箋には、MCP からほかの色も付けられる。その色は子ページに付かず（`setOwnColor` が断る）、子ページの次の索引の更新で、付箋が子ページの色に戻る
     - 相手の DO の呼び出しが失敗しても、元の変更は取り消さない。食い違いは、子ページの索引の更新（`reindex`）で、付箋を子ページの色に合わせて直す（色の付いていないページでは、付箋の色のままにする）。子ページの色を選び直しても直る（`setColor` は、色が変わっていなくても、親ページの付箋を合わせる）
   - 一覧の色は、D1 の索引から読むので、変更の数秒後に変わる（表示名と同じ）
+
+## ページのロック
+
+設計は `docs/plan.md` のフェーズ 7 の「複数人で使うときの仕様」（[#107](https://github.com/kan/wema-kake/issues/107)）。
+
+- **管理者は、ページをロック（編集の禁止）できる。ロック中は、管理者も含めて誰も編集できない。** 編集するには、ロックを外す。状態は DO の `meta` の `locked`。設定と解除は `PUT /api/pages/<slug>/lock`（DO の `setLocked`）で、管理者でなければ 403。ops には記録しない
+- **agent にはロックの設定と解除をさせない**（MCP にツールを置かない。`/api` は agent の主体を通さない）
+- ロック中のページへの書き込みは、**すべての入口で断る。** 理由は `REASON_PAGE_LOCKED`（`page locked`。`src/shared/protocol.ts`）で、HTTP の API は 423 を返す
+  - `applyOps`（WebSocket と MCP の書き込み）と `receiveNotes`。`applyOpsInOrder` の `respectLock` で、子ページを子にする前と、トランザクションの直前の 2 回確かめる
+  - 付箋の移動の送り先（`takeNotes`）と送り元（`removeNotes`）。移すときは、送り先が置く前に、元のページのロックも確かめる（`notesAmong` の `locked`）。写すのは、元のページを変えないので通す
+  - 子ページを置く操作と外す操作（親ページへの付箋の作成と削除）。親ページの `applyOps` で断られる。`create_page` の `parent` と `move_page` は、ページを作る前、親から外す前に断る
+  - 表示名、色、期限の設定（`setTitle`、`setColor`、`setOwnColor`、`setExpiry`）。ゴミ箱からの復元（送り先の `takeNotes`）。操作の取り消し（`revert`）。ページの削除（`deletePage`）
+- 断らないもの（サーバーが他のページに合わせて行う書き込み）: 子ページの色に合わせる子ページの付箋の色（`recolorChildNotes`）、子ページの削除に伴う子ページの付箋の削除（`removeChildNotes`）、親子の記録の修復。**子ページのロックは、親ページでの操作（子ページの付箋の移動や削除、親から外す）を止めない。** ロックは子ページに及ばない（まとめてロックしない）
+- ゴミ箱はロックできない
+- ロック中は、期限による付箋の自動削除も止める（`expireNotes` と `scheduleNextAlarm`）。**外した後は、外した時刻（`unlocked_at`）から数え直す**（ロックの間に期限を過ぎた付箋を、外した直後にまとめて消さないため）。画面の付箋の薄さも、同じ時刻（`expireSince`）から数える
+- 画面は、スナップショットと `meta` の `locked` で知る。ロック中は参照モードに固定し、ヘッダーの表示名の後ろに鍵のアイコンを出し、表示名・色・期限・削除を押せなくする。ロックの項目は、`GET /api/session` の `admin` が true の人のメニューにだけ出す
+- MCP: `read_board` などの読み取りは通す（`read_board` は `locked: true` を返す）。書き込みのツールは `ToolError`（`page locked: <スラッグ> (...)`）で理由を返す
+- 一覧（D1）には、ロックを出さない
 
 ## ゴミ箱と、古い付箋の自動削除
 
@@ -500,9 +520,11 @@ type ClientMsg =
 // Server → Client
 type ServerMsg =
   | { type: 'snapshot'; seq: number; title: string | null; color: string | null; epoch: string | null; expireDays: number | null;
+      locked?: boolean; expireSince?: number | null;   // ロック中か、期限を数え始める時刻（「ページのロック」の節）
       data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] };
       info: Record<NoteId, { createdBy: string | null; updatedAt: number }> }   // 付箋ごとの付加情報（後述）
-  | { type: 'meta'; title: string | null; color: string | null; epoch: string | null; expireDays: number | null }   // 表示名、ページの色、自動で消す日数が変わった、またはページができた。seq は進まない
+  | { type: 'meta'; title: string | null; color: string | null; epoch: string | null; expireDays: number | null;
+      locked?: boolean; expireSince?: number | null }   // 表示名、ページの色、自動で消す日数、ロックが変わった、またはページができた。seq は進まない
   | { type: 'ops'; seq: number; actor: string; delegate?: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
       createdAt?: number;         // 操作を記録した時刻。配信と、再接続のときの差分に付く。送信元にだけ返す確定（再送への応答など）には付かない
       reverts?: number;           // 取り消しなら、取り消した対象の seq（「取り消し」の節を参照）

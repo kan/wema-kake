@@ -27,6 +27,8 @@ type AuthoredNote = WemaNote & { createdBy: string | null };
 
 export interface BoardState {
   title: string | null;
+  /** ページがロック（編集の禁止）されているか。ロック中は読めるが、書き込みのツールは断る */
+  locked: boolean;
   notes: AuthoredNote[];
   edges: WemaEdge[];
 }
@@ -134,10 +136,17 @@ interface Board extends BoardState {
   notesById: Map<string, AuthoredNote>;
 }
 
-async function existingBoard(access: BoardAccess, slug: string): Promise<Board> {
+/** ロックされたページへの書き込みを断る理由。LLM が別の方法を選べるように、読めることも伝える */
+const lockedError = (slug: string) =>
+  new ToolError(`page locked: ${slug} (an administrator locked this page; you can read it, but not change it)`);
+
+/** @param options.write 書き込むために読む。ロックされたページなら断る */
+async function existingBoard(access: BoardAccess, slug: string, options: { write?: boolean } = {}): Promise<Board> {
   const board = await access.readBoard(slug);
   // 書き込みのツールは、ページを作らない（作るのは create_page だけ）
   if (!board) throw new ToolError(`page not found: ${slug}`);
+  // 読んでからの間にロックされたら、DO が断る（applyOrThrow がその理由を返す）
+  if (options.write && board.locked) throw lockedError(slug);
   return { ...board, notesById: new Map(board.notes.map((n) => [n.id, n])) };
 }
 
@@ -277,13 +286,15 @@ export const TOOLS: Tool[] = [
   tool({
     name: 'read_board',
     description:
-      '1 ページの付箋（id、本文、座標、大きさ、色、作成者）と接続線（id、from、to、label）を返す。座標は左上が原点で、単位はピクセル。child_page のある付箋は、子ページを表す付箋で、値は子ページの名前（中身は、その名前で read_board を呼ぶと読める）。',
+      '1 ページの付箋（id、本文、座標、大きさ、色、作成者）と接続線（id、from、to、label）を返す。座標は左上が原点で、単位はピクセル。child_page のある付箋は、子ページを表す付箋で、値は子ページの名前（中身は、その名前で read_board を呼ぶと読める）。locked が true のページは、管理者がロックしていて、読めるが書き換えられない。',
     readOnly: true,
     input: z.object({ page }),
     async run(access, input) {
       const board = await existingBoard(access, input.page);
       return {
         title: board.title,
+        // ロックされていれば付ける（書き込みのツールは断られる）
+        locked: board.locked || undefined,
         notes: await Promise.all(
           board.notes.map(async (n) => ({
             id: n.id,
@@ -333,7 +344,7 @@ export const TOOLS: Tool[] = [
       reason,
     }),
     async run(access, input) {
-      const board = await existingBoard(access, input.page);
+      const board = await existingBoard(access, input.page, { write: true });
       const taken: Rect[] = [...board.notes];
       const deltas: HistoryDelta[] = [];
       const ids: string[] = [];
@@ -398,7 +409,7 @@ export const TOOLS: Tool[] = [
       reason,
     }),
     async run(access, input) {
-      const board = await existingBoard(access, input.page);
+      const board = await existingBoard(access, input.page, { write: true });
       assertUnique(input.notes.map((n) => n.id));
       const deltas = input.notes.map(({ id, text, ...rest }): HistoryDelta => {
         const note = findNote(board, id);
@@ -426,7 +437,7 @@ export const TOOLS: Tool[] = [
     idempotent: true,
     input: z.object({ page, note_ids: z.array(z.string()).min(1).max(MAX_ITEMS), reason }),
     async run(access, input) {
-      const board = await existingBoard(access, input.page);
+      const board = await existingBoard(access, input.page, { write: true });
       assertUnique(input.note_ids);
       const deltas = input.note_ids.map(
         (id): HistoryDelta => ({ type: 'note:delete', note: findNote(board, id) }),
@@ -479,7 +490,7 @@ export const TOOLS: Tool[] = [
       reason,
     }),
     async run(access, input) {
-      const board = await existingBoard(access, input.page);
+      const board = await existingBoard(access, input.page, { write: true });
       const ids: string[] = [];
       const deltas = input.connections.map(({ from, to, label }): HistoryDelta => {
         findNote(board, from);
@@ -504,7 +515,7 @@ export const TOOLS: Tool[] = [
     idempotent: true,
     input: z.object({ page, edge_ids: z.array(z.string()).min(1).max(MAX_ITEMS), reason }),
     async run(access, input) {
-      const board = await existingBoard(access, input.page);
+      const board = await existingBoard(access, input.page, { write: true });
       assertUnique(input.edge_ids);
       const deltas = input.edge_ids.map((id): HistoryDelta => {
         const edge = board.edges.find((e) => e.id === id);
@@ -537,7 +548,7 @@ export const TOOLS: Tool[] = [
       reason,
     }),
     async run(access, input) {
-      const board = await existingBoard(access, input.page);
+      const board = await existingBoard(access, input.page, { write: true });
       input.note_ids?.forEach((id) => findNote(board, id));
       if (input.order) {
         assertUnique(input.order);
@@ -581,7 +592,7 @@ export const TOOLS: Tool[] = [
       const { name, parent } = input;
       if (parent === name) throw new ToolError(`a page cannot be placed in itself: ${name}`);
       // 置く先が無ければ、ページを作る前に断る
-      const parentBoard = parent === undefined ? undefined : await existingBoard(access, parent);
+      const parentBoard = parent === undefined ? undefined : await existingBoard(access, parent, { write: true });
       const created = await access.createPage(name, input.title ?? '');
       if (created === 'exists') {
         throw new ToolError(`page already exists: ${name} (use move_page to place an existing page)`);
@@ -625,7 +636,7 @@ export const TOOLS: Tool[] = [
       const summary = summaryOf('move_page', input.reason);
       // 移す先が無いか、移す先が自分の子孫（輪になる）なら、今の親から外す前に断る。
       // 深さの上限は、置くときに DO が確かめる（断られたら、下で元に戻す）
-      const targetBoard = target === null ? undefined : await existingBoard(access, target);
+      const targetBoard = target === null ? undefined : await existingBoard(access, target, { write: true });
       if (target !== null && (await isDescendant(access, target, name))) {
         throw new ToolError(`could not place ${name} in ${target}: ${target} is inside ${name}`);
       }
@@ -634,6 +645,8 @@ export const TOOLS: Tool[] = [
       let removed: number | undefined;
       if (current !== null) {
         const board = await access.readBoard(current);
+        // 今の親ページがロックされていれば、外せない（外す前に断る）
+        if (board?.locked) throw lockedError(current);
         const notes = board?.notes.filter((n) => childPageOf(n) === name) ?? [];
         if (notes.length > 0) {
           removed = await applyOrThrow(
