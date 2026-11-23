@@ -9,6 +9,19 @@ updates:
       mcp-sdk:
         patterns:
           - "@modelcontextprotocol/*"
+      # 同じ package-lock.json を触る PR が何件もたまると、1 件マージするたびに残りが衝突する。
+      # 依存はどれか 1 つのグループにしか入らず、上に書いたものが優先される（mcp-sdk が先）。
+      # グループは version update にだけ効く。security update と major は 1 件ずつ PR になる
+      dev-dependencies:
+        dependency-type: "development"
+        update-types: ["minor", "patch"]
+      # 本番の依存は利用側に届くので、patch だけをまとめる。minor は 1 件ずつ中身を見る。
+      # @kanf/wema は 0.x で minor が破壊的変更になるため、グループに入れない
+      production-dependencies:
+        dependency-type: "production"
+        update-types: ["patch"]
+        exclude-patterns:
+          - "@kanf/wema"
   # template の wema-kake を、出したばかりの版に上げる PR を作る（kan/lily の template と同じ設計）。
   # template は利用者が写して使う雛形なので、上げ忘れると古い wema-kake で始まる。
   # この PR は ci.yml の automerge-template のジョブが、CI が通ったらマージする。
