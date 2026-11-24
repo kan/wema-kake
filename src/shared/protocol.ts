@@ -13,6 +13,12 @@ export const CLOSE_PAGE_DELETED = 4410;
 export const PING = 'ping';
 export const PONG = 'pong';
 
+/**
+ * ページがロック（編集の禁止）されていて、書き込みを断ったときの `reason`。HTTP の API は 423 にする。
+ * 付箋の移動で、元のページがロックされていたときは、後ろに `: <スラッグ>` が付く
+ */
+export const REASON_PAGE_LOCKED = 'page locked';
+
 /** text の更新で、`before.text` がサーバーの現在値と違ったときの `reject` の `reason` */
 export const REASON_TEXT_CONFLICT = 'text conflict';
 
@@ -56,8 +62,19 @@ export interface OpsMsg {
 export type ServerMsg =
   | ({ type: 'snapshot' } & Snapshot)
   | OpsMsg
-  /** 表示名、ページの色、自動で消す日数が変わった。付箋の変更ではないので seq は進まない */
-  | { type: 'meta'; title: string | null; color: string | null; epoch: string | null; expireDays: number | null }
+  /**
+   * 表示名、ページの色、自動で消す日数、ロックが変わった。付箋の変更ではないので seq は進まない。
+   * `locked` と `expireSince` は、古い Worker では付かない
+   */
+  | {
+      type: 'meta';
+      title: string | null;
+      color: string | null;
+      epoch: string | null;
+      expireDays: number | null;
+      locked?: boolean;
+      expireSince?: number | null;
+    }
   /**
    * 操作を受け付けなかった。送信元は手元の変更を巻き戻し、`fixups`（サーバーの現在値に
    * 合わせるためのデルタ。text が競合した付箋など）を適用する

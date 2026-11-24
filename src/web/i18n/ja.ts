@@ -35,6 +35,7 @@ export const ja = {
   'failed.transfer': (reason: string) => `子ページへ付箋を送れませんでした（${reason}）`,
   'failed.expiry': (reason: string) => `自動で消す設定の変更に失敗しました（${reason}）`,
   'failed.restore': (reason: string) => `元のページへ戻せませんでした（${reason}）`,
+  'failed.lock': (reason: string) => `ロックの変更に失敗しました（${reason}）`,
 
   // --- ヘッダーの部品 ---
   'zoom.reset': '等倍に戻す',
@@ -126,6 +127,13 @@ export const ja = {
   'menu.history': '操作の履歴…',
   'menu.exportJson': 'JSON を書き出す',
   'menu.deletePage': 'ページを削除…',
+  /** 管理者だけに出す */
+  'menu.lock': 'ページをロックする',
+  'menu.unlock': 'ページのロックを外す',
+  'lock.confirm': 'このページをロックします。ロックを外すまで、管理者も含めて誰も編集できません（読むことはできます）。',
+  /** ヘッダーの鍵のアイコンの説明 */
+  'lock.badge': 'このページはロックされています（管理者が編集を禁止しています）',
+  'lock.notice': 'このページはロックされているので、変更できません',
   /** 古い付箋を自動で消す設定の見出し。続けて、日数の選択肢を並べる */
   'menu.expiry': '古い付箋を自動で消す',
   'menu.expiryOff': 'しない',

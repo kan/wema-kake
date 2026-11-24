@@ -230,7 +230,7 @@ describe('ページの API', () => {
       .toEqual({ title: '新しい表示名', note_count: 0 });
     // ページができた通知（表示名はまだない）に続いて、表示名の変更が届く
     expect(await browser.nextMeta()).toEqual({
-      type: 'meta', title: null, color: null, epoch: expect.any(String), expireDays: null,
+      type: 'meta', title: null, color: null, epoch: expect.any(String), expireDays: null, locked: false, expireSince: null,
     });
     expect(await browser.nextMeta()).toMatchObject({ type: 'meta', title: '新しい表示名' });
 
@@ -412,7 +412,7 @@ describe('ページの削除', () => {
     expect(await browser.closed).toMatchObject({ code: 4410 });
 
     expect(await stub.getSnapshot()).toEqual({
-      seq: 0, title: null, color: null, epoch: null, expireDays: null, data: { version: 1, notes: [], edges: [] },
+      seq: 0, title: null, color: null, epoch: null, expireDays: null, locked: false, expireSince: null, data: { version: 1, notes: [], edges: [] },
       info: {},
     });
     const tables = await runInDurableObject(stub, (_do, state) =>

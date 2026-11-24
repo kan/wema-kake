@@ -141,6 +141,10 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   let currentTitle: string | null = null;
   /** 古い付箋を自動で消すまでの日数（サーバーから届く）。付けていなければ null */
   let expireDays: number | null = null;
+  /** ページがロック（編集の禁止）されているか（サーバーから届く）。ロック中は参照モードに固定する */
+  let locked = false;
+  /** 期限を数え始める時刻（最後にロックを外した時刻）。付箋の古さは、更新時刻とこれの遅い方から数える */
+  let expireSince: number | null = null;
   /** ゴミ箱のページか（src/shared/trash.ts）。付箋を足す代わりに、元のページへ戻すボタンを出す */
   const inTrash = isTrash(slug);
   /** 表示名を付けていないときに出す名前 */
@@ -185,10 +189,12 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     // 移動では呼ばれないので、更新時刻が変わったら refreshNoteDecoration() で描き直す。
     // ボードは空で作るので、最初に呼ばれるのは同期（sync）ができた後
     decorateNote(note) {
-      if (expireDays === null || !isExpirable(note)) return undefined;
+      // ロック中は、期限による削除が止まっているので、薄くしない
+      if (expireDays === null || locked || !isExpirable(note)) return undefined;
       const updatedAt = sync.noteInfo(note.id)?.updatedAt;
       if (updatedAt === undefined) return undefined;
-      return { style: { '--note-age': noteAge(updatedAt, expireDays, Date.now()).toFixed(3) } };
+      const from = Math.max(updatedAt, expireSince ?? 0);
+      return { style: { '--note-age': noteAge(from, expireDays, Date.now()).toFixed(3) } };
     },
     // 付箋を縦に積んでいる間は、接続線の代わりに、つながっている相手を付箋の下に出す（wema 0.15.0）。
     // 相手が子ページの付箋なら、本文（空）の代わりに、子ページの表示名を出す。表示名が後から
@@ -267,6 +273,12 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   // --- ヘッダーの左: 今いる場所 ---
   const title = el('h1', { className: 'page-title', title: t('page.titleHint', slug) });
+  // ロック中だけ出す（showLock）
+  const lockBadge = icon('lock');
+  lockBadge.classList.add('lock-badge');
+  lockBadge.role = 'img';
+  lockBadge.title = lockBadge.ariaLabel = t('lock.badge');
+  lockBadge.hidden = true;
   // 同期の状態。同期済みのときは何も出さない。文言は title に入れ、文字で出すのはオフラインのときだけ
   const status = el('span', { className: 'sync-status' });
   const crumbs = el('span', { className: 'crumbs' });
@@ -441,7 +453,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       // ゴミ箱は、親がなく、色とブックマークも要らない。代わりに、消えるまでの日数を出す
       ...(inTrash
         ? [title, el('span', { className: 'page-hint', textContent: t('trash.hint', TRASH_EXPIRE_DAYS) })]
-        : [crumbs, title, colorPicker.root, star]),
+        : [crumbs, title, lockBadge, colorPicker.root, star]),
       status,
     ],
     [
@@ -492,7 +504,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       board.setReadOnly(false);
       // 参照モードは、サーバーの内容を読み込んだ後に入る（入った時点の位置を wema が覚えるため）
       // ゴミ箱は、常に参照モードで出す（付箋を編集する場所ではない。編集用のポップアップを出さない）
-      if (inTrash || settings.get(VIEW_ONLY_KEY) === '1') board.setViewOnly(true);
+      // ロック中のページも、参照モードに固定する（showLock）
+      if (inTrash || locked || settings.get(VIEW_ONLY_KEY) === '1') board.setViewOnly(true);
       // 縦積みの切り替えは、付箋を読み込んでから始める
       stack.start();
       // 付箋全体の中央から始める。倍率は、前に見ていた倍率か、なければ全体が収まる倍率
@@ -510,6 +523,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     onTitle: showTitle,
     onColor: showColor,
     onExpireDays: showExpiry,
+    onLock: showLock,
     // 認証し直すには、Access を通る通常のページ読み込みが要る
     onAuthExpired: () => location.reload(),
     isAuthenticated: api.isAuthenticated,
@@ -561,6 +575,10 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   // --- 表示名の編集 ---
   title.addEventListener('click', () => {
+    if (locked) {
+      notify(t('lock.notice'));
+      return;
+    }
     const input = textInput({
       className: 'title-input',
       value: currentTitle ?? '',
@@ -664,8 +682,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   // --- メニュー ---
   const viewOnlyItem = menuItem('', () => {
-    // 最初の同期が済むまでは切り替えない
-    if (board.isReadOnly()) return;
+    // 最初の同期が済むまでは切り替えない。ロック中は、参照モードから出さない
+    if (board.isReadOnly() || locked) return;
     // 終えると、参照モードの間に自分が動かした付箋は元の位置へ戻る（wema の動作）。
     // その間に届いた他の人の変更と、再接続で読み直した内容は残る（wema 0.7.1 以降）
     const next = !board.isViewOnly();
@@ -724,6 +742,45 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     }
   }
 
+  // ロックの設定と解除は、管理者だけに出す（サーバーも、管理者でなければ断る）
+  const lockItem = menuItem('', () => {
+    menu.close();
+    const next = !locked;
+    if (next && !confirm(t('lock.confirm'))) return;
+    api
+      .setLocked(slug, next)
+      .then((result) => showLock(result.locked, expireSince))
+      .catch(fail('failed.lock'));
+  });
+  lockItem.hidden = true;
+  const sessionSignal = viewSignal();
+  api
+    .getSession()
+    .then((session) => {
+      if (!sessionSignal.aborted) lockItem.hidden = inTrash || session.admin !== true;
+    })
+    .catch(() => undefined);
+
+  /** ロックの状態を出す。ロック中は参照モードに固定し、ページの設定を変える項目を押せなくする */
+  function showLock(value: boolean, since: number | null) {
+    const changed = value !== locked || since !== expireSince;
+    const wasLocked = locked;
+    locked = value;
+    expireSince = since;
+    lockBadge.hidden = !value;
+    lockItem.textContent = t(value ? 'menu.unlock' : 'menu.lock');
+    viewOnlyItem.disabled = value;
+    colorPicker.root.toggleAttribute('inert', value);
+    for (const item of expiryItems.values()) item.disabled = value;
+    deleteItem.disabled = value;
+    // 最初の同期の前は、onReady が参照モードに入れる
+    if (!board.isReadOnly()) {
+      if (value) board.setViewOnly(true);
+      else if (wasLocked && !inTrash) board.setViewOnly(settings.get(VIEW_ONLY_KEY) === '1');
+    }
+    if (changed) board.refreshNoteDecoration();
+  }
+
   const deletePage = () => {
     menu.close();
     if (inTrash ? !confirm(t('trash.emptyConfirm')) : !confirmDeletePage(currentTitle ?? defaultName)) return;
@@ -737,6 +794,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
         fail('failed.delete')(e);
       });
   };
+
+  const deleteItem = menuItem(inTrash ? t('trash.empty') : t('menu.deletePage'), deletePage, 'danger');
 
   menuPanel.append(
     // ゴミ箱は常に参照モードなので、切り替えを出さない
@@ -757,8 +816,10 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       ? []
       : [el('hr'), el('div', { className: 'menu-heading', textContent: t('menu.expiry') }), ...expiryItems.values()]),
     el('hr'),
+    lockItem,
     // 削除は、常に見える場所には置かない。ゴミ箱の削除は、ゴミ箱を空にすること
-    menuItem(inTrash ? t('trash.empty') : t('menu.deletePage'), deletePage, 'danger'),
+    deleteItem,
   );
   showExpiry(expireDays);
+  showLock(locked, expireSince);
 }

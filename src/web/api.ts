@@ -93,6 +93,13 @@ export const setTitle = (slug: string, title: string, mustExist = false) =>
 export const setColor = (slug: string, color: string | null) =>
   request<{ color: string | null }>('PUT', `/api/pages/${slug}/color`, { color });
 
+/** ページのロック（編集の禁止）の設定と解除。管理者だけが呼べる */
+export const setLocked = (slug: string, locked: boolean) =>
+  request<{ locked: boolean }>('PUT', `/api/pages/${slug}/lock`, { locked });
+
+/** ログインしている人と、管理者かどうか */
+export const getSession = () => request<{ actor: string; admin?: boolean }>('GET', '/api/session');
+
 export const setExpiry = (slug: string, days: number | null) =>
   request<{ expireDays: number | null }>('PUT', `/api/pages/${slug}/expiry`, { days });
 

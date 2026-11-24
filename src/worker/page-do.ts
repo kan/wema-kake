@@ -25,6 +25,7 @@ import {
   type OpsMsg,
   PING,
   PONG,
+  REASON_PAGE_LOCKED,
   type ServerMsg,
 } from '../shared/protocol';
 import type { BoardState } from '../shared/tools';
@@ -132,6 +133,8 @@ export interface ApplyInput {
 /** ページがないときの `reason`。Worker は、これを 404 にする */
 export const REASON_PAGE_NOT_FOUND = 'page not found';
 
+export { REASON_PAGE_LOCKED };
+
 export interface ReceiveInput extends Pick<ApplyInput, 'actor' | 'delegate' | 'clientId' | 'opId'> {
   /** 置く付箋と、その間の接続線。外から来た値をそのまま渡す。検証は receiveNotes が行う */
   notes: unknown;
@@ -168,7 +171,7 @@ export type NoteVersions = Record<string, number>;
  */
 export type TakeResult =
   | { ok: true; seq: number; noteIds: string[]; versions: NoteVersions | null }
-  | { ok: false; reason: string; notFound?: true };
+  | { ok: false; reason: string; notFound?: true; locked?: true };
 
 export interface RemoveInput extends Pick<ApplyInput, 'actor' | 'delegate' | 'clientId' | 'opId'> {
   noteIds: string[];
@@ -247,8 +250,9 @@ export interface RevertInput {
  * - conflict: すでに取り消されている
  * - forbidden: `ownOnly` で、他の主体の操作を指定した
  * - invalid: 入力が不正
+ * - locked: ページがロックされている
  */
-export type RevertFailure = 'not-found' | 'conflict' | 'forbidden' | 'invalid';
+export type RevertFailure = 'not-found' | 'conflict' | 'forbidden' | 'invalid' | 'locked';
 
 export type RevertResult =
   | ({ ok: true } & RevertOutcome)
@@ -423,7 +427,49 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       color: this.getMeta('color'),
       epoch: this.getMeta('epoch'),
       expireDays: this.expireDays(),
+      locked: this.isLocked(),
+      expireSince: this.unlockedAt(),
     } satisfies ServerMsg);
+  }
+
+  /** ページがロック（編集の禁止）されているか（`setLocked`） */
+  private isLocked(): boolean {
+    return this.version > 0 && this.getMeta('locked') === '1';
+  }
+
+  /**
+   * 最後にロックを外した時刻。期限による自動削除は、付箋の更新時刻とこの時刻の遅い方から数える
+   * （ロックしていた間に期限を過ぎた付箋を、外した直後にまとめて消さないため）。外したことがなければ null
+   */
+  private unlockedAt(): number | null {
+    if (this.version === 0) return null;
+    const at = this.getMeta('unlocked_at');
+    return at === null ? null : Number(at);
+  }
+
+  /**
+   * ページをロックする（`locked` が false なら外す）。**ロック中は、管理者も含めて誰も編集できない。**
+   * 書き込みの入口（applyOps、付箋の移動の送り先と送り元、取り消し、表示名・色・期限の設定、削除）は、
+   * どれも `REASON_PAGE_LOCKED` で断る。期限による付箋の自動削除も止める。
+   *
+   * 管理者かどうかは呼び出し側（Worker）が確かめる。agent にはさせない（MCP にツールを置かない）。
+   * まだ作られていないページと、ゴミ箱はロックできない。表示名と同じく、ops には記録しない
+   */
+  setLocked(
+    input: unknown,
+  ): { ok: true; locked: boolean } | { ok: false; reason: 'invalid locked' | 'fixed' | typeof REASON_PAGE_NOT_FOUND } {
+    if (typeof input !== 'boolean') return { ok: false, reason: 'invalid locked' };
+    const slug = this.slugOrNull();
+    if (slug !== null && isTrash(slug)) return { ok: false, reason: 'fixed' };
+    if (this.version === 0 || this.deleting > 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
+    if (input !== this.isLocked()) {
+      this.setMeta('locked', input ? '1' : null);
+      if (!input) this.setMeta('unlocked_at', String(Date.now()));
+      this.broadcast(this.metaJson());
+      // ロックの間は期限の alarm を設定しない。外したら、次の期限で設定し直す
+      if (!input) this.ctx.waitUntil(this.scheduleNextAlarm(Date.now()));
+    }
+    return { ok: true, locked: input };
   }
 
   /** 古い付箋を自動で消すまでの日数。ゴミ箱は、常に TRASH_EXPIRE_DAYS。付けていなければ null */
@@ -443,12 +489,13 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     input: unknown,
   ):
     | { ok: true; expireDays: number | null }
-    | { ok: false; reason: 'invalid days' | 'fixed' | typeof REASON_PAGE_NOT_FOUND } {
+    | { ok: false; reason: 'invalid days' | 'fixed' | typeof REASON_PAGE_NOT_FOUND | typeof REASON_PAGE_LOCKED } {
     if (input !== null && !(EXPIRE_DAYS_CHOICES as readonly unknown[]).includes(input)) {
       return { ok: false, reason: 'invalid days' };
     }
     if (this.version === 0 || this.deleting > 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
     if (isTrash(this.slug())) return { ok: false, reason: 'fixed' };
+    if (this.isLocked()) return { ok: false, reason: REASON_PAGE_LOCKED };
     const days = input as number | null;
     if (days !== this.expireDays()) {
       this.setMeta('expire_days', days === null ? null : String(days));
@@ -466,8 +513,8 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
   getSnapshot(): Snapshot {
     if (this.version === 0) {
       return {
-        seq: 0, title: null, color: null, epoch: null, expireDays: this.expireDays(),
-        data: { version: 1, notes: [], edges: [] }, info: {},
+        seq: 0, title: null, color: null, epoch: null, expireDays: this.expireDays(), locked: false,
+        expireSince: null, data: { version: 1, notes: [], edges: [] }, info: {},
       };
     }
     return {
@@ -476,6 +523,8 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       color: this.getMeta('color'),
       epoch: this.getMeta('epoch'),
       expireDays: this.expireDays(),
+      locked: this.isLocked(),
+      expireSince: this.unlockedAt(),
       ...readBoardWithInfos(this.sql),
     };
   }
@@ -483,7 +532,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
   /** agent（MCP）に渡すボード。付箋には作成者が付く。ページがまだ作られていなければ null */
   getBoardState(): BoardState | null {
     if (this.version === 0) return null;
-    return { title: this.getMeta('title'), ...readBoardWithAuthors(this.sql) };
+    return { title: this.getMeta('title'), locked: this.isLocked(), ...readBoardWithAuthors(this.sql) };
   }
 
   /**
@@ -496,10 +545,13 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
   setTitle(
     input: unknown,
     options: { mustExist?: boolean } = {},
-  ): { ok: true; title: string | null } | { ok: false; reason: 'invalid title' | typeof REASON_PAGE_NOT_FOUND } {
+  ):
+    | { ok: true; title: string | null }
+    | { ok: false; reason: 'invalid title' | typeof REASON_PAGE_NOT_FOUND | typeof REASON_PAGE_LOCKED } {
     const title = parseTitle(input);
     if (title === undefined) return { ok: false, reason: 'invalid title' };
     if (options.mustExist && this.version === 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
+    if (this.isLocked()) return { ok: false, reason: REASON_PAGE_LOCKED };
     this.migrate();
     this.setMeta('title', title);
     this.broadcast(this.metaJson());
@@ -515,7 +567,10 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
   async setColor(
     input: unknown,
     actor = 'system',
-  ): Promise<{ ok: true; color: string | null } | { ok: false; reason: 'invalid color' | typeof REASON_PAGE_NOT_FOUND }> {
+  ): Promise<
+    | { ok: true; color: string | null }
+    | { ok: false; reason: 'invalid color' | typeof REASON_PAGE_NOT_FOUND | typeof REASON_PAGE_LOCKED }
+  > {
     const set = this.setOwnColor(input);
     if (!set.ok) return set;
     // 親ページにある自分の付箋を、同じ色にする。色が変わっていなくても合わせる（前に合わせ損ねて
@@ -541,11 +596,16 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    */
   setOwnColor(
     input: unknown,
-  ): { ok: true; color: string | null } | { ok: false; reason: 'invalid color' | typeof REASON_PAGE_NOT_FOUND } {
+  ):
+    | { ok: true; color: string | null }
+    | { ok: false; reason: 'invalid color' | typeof REASON_PAGE_NOT_FOUND | typeof REASON_PAGE_LOCKED } {
     if (input !== null && (typeof input !== 'string' || !(PAGE_COLORS as readonly string[]).includes(input))) {
       return { ok: false, reason: 'invalid color' };
     }
     if (this.version === 0 || this.deleting > 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
+    // ロック中のページの色は変えない。親ページの付箋の色を変えて呼ばれたときは、食い違いが残り、
+    // このページの次の索引の更新で、付箋がこのページの色に戻る
+    if (this.isLocked()) return { ok: false, reason: REASON_PAGE_LOCKED };
     // 同じ色なら、何もしない（索引を更新すると、変更のないページの更新日時が変わる）
     if (input !== this.getMeta('color')) {
       this.setMeta('color', input);
@@ -894,11 +954,13 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * ページを削除する。付箋、接続線、履歴、表示名と、D1 の索引を消す。取り消しはできない。
    * 貼った画像は R2 に残る（どのページの画像かを記録していない）。
    */
-  deletePage(actor = 'system'): Promise<void> {
+  deletePage(actor = 'system'): Promise<{ ok: true } | { ok: false; reason: typeof REASON_PAGE_LOCKED }> {
+    // ロック中のページは消さない。順番待ちに入る前に断る（入ると、待っている書き込みが削除として断られる）
+    if (this.isLocked()) return Promise.resolve({ ok: false, reason: REASON_PAGE_LOCKED });
     // 順番を待っている書き込みと、削除の途中で届く書き込みは、削除の後に実行させない
     // （実行すると、消したページが作り直されてしまう）
     this.deleting++;
-    return this.inOrder(async () => {
+    return this.inOrder(async (): Promise<{ ok: true } | { ok: false; reason: typeof REASON_PAGE_LOCKED }> => {
       try {
         const slug = this.slug();
         // 索引を先に消す。ここで失敗したら、ページの内容は残っているので、やり直せる
@@ -909,6 +971,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
         this.version = 0;
         // 接続中のブラウザには再接続させない（再接続しても、hello の epoch が合わずに閉じられる）
         for (const ws of this.ctx.getWebSockets()) ws.close(CLOSE_PAGE_DELETED, 'page deleted');
+        return { ok: true };
       } finally {
         this.deleting--;
         this.generation++;
@@ -958,11 +1021,15 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     if (this.version === 0) return;
     let at = this.getMeta('index_clean') === null ? now + INDEX_DELAY_MS : Infinity;
     const days = this.expireDays();
-    if (days !== null) {
+    // ロック中は、期限による削除を止める（外したときに、設定し直す）
+    if (days !== null && !this.isLocked()) {
       const oldest = this.sql
         .exec(`SELECT min(updated_at) AS t FROM notes WHERE ${EXPIRABLE}`)
         .one().t as number | null;
-      if (oldest !== null) at = Math.min(at, Math.max(oldest + days * DAY_MS, this.expirePausedUntil()));
+      if (oldest !== null) {
+        const from = Math.max(oldest, this.unlockedAt() ?? 0);
+        at = Math.min(at, Math.max(from + days * DAY_MS, this.expirePausedUntil()));
+      }
     }
     if (at !== Infinity) await this.scheduleAlarm(at);
   }
@@ -1008,6 +1075,8 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     if (days === null || now < this.expirePausedUntil()) return Promise.resolve();
     return this.write(async () => {
       if (this.version === 0) return;
+      // ロック中は消さない。外した後は、外した時刻から数える
+      if (this.isLocked() || (this.unlockedAt() ?? 0) > now - days * DAY_MS) return;
       const rows = this.sql
         .exec<{ id: string; size: number }>(
           `SELECT id, length(text) AS size FROM notes WHERE updated_at <= ? AND ${EXPIRABLE} ORDER BY updated_at`,
@@ -1125,7 +1194,9 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * その付箋の更新が処理されるなど）ので、呼び出しを 1 つずつ順に処理する。
    */
   applyOps(input: ApplyInput): Promise<ApplyResult> {
-    return this.write(() => this.applyOpsInOrder(input, { trash: true }), { ok: false, reason: REASON_PAGE_DELETED });
+    return this.write(() => this.applyOpsInOrder(input, { trash: true, respectLock: true }), {
+      ok: false, reason: REASON_PAGE_DELETED,
+    });
   }
 
   // --- ゴミ箱（src/shared/trash.ts） ---
@@ -1297,7 +1368,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
             summary: systemSummary.notesReceived(from),
             mustExist: true,
           },
-          { prepare: (deltas) => this.placeBelowNotes(deltas) },
+          { prepare: (deltas) => this.placeBelowNotes(deltas), respectLock: true },
         );
       },
       // 呼び出し側（Worker）は、ページがないときと同じに扱う
@@ -1329,6 +1400,9 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       // removeNotes が版を比べて、消さずに残す
       const source = await this.env.PAGE.getByName(from).notesAmong(noteIds);
       if (!source) return { ok: false, reason: `page not found: ${from}`, notFound: true };
+      // ロック中のページからは、写せるが、移せない（置いた後に、元のページから消せない）
+      if (source.locked && input.keepAuthors) return { ok: false, reason: `${REASON_PAGE_LOCKED}: ${from}`, locked: true };
+      if (this.isLocked()) return { ok: false, reason: REASON_PAGE_LOCKED, locked: true };
       return this.placeTaken(input, source);
     }, pageNotFound);
   }
@@ -1337,8 +1411,8 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * 付箋 `ids` と、その付箋どうしをつなぐ接続線。他のページが、移す付箋を読む（takeNotes）。
    * ページがまだ作られていなければ null
    */
-  notesAmong(ids: string[]): { notes: TakenNote[]; edges: WemaEdge[] } | null {
-    return this.version === 0 ? null : readNotesAmong(this.sql, ids);
+  notesAmong(ids: string[]): { notes: TakenNote[]; edges: WemaEdge[]; locked: boolean } | null {
+    return this.version === 0 ? null : { ...readNotesAmong(this.sql, ids), locked: this.isLocked() };
   }
 
   /** takeNotes で読んだ付箋を、新しい id にして置く */
@@ -1377,9 +1451,11 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
         summary: summary ?? systemSummary.notesReceived(from),
         mustExist: true,
       },
-      { prepare: placeAs ? undefined : (deltas) => this.placeBelowNotes(deltas), authors },
+      { prepare: placeAs ? undefined : (deltas) => this.placeBelowNotes(deltas), authors, respectLock: true },
     );
-    if (!result.ok) return { ok: false, reason: result.reason };
+    if (!result.ok) {
+      return { ok: false, reason: result.reason, ...(result.reason === REASON_PAGE_LOCKED ? { locked: true } : {}) };
+    }
     // ゴミ箱から戻した付箋は、ゴミ箱へ移した記録を消す（戻した付箋を、Undo の戻りと見なさない）
     if (placeAs) this.forgetTrashed(createdNoteIds(result.deltas));
     return { ok: true, seq: result.seq, noteIds: createdNoteIds(result.deltas), versions };
@@ -1406,12 +1482,15 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
         .map(({ createdBy: _, delegate: __, updatedAt: ___, ...note }) => note);
       // 空のデルタは記録できない
       if (notes.length === 0) return { ok: true, seq: null, kept };
-      const result = await this.applyOpsInOrder({
-        ...sender,
-        deltas: notes.map((note): HistoryDelta => ({ type: 'note:delete', note })),
-        summary: summary ?? systemSummary.notesSent(to),
-        mustExist: true,
-      });
+      const result = await this.applyOpsInOrder(
+        {
+          ...sender,
+          deltas: notes.map((note): HistoryDelta => ({ type: 'note:delete', note })),
+          summary: summary ?? systemSummary.notesSent(to),
+          mustExist: true,
+        },
+        { respectLock: true },
+      );
       if (!result.ok) return { ok: false, reason: result.reason };
       return { ok: true, seq: result.deltas.length > 0 ? result.seq : null, kept };
     }, { ok: false, reason: REASON_PAGE_NOT_FOUND });
@@ -1498,6 +1577,9 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * @param options.trash 人や agent の操作として扱う。消した付箋をゴミ箱へ移し（sendToTrash）、ゴミ箱へ
    *   移した付箋が戻ったら、ゴミ箱の写しを消す（untrash）。他のページへの移動、子ページの削除に伴う
    *   付箋の削除、ゴミ箱への受け入れでは、付けない
+   * @param options.respectLock ページがロックされていたら、`REASON_PAGE_LOCKED` で断る。人や agent の
+   *   書き込み（applyOps、付箋の移動の送り先と送り元）で付ける。サーバーが他のページに合わせて行う
+   *   書き込み（子ページの付箋の色、子ページの削除に伴う付箋の削除）と、期限による削除では付けない
    */
   private async applyOpsInOrder(
     input: ApplyInput,
@@ -1506,9 +1588,10 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       matchColors?: boolean;
       authors?: ReadonlyMap<string, Author>;
       trash?: boolean;
+      respectLock?: boolean;
     } = {},
   ): Promise<ApplyResult> {
-    const { prepare, matchColors = true, authors, trash = false } = options;
+    const { prepare, matchColors = true, authors, trash = false, respectLock = false } = options;
     let deltas: HistoryDelta[];
     let sanitized: Sanitized;
     try {
@@ -1538,11 +1621,15 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       };
     }
 
+    // 子ページを子にする（withChildren）より前に断る
+    if (respectLock && this.isLocked()) return { ok: false, reason: REASON_PAGE_LOCKED };
     prepare?.(deltas);
 
     let removedAuthors: ReadonlyMap<string, Author> = new Map();
     const apply = (): ApplyResult => {
       let deliver: (() => void) | undefined;
+      // 子ページを子にするのを待つ間に、ロックされることがある
+      if (respectLock && this.isLocked()) return { ok: false, reason: REASON_PAGE_LOCKED };
       try {
         const result = this.ctx.storage.transactionSync((): ApplyResult => {
           const now = Date.now();
@@ -1629,6 +1716,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       parseId(clientId, 'clientId');
       parseId(opId, 'opId');
       if (this.version === 0 || !Number.isInteger(target)) return notFound();
+      if (this.isLocked()) return fail('locked', REASON_PAGE_LOCKED);
 
       const done = this.findOp(actor, clientId, opId);
       if (done) {
@@ -1659,6 +1747,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
             .exec(`SELECT actor, delegate, reverted_by FROM ops WHERE seq = ?`, target)
             .toArray()[0];
           if (!op) return notFound();
+          if (this.isLocked()) return fail('locked', REASON_PAGE_LOCKED);
           if (op.reverted_by !== null) return fail('conflict', 'already reverted');
           if (input.ownOnly && (op.actor !== actor || op.delegate !== delegate)) {
             return fail('forbidden', 'not your operation');
