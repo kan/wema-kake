@@ -203,6 +203,11 @@ a.icon-button[hidden] { display: none; }
   padding: 0 7px; color: #555; font-size: 11px; line-height: 16px; white-space: nowrap;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis;
 }
+/* 作成者のアイコン（issue #122）と、名前と日時。名前が長ければ、文字の側を省略する */
+.note-author { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+.note-author:has(> .avatar) { padding-left: 1px; }
+.note-author > .avatar { --avatar-size: 14px; }
+.note-author-text { overflow: hidden; text-overflow: ellipsis; }
 /* AI のアイコン。色は、それぞれのロゴの色 */
 .note-agent { flex: none; width: 18px; align-items: center; justify-content: center; color: #555; }
 .note-agent svg { width: 12px; height: 12px; }
@@ -220,7 +225,8 @@ a.icon-button[hidden] { display: none; }
 /* 縦に積んでいる間は、隠している分の高さを空けない（すべての付箋の間隔が広がるため）。ホバーのない
    画面なので、出すのは、付箋を選んだときだけ。高さが変わり、列が積み直される */
 .wema-board.wema-stacked :is(.note-agent, .note-author, .note-restore) { display: none; }
-.wema-board.wema-stacked .wema-note-selected :is(.note-author, .note-restore) { display: block; }
+.wema-board.wema-stacked .wema-note-selected .note-restore { display: block; }
+.wema-board.wema-stacked .wema-note-selected .note-author { display: inline-flex; }
 .wema-board.wema-stacked .wema-note-selected .note-agent { display: inline-flex; }
 /* 古い付箋を自動で消すページでは、期限に近い付箋ほど薄くする。`--note-age`（0 から 1）は、
    page-view.ts の decorateNote が付箋の要素に当てる。最も薄いときの不透明度は 0.35。
@@ -344,6 +350,11 @@ a.icon-button[hidden] { display: none; }
   visibility: hidden;
 }
 .note-reaction svg { width: 11px; height: 11px; }
+/* いいねを付けた人のアイコン（issue #122）。少しずつ重ねて並べ、超えた分は「+n」 */
+.note-reactors { display: inline-flex; align-items: center; margin-left: 2px; }
+.note-reactors > .avatar { --avatar-size: 14px; border: 1px solid #fff; }
+.note-reactors > * + * { margin-left: -4px; }
+.note-reactors-more { margin-left: 2px !important; font-size: 10px; }
 .note-reaction:hover:not(:disabled) { background: #eee; }
 .note-reaction:disabled { cursor: default; }
 .note-reaction.mine { color: #1d4ed8; border-color: rgb(29 78 216 / 0.4); background: #eff6ff; }
