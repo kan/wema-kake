@@ -10,6 +10,12 @@ export const CLOSE_AUTH_EXPIRED = 4401;
  */
 export const CLOSE_PAGE_DELETED = 4410;
 
+/**
+ * 承認（設定の `approval`）を取り消された人の接続を、サーバーが閉じるコード。クライアントは、認証の
+ * 期限切れと同じく、ページを読み込み直す（承認待ちの表示になる）
+ */
+export const CLOSE_NOT_APPROVED = 4403;
+
 /** 接続維持のためにクライアントが送る文字列と、サーバーの応答（JSON ではない） */
 export const PING = 'ping';
 export const PONG = 'pong';

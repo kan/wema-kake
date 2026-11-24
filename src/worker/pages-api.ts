@@ -33,9 +33,6 @@ export const validSlug = createMiddleware<AuthEnv>(async (c, next) => {
 
 export const pagesApi = new Hono<AuthEnv>();
 
-/** 認証が有効かを確かめるための、軽い問い合わせ先（切断中に認証が切れたかをブラウザが調べる） */
-pagesApi.get('/session', (c) => c.json({ actor: c.get('actor'), admin: isAdmin(c.get('config'), c.get('email')) }));
-
 /**
  * 一覧のボード用。ルートのページ（親のないページ）を新しい順に返す。子ページと孫ページは、
  * 親ページの中からたどるので、ここには出さない。`child_count` は、直接の子ページの数。

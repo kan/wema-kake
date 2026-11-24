@@ -48,9 +48,11 @@ import {
   switchLang,
   toast,
   trashLink,
+  usersLink,
   WEMA_LABELS,
   zoomControls,
 } from './toolbar';
+import { viewSession } from './session';
 import { zoomTransitions } from './viewport-motion';
 import { rememberViewport } from './viewport-store';
 
@@ -175,7 +177,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   });
   const sessionSignal = viewSignal();
   // ロックの項目（管理者にだけ出す）でも使う
-  const sessionRequest = api.getSession();
+  const sessionRequest = viewSession();
   sessionRequest
     .then((session) => {
       if (sessionSignal.aborted) return;
@@ -491,6 +493,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       popover(backlinksButton, backlinksPanel, { align: 'right' }).root,
       pageNavMenu(),
       ...(inTrash ? [] : [trashLink()]),
+      usersLink(),
       menu.root,
     ],
   );

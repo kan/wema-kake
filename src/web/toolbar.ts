@@ -10,6 +10,7 @@ import { LANG_COOKIE } from '../shared/i18n';
 import { lang, otherLang, t } from './i18n';
 import { type IconName, icon } from './icons';
 import { reloadPage, viewSignal } from './navigation';
+import { viewSession } from './session';
 
 /** 3 つの区画を持つヘッダー */
 export function header(left: Child[], tools: Child[], right: Child[]): HTMLElement {
@@ -36,6 +37,29 @@ export function trashLink(): HTMLAnchorElement {
   const link = appLink(`/p/${TRASH_SLUG}`, icon('trash'));
   link.className = 'icon-button';
   link.title = link.ariaLabel = t('trash.open');
+  return link;
+}
+
+/**
+ * 利用者の画面へのリンク（アイコン）。承認（設定の `approval`）が有効なときに、管理者にだけ出す。
+ * 承認待ちの人がいれば、人数の印を付ける
+ */
+export function usersLink(): HTMLAnchorElement {
+  const badge = el('span', { className: 'count-badge', hidden: true });
+  const link = appLink('/users', icon('users'), badge);
+  link.className = 'icon-button users-link';
+  link.hidden = true;
+  const signal = viewSignal();
+  viewSession()
+    .then((session) => {
+      if (signal.aborted || !session.admin || session.approval === undefined) return;
+      const pending = session.pendingUsers ?? 0;
+      link.title = link.ariaLabel = t('users.open', pending);
+      badge.textContent = String(pending);
+      badge.hidden = pending === 0;
+      link.hidden = false;
+    })
+    .catch(() => undefined);
   return link;
 }
 

@@ -22,6 +22,7 @@ import { isReactionKind, type Reaction } from '../shared/note-info';
 import { DAY_MS, EXPIRE_DAYS_CHOICES, isExpirable, isTrash, TRASH_EXPIRE_DAYS, TRASH_SLUG } from '../shared/trash';
 import {
   CLOSE_AUTH_EXPIRED,
+  CLOSE_NOT_APPROVED,
   CLOSE_PAGE_DELETED,
   type OpsMsg,
   PING,
@@ -66,6 +67,7 @@ import {
   writePage,
 } from './indexer';
 import { applyRevert } from './revert';
+import { isApproved } from './users';
 import { SanitizeError } from './sanitize';
 import {
   clampLimit,
@@ -93,6 +95,13 @@ const MAX_REPLAY_LENGTH = 4_000_000;
 export const ACTOR_HEADER = 'X-Wema-Actor';
 /** 同じく、認証の期限（UNIX 秒）を入れるヘッダー。期限がなければ付けない */
 export const AUTH_EXPIRES_HEADER = 'X-Wema-Auth-Expires';
+/**
+ * 同じく、承認（設定の `approval`）を接続の間も確かめ直す人の email を入れるヘッダー。承認が無効なとき
+ * と、管理者には付けない
+ */
+export const APPROVAL_CHECK_HEADER = 'X-Wema-Approval-Check';
+/** 承認済みと確かめた結果を覚えておく時間。取り消しが届くのは、長くてもこれだけ遅れる */
+const APPROVAL_RECHECK_MS = 30_000;
 
 /** 接続ごとに持つ情報。Hibernation から復帰しても残る */
 interface Attachment {
@@ -104,6 +113,8 @@ interface Attachment {
   expiresAt?: number;
   /** hello を受けるまで未設定。未設定の接続には配信しない */
   clientId?: string;
+  /** 承認を確かめ直す人の email（`APPROVAL_CHECK_HEADER`）。確かめなくてよい接続では未設定 */
+  approvalEmail?: string;
 }
 
 function isExpired(attachment: Attachment): boolean {
@@ -1847,9 +1858,13 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     const expires = request.headers.get(AUTH_EXPIRES_HEADER);
     const expiresAt = expires === null ? undefined : Number(expires);
 
+    const approvalEmail = request.headers.get(APPROVAL_CHECK_HEADER) ?? undefined;
+    // Worker が、転送の直前に承認済みと確かめている。hello で D1 を読み直さない
+    if (approvalEmail) this.approvedAt.set(approvalEmail, Date.now());
+
     const { 0: client, 1: server } = new WebSocketPair();
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ actor, expiresAt } satisfies Attachment);
+    server.serializeAttachment({ actor, expiresAt, approvalEmail } satisfies Attachment);
     return new Response(null, { status: 101, webSocket: client });
   }
 
@@ -1871,6 +1886,15 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     if (isExpired(attachment)) {
       ws.close(CLOSE_AUTH_EXPIRED, 'authentication expired');
       return;
+    }
+    const { approvalEmail } = attachment;
+    if ((msg.type === 'hello' || msg.type === 'ops') && approvalEmail) {
+      if (!(await this.checkApproval(approvalEmail))) {
+        this.closeUnapproved(approvalEmail);
+        return;
+      }
+      // D1 を待っている間に、配信のときの確かめ直しが、この接続を閉じていることがある
+      if (ws.readyState !== WebSocket.OPEN) return;
     }
     if (msg.type === 'hello') {
       this.onHello(ws, attachment, msg);
@@ -1986,6 +2010,46 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     }
   }
 
+  // --- 承認（設定の `approval`）の確かめ直し ---
+
+  /** 承認済みと確かめた時刻（email ごと）。承認済みだったときだけ入れる。Hibernation で消えてよい */
+  private approvedAt = new Map<string, number>();
+  /** 確かめている最中の問い合わせ（同じ人の問い合わせを、まとめる） */
+  private approvalChecks = new Map<string, Promise<boolean>>();
+
+  private recentlyApproved(email: string): boolean {
+    const at = this.approvedAt.get(email);
+    return at !== undefined && Date.now() - at < APPROVAL_RECHECK_MS;
+  }
+
+  /**
+   * `email` の人が、まだ承認済みか。D1 を読めなかったときは、承認済みとして扱う（接続のときに
+   * Worker が確かめているので、一時的な失敗で、使っている人の接続を切らない）
+   */
+  private async checkApproval(email: string): Promise<boolean> {
+    if (this.recentlyApproved(email)) return true;
+    let check = this.approvalChecks.get(email);
+    if (!check) {
+      check = isApproved(this.env.DB, email)
+        .catch((e) => {
+          console.error('approval check failed', e);
+          return true;
+        })
+        .finally(() => this.approvalChecks.delete(email));
+      this.approvalChecks.set(email, check);
+    }
+    const approved = await check;
+    if (approved) this.approvedAt.set(email, Date.now());
+    else this.approvedAt.delete(email);
+    return approved;
+  }
+
+  private closeUnapproved(email: string): void {
+    for (const ws of this.ctx.getWebSockets()) {
+      if ((ws.deserializeAttachment() as Attachment).approvalEmail === email) ws.close(CLOSE_NOT_APPROVED, 'not approved');
+    }
+  }
+
   /**
    * hello を済ませた全接続へ送る。`sender` を指定すると、その送信元の接続にだけ
    * `toSender` を送る（null なら送らない）。clientId はクライアントの自己申告なので、
@@ -1995,6 +2059,9 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     json: string,
     sender?: { actor: string; clientId: string; toSender: string | null },
   ): void {
+    // 見ているだけの人は、メッセージを送ってこないので、配信のときに確かめ直す。確かめている間の
+    // 配信は届く（取り消しが届くのは、長くても APPROVAL_RECHECK_MS と、この 1 回分だけ遅れる）
+    const recheck = new Set<string>();
     for (const ws of this.ctx.getWebSockets()) {
       const attachment = ws.deserializeAttachment() as Attachment;
       if (isExpired(attachment)) {
@@ -2002,11 +2069,17 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
         continue;
       }
       if (!attachment.clientId) continue;
+      const { approvalEmail } = attachment;
+      if (approvalEmail && !this.recentlyApproved(approvalEmail)) recheck.add(approvalEmail);
       const out =
         sender && attachment.clientId === sender.clientId && attachment.actor === sender.actor
           ? sender.toSender
           : json;
       if (out !== null) send(ws, out);
+    }
+    // 承認が取り消されていたら、その人の接続をすべて閉じる
+    for (const email of recheck) {
+      this.ctx.waitUntil(this.checkApproval(email).then((approved) => approved || this.closeUnapproved(email)));
     }
   }
 }

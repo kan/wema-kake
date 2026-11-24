@@ -18,6 +18,12 @@ export const DEFAULT_SITE: SiteConfig = { siteName: 'wema-kake', defaultLang: DE
 export const SITE_META_NAME = 'wema-kake-site';
 
 /**
+ * 承認（設定の `approval`）が済んでいない人の index.html に入れる `<meta>` の名前。`content` は
+ * 承認の状態（'pending' / 'rejected'）。承認済みの人と、承認が無効なときは入れない
+ */
+export const APPROVAL_META_NAME = 'wema-kake-approval';
+
+/**
  * `<meta>` の `content` を読む。読めない値や欠けた項目は、既定の値にする（Worker を通らずに
  * 配られた index.html でも、画面が動くようにする）
  */

@@ -231,4 +231,32 @@ export const ja = {
 
   // --- 使い方の画面 ---
   'help.unsaved': 'このボードは保存されません',
+
+  // --- 利用者の承認（設定の approval） ---
+  'approval.pending.title': '承認を待っています',
+  'approval.pending.body': '管理者が承認すると使えるようになります。承認されたら、このページを読み込み直してください。',
+  'approval.rejected.title': '利用できません',
+  'approval.rejected.body': 'このサイトを使うことは、管理者に許可されていません。',
+  'approval.reload': '読み込み直す',
+  'users.title': '利用者',
+  'users.email': 'メールアドレス',
+  'users.status': '状態',
+  'users.decidedBy': '最後に決めた人',
+  /** ヘッダーのリンクの説明。`pending` は承認待ちの人数 */
+  'users.open': (pending: number) => (pending > 0 ? `利用者（承認待ち ${pending} 人）` : '利用者'),
+  'users.status.pending': '承認待ち',
+  'users.status.approved': '承認済み',
+  'users.status.rejected': '拒否',
+  'users.admin': '管理者',
+  'users.approve': '承認する',
+  'users.reject': '拒否する',
+  /** 承認済みの人を拒否するときの確認。`email` はその人の email */
+  'users.rejectConfirm': (email: string) => `${email} を拒否しますか？開いている画面からも、すぐに使えなくなります。`,
+  'users.empty': 'まだ誰も来ていません',
+  'users.createdAt': '初めて来た日時',
+  /** 最後に承認か拒否をした人と日時。`who` は管理者の名前 */
+  'users.decided': (who: string, date: string) => `${who}（${date}）`,
+  'users.forbidden': 'この画面は管理者だけが使えます',
+  'failed.users': (reason: string) => `利用者の一覧を読み込めませんでした（${reason}）`,
+  'failed.decide': (reason: string) => `変更に失敗しました（${reason}）`,
 };

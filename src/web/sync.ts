@@ -5,6 +5,7 @@ import { type BoardData, type HistoryDelta, invertDeltas, type WemaNote } from '
 import { applyOpToInfos, type NoteInfo, type Reaction } from '../shared/note-info';
 import {
   CLOSE_AUTH_EXPIRED,
+  CLOSE_NOT_APPROVED,
   CLOSE_PAGE_DELETED,
   type ClientMsg,
   type OpsMsg,
@@ -220,7 +221,8 @@ export class BoardSync {
     this.socket = undefined;
     this.stopPing?.();
     if (this.stopped) return;
-    if (code === CLOSE_AUTH_EXPIRED) {
+    // 承認の取り消しも、読み込み直して、サーバーに状態を確かめ直してもらう（承認待ちの表示になる）
+    if (code === CLOSE_AUTH_EXPIRED || code === CLOSE_NOT_APPROVED) {
       this.authExpired();
     } else if (code === CLOSE_PAGE_DELETED) {
       // 再接続すると、手元の未確定の操作でページが作り直されてしまう

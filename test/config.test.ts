@@ -35,7 +35,7 @@ const html = { Accept: 'text/html' };
 describe('resolveConfig', () => {
   it('省いた項目を既定の値で埋める', () => {
     expect(resolveConfig()).toEqual({
-      siteName: 'wema-kake', defaultLang: 'en', mcp: { write: true }, firstPage: true, admins: null,
+      siteName: 'wema-kake', defaultLang: 'en', mcp: { write: true }, firstPage: true, admins: null, approval: false,
     });
     expect(resolveConfig({ siteName: 'Notes', defaultLang: 'ja', mcp: false, firstPage: false, admins: [] })).toEqual({
       siteName: 'Notes',
@@ -43,6 +43,7 @@ describe('resolveConfig', () => {
       mcp: false,
       firstPage: false,
       admins: new Set(),
+      approval: false,
     });
   });
 
@@ -51,6 +52,14 @@ describe('resolveConfig', () => {
     expect(() => resolveConfig({ defaultLang: 'fr' as never })).toThrow(/defaultLang/);
     expect(() => resolveConfig({ mcp: 'false' as never })).toThrow(/mcp/);
     expect(() => resolveConfig({ firstPage: 0 as never })).toThrow(/firstPage/);
+    expect(() => resolveConfig({ approval: 'yes' as never, admins: ['admin@example.com'] })).toThrow(/approval/);
+  });
+
+  it('approval を有効にするには、admins に 1 人以上が要る', () => {
+    expect(resolveConfig({ approval: true, admins: ['admin@example.com'] }).approval).toBe(true);
+    // 省くと全員が管理者になり、空なら承認できる人がいない。どちらも効いていない設定になる
+    expect(() => resolveConfig({ approval: true })).toThrow(/approval requires/);
+    expect(() => resolveConfig({ approval: true, admins: [] })).toThrow(/approval requires/);
   });
 
   it('admins は email の一覧。小文字にそろえる', () => {

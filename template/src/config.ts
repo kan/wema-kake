@@ -18,6 +18,9 @@ const config: WemaKakeConfig = {
   // 管理者の email。MCP（/mcp）を使えるのは、管理者が認可したクライアントだけになる。省くと、
   // Access を通ったすべての人を管理者として扱う（README の「管理者を決める」）
   // admins: ['you@example.com'],
+  // 初めて来た人を承認待ちにし、管理者が承認するまで使わせない。省くと false。true にするには
+  // admins が要る（README の「利用者を承認制にする」）
+  // approval: true,
 };
 
 export default config;

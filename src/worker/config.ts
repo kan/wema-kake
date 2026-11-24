@@ -37,6 +37,12 @@ export interface WemaKakeConfig {
    * 省くと、Access を通ったすべての人を管理者として扱う（これまでの動き）。空の配列なら、管理者はいない
    */
   admins?: readonly string[];
+  /**
+   * 初めて来た人を承認待ちにし、管理者が承認するまで使わせないか。既定は `false`（Access を
+   * 通った人は、そのまま使える）。`true` にするときは `admins` が要る（承認する人がいないため）。
+   * 有効にすると、それまで使っていた人も承認待ちになる。管理者が「利用者」の画面で承認する
+   */
+  approval?: boolean;
 }
 
 /** `mcp` を有効にするときの設定 */
@@ -51,6 +57,8 @@ export type ResolvedConfig = SiteConfig & {
   firstPage: boolean;
   /** 管理者の email（小文字にしたもの）。null なら、全員が管理者 */
   admins: ReadonlySet<string> | null;
+  /** 初めて来た人を承認待ちにするか */
+  approval: boolean;
 };
 
 function resolveAdmins(admins: unknown): ReadonlySet<string> | null {
@@ -105,6 +113,7 @@ export function resolveConfig(config: WemaKakeConfig = {}): ResolvedConfig {
     mcp = true,
     firstPage = true,
     admins,
+    approval = false,
   } = config;
   if (typeof siteName !== 'string' || siteName.trim() === '') {
     throw new TypeError('wema-kake: siteName must be a non-empty string');
@@ -112,7 +121,14 @@ export function resolveConfig(config: WemaKakeConfig = {}): ResolvedConfig {
   if (!isLang(defaultLang)) throw new TypeError(`wema-kake: unknown defaultLang: ${String(defaultLang)}`);
   // JavaScript から渡されると型の検査を通らないので、0 のような値をここで断る
   if (typeof firstPage !== 'boolean') throw new TypeError('wema-kake: firstPage must be a boolean');
-  return { siteName, defaultLang, mcp: resolveMcp(mcp), firstPage, admins: resolveAdmins(admins) };
+  if (typeof approval !== 'boolean') throw new TypeError('wema-kake: approval must be a boolean');
+  const resolvedAdmins = resolveAdmins(admins);
+  // admins を省くと全員が管理者になり、承認待ちの人がいなくなる。空の配列では、承認できる人がいない。
+  // どちらも、承認を有効にしたつもりで効いていない設定なので、起動の時点で知らせる
+  if (approval && (resolvedAdmins === null || resolvedAdmins.size === 0)) {
+    throw new TypeError('wema-kake: approval requires at least one email in admins');
+  }
+  return { siteName, defaultLang, mcp: resolveMcp(mcp), firstPage, admins: resolvedAdmins, approval };
 }
 
 /**

@@ -20,9 +20,12 @@ export interface Client {
   closed: Promise<{ code: number; reason: string }>;
 }
 
-/** WebSocket で接続する（hello はまだ送らない） */
-export async function open(slug: string, headers: Record<string, string> = {}): Promise<Client> {
-  const res = await api(`/ws/${slug}`, { headers: { Upgrade: 'websocket', ...headers } });
+/** Worker へリクエストを送る関数。既定は `api`（開発用の主体） */
+export type Fetcher = (path: string, init?: RequestInit) => Promise<Response>;
+
+/** WebSocket で接続する（hello はまだ送らない）。設定や主体を変えるなら、`fetcher` を渡す */
+export async function open(slug: string, headers: Record<string, string> = {}, fetcher: Fetcher = api): Promise<Client> {
+  const res = await fetcher(`/ws/${slug}`, { headers: { Upgrade: 'websocket', ...headers } });
   expect(res.status).toBe(101);
   const ws = res.webSocket!;
   ws.accept();
@@ -69,8 +72,8 @@ export async function open(slug: string, headers: Record<string, string> = {}): 
 }
 
 /** 接続して hello を送り、スナップショットを受け取る */
-export async function join(slug: string, clientId: string): Promise<Client> {
-  const c = await open(slug);
+export async function join(slug: string, clientId: string, fetcher: Fetcher = api): Promise<Client> {
+  const c = await open(slug, {}, fetcher);
   c.send({ type: 'hello', clientId });
   const snapshot = await c.next();
   expect(snapshot.type).toBe('snapshot');

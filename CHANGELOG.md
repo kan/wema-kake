@@ -13,6 +13,7 @@
 - AI（MCP）の操作と付箋に、そのコネクタを認可した人（委任者）を記録するようにした。付箋の作成者は「claude.ai（a さんの代理）」のように出る。`revert_operation` が「自分の操作」として取り消せるのは、同じクライアントで委任者も同じ操作だけになった。この版より前の AI の操作は委任者なしとして扱うので、`revert_operation` では取り消せない（画面の「操作の履歴」からは取り消せる）（[#106](https://github.com/kan/wema-kake/issues/106)）
 - 管理者が、ページをロック（編集の禁止）できるようにした。ページの画面のメニューの「ページをロックする」から行う（管理者にだけ出る）。ロック中は、管理者も含めて誰も編集できず、画面は参照モードに固定される。表示名・色・期限の変更、削除、取り消し、付箋の移動、ゴミ箱からの復元も断る（HTTP の API は 423）。期限による付箋の自動削除も止まり、外した時刻から数え直す。MCP では読めるが、書き込みのツールは理由を返して断る。AI にはロックの設定と解除をさせない（[#107](https://github.com/kan/wema-kake/issues/107)）
 - 付箋に「いいね」を付けられるようにした。付箋の下のボタンを押すと付き、もう一度押すと外れる。数と、付けた人（ボタンの説明）が分かる。付けても、付箋の書き込み者と更新日時は変わらず、操作の履歴にも残らない。MCP に `add_reaction` / `remove_reaction` を足し、`read_board` の付箋に数（`reactions`）を載せた（[#105](https://github.com/kan/wema-kake/issues/105)）
+- 設定に `approval` を足した。`true` にすると、初めて来た人は承認待ちになり、管理者が承認するまで、ページと画像を読めない。管理者は、ヘッダーの利用者のアイコン（承認待ちの人数が付く）から利用者の画面を開き、承認と拒否をする。`admins` が要る。省くと、これまでどおり。D1 に `users` の表を足したので、`npm run deploy`（マイグレーションを当ててからデプロイ）で更新する。雛形の README の「利用者を承認制にする」（[#120](https://github.com/kan/wema-kake/issues/120)）
 - 雛形の README の「Access の設定」に、Muse のコールバック URL（`https://agent.meta.ai/api/hatch/oauth/callback`）を足した。Allowed redirect URIs に入れないと、Muse でコネクタを登録する途中で Access が `redirect_uri is not allowed by the account configuration` を返して断る。「MCP で書き込めるクライアントを限る」で並べる名前は `agent.meta.ai`
 
 ### 変更
