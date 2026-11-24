@@ -27,6 +27,7 @@ import {
   type OpsMsg,
   PING,
   PONG,
+  type Presence,
   type PreviewNote,
   REASON_PAGE_LOCKED,
   type ServerMsg,
@@ -76,6 +77,7 @@ import {
   MAX_OP_BYTES,
   parseDeltas,
   parseId,
+  parsePresence,
   parsePreviewNotes,
   RejectError,
 } from './validate';
@@ -89,10 +91,10 @@ const OPS_RETENTION_COUNT = 1000;
 /** 受信メッセージの上限（文字数）。1 回の ops に入る text の合計の上限より少し大きくしている */
 const MAX_MESSAGE_LENGTH = 2_000_000;
 /**
- * 1 つの接続から、1 秒に中継する `preview` の数。送る側は 50ms ごと（1 秒に 20 回）にまとめて送るので、
- * 余裕を持たせてある。超えた分は捨てる
+ * 1 つの接続から、1 秒に中継する `preview` と `presence` の、それぞれの数。送る側は `preview` を 50ms
+ * ごと（1 秒に 20 回）、`presence` を 100ms ごとにまとめて送るので、余裕を持たせてある。超えた分は捨てる
  */
-const MAX_PREVIEWS_PER_SECOND = 30;
+const MAX_RELAYS_PER_SECOND = 30;
 /** 再接続時に差分で返す ops の数の上限。これより離れていたらスナップショットを返す */
 const MAX_REPLAY_OPS = 500;
 /** 同じく、差分の合計の大きさ（文字数）の上限。大きな text の更新が続いた場合に効く */
@@ -122,7 +124,27 @@ interface Attachment {
   clientId?: string;
   /** 承認を確かめ直す人の email（`APPROVAL_CHECK_HEADER`）。確かめなくてよい接続では未設定 */
   approvalEmail?: string;
+  /**
+   * 最後に受け取った presence（選んでいる付箋と、編集している付箋）。Hibernation から戻った後に、新しく
+   * つながった人へ送る。大きさの上限に入らなければ、選択は空（`PageDO.presences` が先）
+   */
+  presence?: Presence;
 }
+
+/** 接続の presence を、ほかの接続へ送る形にする */
+function presenceJson({ actor, clientId }: Attachment, presence: Presence | undefined): string {
+  // editing が undefined なら、JSON から消える
+  return JSON.stringify({
+    type: 'presence',
+    clientId: clientId!,
+    actor,
+    selection: presence?.selection ?? [],
+    editing: presence?.editing,
+  } satisfies ServerMsg);
+}
+
+const samePresence = (a: Presence | undefined, b: Presence) =>
+  a !== undefined && a.editing === b.editing && a.selection.join('\n') === b.selection.join('\n');
 
 function isExpired(attachment: Attachment): boolean {
   return attachment.expiresAt !== undefined && Date.now() >= attachment.expiresAt * 1000;
@@ -1904,11 +1926,14 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       if (ws.readyState !== WebSocket.OPEN) return;
     }
     if (msg.type === 'hello') {
-      this.onHello(ws, attachment, msg);
+      const hello = this.onHello(ws, attachment, msg);
+      if (hello?.clientId) this.greet(ws, { ...hello, clientId: hello.clientId });
     } else if (msg.type === 'ops') {
       await this.onOps(ws, attachment, msg);
     } else if (msg.type === 'preview') {
       this.onPreview(ws, attachment, msg);
+    } else if (msg.type === 'presence') {
+      this.onPresence(ws, attachment, msg);
     }
   }
 
@@ -1920,7 +1945,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
   private onPreview(ws: WebSocket, attachment: Attachment, msg: Record<string, unknown>): void {
     const { actor, clientId } = attachment;
     // 上限を先に数える（ロックの判定は、ストレージを読む）
-    if (!clientId || !this.allowPreview(ws) || this.isLocked()) return;
+    if (!clientId || !this.allowRelay(ws, 'preview') || this.isLocked()) return;
     let notes: PreviewNote[];
     try {
       notes = parsePreviewNotes(msg.notes);
@@ -1934,20 +1959,101 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     });
   }
 
-  /** 接続ごとの、1 秒に中継する `preview` の数の上限。送る側は `PREVIEW_INTERVAL_MS` ごとに送る */
-  private allowPreview(ws: WebSocket): boolean {
+  /**
+   * 接続ごとの、1 秒に中継する数の上限（`preview` と `presence` で別に数える）。送る側は `preview` を
+   * `PREVIEW_INTERVAL_MS` ごとに、`presence` を `PRESENCE_INTERVAL_MS` ごとにまとめて送る
+   */
+  private allowRelay(ws: WebSocket, kind: 'preview' | 'presence'): boolean {
     const now = Date.now();
-    const window = this.previewWindows.get(ws);
+    const windows = this.relayWindows[kind];
+    const window = windows.get(ws);
     if (!window || now - window.start >= 1000) {
-      this.previewWindows.set(ws, { start: now, count: 1 });
+      windows.set(ws, { start: now, count: 1 });
       return true;
     }
     window.count++;
-    return window.count <= MAX_PREVIEWS_PER_SECOND;
+    return window.count <= MAX_RELAYS_PER_SECOND;
   }
 
-  /** 接続直後の同期。`lastSeq` 以降の ops が残っていれば差分を、なければスナップショットを返す */
-  private onHello(ws: WebSocket, attachment: Attachment, msg: Record<string, unknown>): void {
+  /**
+   * 選んでいる付箋と、編集している付箋（issue #124）。接続の Attachment に持ち（Hibernation で消えない）、
+   * 送り主以外へ、主体を付けて中継する
+   */
+  private onPresence(ws: WebSocket, attachment: Attachment, msg: Record<string, unknown>): void {
+    if (!this.allowRelay(ws, 'presence')) return;
+    let presence: Presence;
+    try {
+      presence = parsePresence(msg);
+    } catch {
+      return;
+    }
+    // 変わっていなければ、保存も中継もしない
+    if (samePresence(this.presenceOf(ws, attachment), presence)) return;
+    this.presences.set(ws, presence);
+    // hello が承認の確かめ（D1）を待っている間に届いた分は、覚えておき、hello の後の greet で知らせる
+    if (!attachment.clientId) return;
+    // Attachment には大きさの上限（2KB）があり、多くの付箋を選ぶと入らない。入らなければ選択を外して
+    // 残す（Hibernation から戻った後に、つながった人へ送る分。メモリの値が先）
+    try {
+      ws.serializeAttachment({ ...attachment, presence } satisfies Attachment);
+    } catch {
+      ws.serializeAttachment({ ...attachment, presence: { selection: [], editing: presence.editing } } satisfies Attachment);
+    }
+    this.broadcast(presenceJson(attachment, presence), { actor: attachment.actor, clientId: attachment.clientId, toSender: null });
+  }
+
+  /** 接続の最後の presence。メモリの値を先に見る（Attachment には入らないことがある） */
+  private presenceOf(ws: WebSocket, attachment: Attachment): Presence | undefined {
+    return this.presences.get(ws) ?? attachment.presence;
+  }
+
+  /**
+   * hello を済ませた接続に、つながっているほかの全員の presence を送り、ほかの全員へ、この接続が
+   * つながったことを知らせる（ヘッダーの、開いている人の一覧に出す）
+   */
+  private greet(ws: WebSocket, me: Attachment & { clientId: string }): void {
+    for (const other of this.ctx.getWebSockets()) {
+      // 閉じかけの接続は、leave がもう出ているか、出ないことがあるので知らせない
+      if (other === ws || other.readyState !== WebSocket.OPEN) continue;
+      const attachment = other.deserializeAttachment() as Attachment;
+      if (attachment.clientId && !isExpired(attachment)) send(ws, presenceJson(attachment, this.presenceOf(other, attachment)));
+    }
+    this.broadcast(presenceJson(me, this.presenceOf(ws, me)), { actor: me.actor, clientId: me.clientId, toSender: null });
+  }
+
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    this.leave(ws);
+    try {
+      ws.close();
+    } catch {
+      // 閉じ終えている
+    }
+  }
+
+  async webSocketError(ws: WebSocket): Promise<void> {
+    this.leave(ws);
+  }
+
+  /**
+   * 接続が切れたことを、ほかの全員へ知らせる。同じクライアントが、つなぎ直した別の接続で残っていれば
+   * 知らせない（受け取る側は clientId で見分けるので、残っている接続の分まで消える）
+   */
+  private leave(ws: WebSocket): void {
+    const { actor, clientId } = ws.deserializeAttachment() as Attachment;
+    if (!clientId) return;
+    for (const other of this.ctx.getWebSockets()) {
+      if (other === ws || other.readyState !== WebSocket.OPEN) continue;
+      const attachment = other.deserializeAttachment() as Attachment;
+      if (attachment.clientId === clientId && attachment.actor === actor) return;
+    }
+    this.broadcast(JSON.stringify({ type: 'leave', clientId } satisfies ServerMsg), { actor, clientId, toSender: null });
+  }
+
+  /**
+   * 接続直後の同期。`lastSeq` 以降の ops が残っていれば差分を、なければスナップショットを返す
+   * @returns hello を受け付けたら、その後の Attachment（`greet` に渡す）。閉じたなら undefined
+   */
+  private onHello(ws: WebSocket, attachment: Attachment, msg: Record<string, unknown>): Attachment | undefined {
     let clientId: string;
     try {
       clientId = parseId(msg.clientId, 'clientId');
@@ -1962,13 +2068,22 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       ws.close(CLOSE_PAGE_DELETED, 'page deleted');
       return;
     }
+    // 同じ接続で、別の clientId の hello がまた届いた。前の clientId の分を、ほかの人の画面から消す
+    if (attachment.clientId && attachment.clientId !== clientId) {
+      this.broadcast(JSON.stringify({ type: 'leave', clientId: attachment.clientId } satisfies ServerMsg), {
+        actor: attachment.actor,
+        clientId: attachment.clientId,
+        toSender: null,
+      });
+    }
     // これ以降、この接続は配信の対象になる
-    ws.serializeAttachment({ ...attachment, clientId } satisfies Attachment);
+    const hello: Attachment = { ...attachment, clientId };
+    ws.serializeAttachment(hello);
 
     const { lastSeq } = msg;
     if (!this.canReplay(lastSeq)) {
       send(ws, JSON.stringify({ type: 'snapshot', ...this.getSnapshot() } satisfies ServerMsg));
-      return;
+      return hello;
     }
     // 表示名の変更は seq を進めないので、切断中に変わっていても差分には出ない。現在値を送る
     send(ws, this.metaJson());
@@ -2004,6 +2119,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
         replace: true,
       } satisfies ServerMsg),
     );
+    return hello;
   }
 
   /** `lastSeq` 以降の変更を、差分（ops の再送）で返せるか */
@@ -2059,8 +2175,13 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
   private approvedAt = new Map<string, number>();
   /** 確かめている最中の問い合わせ（同じ人の問い合わせを、まとめる） */
   private approvalChecks = new Map<string, Promise<boolean>>();
-  /** 接続ごとの、`preview` を数え始めた時刻と数（`allowPreview`）。Hibernation で消えてよい */
-  private previewWindows = new WeakMap<WebSocket, { start: number; count: number }>();
+  /** 接続ごとの、中継を数え始めた時刻と数（`allowRelay`）。Hibernation で消えてよい */
+  /** 接続ごとの、最後に受け取った presence。Hibernation で消えたら、Attachment の値を使う */
+  private presences = new WeakMap<WebSocket, Presence>();
+  private relayWindows = {
+    preview: new WeakMap<WebSocket, { start: number; count: number }>(),
+    presence: new WeakMap<WebSocket, { start: number; count: number }>(),
+  };
 
   private recentlyApproved(email: string): boolean {
     const at = this.approvedAt.get(email);

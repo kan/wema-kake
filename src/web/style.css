@@ -85,6 +85,12 @@ a.icon-button[hidden] { display: none; }
   background: hsl(var(--avatar-hue, 210) 55% 48%); color: #fff;
   font-size: calc(var(--avatar-size) * 0.5); font-weight: 600; line-height: 1; user-select: none;
 }
+/* 重ねて並べたアイコン（profiles.ts の avatarStack。いいねのボタン、ヘッダーの開いている人）。
+   重なりは --stack-overlap、超えた分は「+n」 */
+.avatar-stack { display: inline-flex; align-items: center; }
+.avatar-stack > .avatar { border: 1px solid #fff; }
+.avatar-stack > * + * { margin-left: var(--stack-overlap, -4px); }
+.avatar-stack > .avatar-stack-more { margin-left: 2px; font-size: 10px; }
 
 /* 自分の表示名とアイコンの画面（profile-view.ts） */
 .profile-body { flex: 1; min-height: 0; overflow: auto; padding: 24px 16px; }
@@ -350,11 +356,25 @@ a.icon-button[hidden] { display: none; }
   visibility: hidden;
 }
 .note-reaction svg { width: 11px; height: 11px; }
+/* ほかの人が選んでいる付箋（presence.ts、issue #124）。色は、その人の頭文字のアイコンと同じ色相。
+   自分が選んでいる付箋は、wema の選択の枠を優先する */
+.wema-note.note-peer:not(.wema-note-selected) { outline: 2px solid hsl(var(--peer-hue) 55% 48%); outline-offset: 2px; }
+/* 本文を編集していれば、付箋の左上の外に「a が編集中」を出す。::before は、カードの見た目の色の帯が使う */
+.wema-note.note-peer-editing::after {
+  content: var(--peer-label); position: absolute; left: 0; bottom: 100%; margin-bottom: 4px;
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; pointer-events: none;
+  padding: 0 6px; border-radius: 8px; background: hsl(var(--peer-hue) 55% 48%); color: #fff;
+  font-size: 11px; line-height: 16px;
+}
+/* ヘッダーの、同じページを開いている人のアイコン（presence.ts） */
+.presence-bar { display: inline-flex; margin-right: 4px; }
+.presence-bar[hidden] { display: none; }
+.presence-avatars { --stack-overlap: -6px; }
+.presence-avatars > .avatar { border-width: 2px; }
+.presence-avatars > .avatar-stack-more { font-size: 11px; color: #555; }
 /* いいねを付けた人のアイコン（issue #122）。少しずつ重ねて並べ、超えた分は「+n」 */
-.note-reactors { display: inline-flex; align-items: center; margin-left: 2px; }
-.note-reactors > .avatar { --avatar-size: 14px; border: 1px solid #fff; }
-.note-reactors > * + * { margin-left: -4px; }
-.note-reactors-more { margin-left: 2px !important; font-size: 10px; }
+.note-reactors { margin-left: 2px; }
+.note-reactors > .avatar { --avatar-size: 14px; }
 .note-reaction:hover:not(:disabled) { background: #eee; }
 .note-reaction:disabled { cursor: default; }
 .note-reaction.mine { color: #1d4ed8; border-color: rgb(29 78 216 / 0.4); background: #eff6ff; }

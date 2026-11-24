@@ -11,7 +11,7 @@ import { el, formatDate } from './dom';
 import { type IconName, icon } from './icons';
 import { t } from './i18n';
 import { onViewEnd } from './navigation';
-import { authorLabel, avatar, displayName, onProfilesChange, requestProfiles } from './profiles';
+import { authorLabel, avatar, avatarStack, displayName, onProfilesChange, requestProfiles } from './profiles';
 
 /**
  * agent の名前（OAuth のリダイレクト先のホスト名）から、アイコンを選ぶ。知らないクライアントと、
@@ -36,14 +36,7 @@ const MAX_REACTOR_AVATARS = 3;
  */
 function reactorAvatars(reactions: Reaction[]): HTMLElement {
   const people = [...new Set(reactions.map((r) => (isAgentActor(r.actor) && r.delegate ? r.delegate : r.actor)))];
-  const shown = people.slice(0, MAX_REACTOR_AVATARS).map((actor) => avatar(actor, { decorative: true }));
-  const rest = people.length - shown.length;
-  return el(
-    'span',
-    { className: 'note-reactors' },
-    ...shown,
-    ...(rest > 0 ? [el('span', { className: 'note-reactors-more', textContent: `+${rest}` })] : []),
-  );
+  return avatarStack(people, { max: MAX_REACTOR_AVATARS, className: 'note-reactors', decorative: true });
 }
 
 export interface ReactionHooks {

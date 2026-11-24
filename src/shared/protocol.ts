@@ -50,6 +50,26 @@ export const PREVIEW_INTERVAL_MS = 50;
 /** 1 つの `preview` に入れられる付箋の数。超えた分は送らない（サーバーも捨てる） */
 export const MAX_PREVIEW_NOTES = 100;
 
+/**
+ * 接続ごとの、選んでいる付箋と、本文を編集している付箋（issue #124）。保存せず、ほかの接続へ中継する。
+ * 選ぶ付箋の数は `MAX_PRESENCE_SELECTION` までを送る
+ */
+export interface Presence {
+  selection: string[];
+  editing?: string;
+}
+
+export const MAX_PRESENCE_SELECTION = 100;
+
+/** 送る側が、presence の変化をまとめて送る間隔（ミリ秒） */
+export const PRESENCE_INTERVAL_MS = 100;
+
+/** ほかの接続の presence。`actor` は、サーバーが接続の認証から付ける（クライアントが名乗った値は使わない） */
+export interface PeerPresence extends Presence {
+  clientId: string;
+  actor: string;
+}
+
 /** ブラウザ → サーバー */
 export type ClientMsg =
   /**
@@ -58,7 +78,8 @@ export type ClientMsg =
    */
   | { type: 'hello'; clientId: string; lastSeq?: number; epoch?: string }
   | { type: 'ops'; opId: string; deltas: HistoryDelta[] }
-  | { type: 'preview'; notes: PreviewNote[] };
+  | { type: 'preview'; notes: PreviewNote[] }
+  | ({ type: 'presence' } & Presence);
 
 /** 確定した変更。送信元も含めた全員に配信する */
 export interface OpsMsg {
@@ -122,4 +143,11 @@ export type ServerMsg =
    */
   | { type: 'reject'; opId: string; reason: string; fixups?: HistoryDelta[] }
   /** ほかの接続の、ドラッグや大きさの変更の途中の動き。`clientId` は送り主の接続（サーバーが付ける） */
-  | { type: 'preview'; clientId: string; notes: PreviewNote[] };
+  | { type: 'preview'; clientId: string; notes: PreviewNote[] }
+  /**
+   * ほかの接続がつながった（hello を済ませた）か、選択か編集が変わった。つながった直後には、
+   * そのときにつながっているほかの全員の分が届く
+   */
+  | ({ type: 'presence' } & PeerPresence)
+  /** ほかの接続が切れた。その接続の presence と、途中の動き（preview）を消す */
+  | { type: 'leave'; clientId: string };

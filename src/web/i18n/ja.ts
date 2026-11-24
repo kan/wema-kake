@@ -97,6 +97,8 @@ export const ja = {
   'author.agentTitle': (name: string) => `AI（${name}）が作った付箋`,
   /** 付箋の作成者と、最後に更新した日時 */
   'author.detail': (name: string, date: string) => `${name}・${date}`,
+  'presence.title': 'このページを開いている人',
+  'presence.editing': (name: string) => `${name} が編集中`,
   /** 付箋の下のいいねのボタンの説明。付けた人がいれば、その名前を並べる */
   'reaction.like': 'いいね',
   'reaction.by': (names: string) => `いいね: ${names}`,
