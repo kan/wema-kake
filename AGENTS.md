@@ -216,7 +216,11 @@ MCP クライアント ──/mcp──> MCP ┘          │
   - **agent 向けの入口は、`app.use(requireAccess('user'))` より前に、ルートごとに `requireAccess('agent')` を付けて置く。** それより後ろに足したルートは、人だけを通す。**種類を、パスの文字列の比較で決める形にしないこと。** Hono はパスをデコードして照合するので、`/%6dcp` のようなパスで、判定とルーティングが食い違う
   - 人の主体は `user:<email>`。agent の主体は `agent:<認可のリダイレクト先のホスト名>`（`agentActor`。claude.ai なら `agent:claude.ai`）。リダイレクト先は、Access の Allowed redirect URIs で許可したものに限られる。クライアントが登録のときに申告する名前は、JWT に入らない。手元のクライアント（リダイレクト先が localhost）は、どれも `agent:localhost` になる
   - **人と agent を分けているのは、JWT の `oauth` の有無だけ。** Access がこの項目を出さなくなると、agent が人として扱われ、`/api` などを呼べる（`/mcp` は 403 になる）。Managed OAuth の仕様の変更を知ったら、最初にここを確かめる
-  - agent の JWT の `email` は、その agent を認可した人のもの（agent は、その人の代理）。今は記録していない。複数の利用者で使うようにするときに、主体に足す
+  - agent の JWT の `email` は、その agent を認可した人のもの（agent は、その人の代理）。**委任者**として、`user:<email>` の形で、ops と付箋の `delegate` に記録する（主体は `agent:<名前>` のまま）。管理者が 2 人以上いると、どちらの agent も同じ主体（`agent:claude.ai`）になるため
+- **管理者**は、設定の `admins`（email の一覧。`src/worker/config.ts` の `isAdmin`）で決める。省くと、Access を通った全員が管理者（これまでの動き）
+  - **`/mcp` は、JWT の `email`（コネクタを認可した人）が管理者でなければ 403 を返す**（`src/worker/index.ts`）。OAuth のクライアントの登録は Access が受けるので止められないが、ツールは使えない。ローカル開発では `DEV_USER_EMAIL` で判定する
+  - **agent の権限は、一般の利用者と同じにする。** 導入したのが管理者でも、管理者だけの操作（ページのロックなど）を agent にさせない。他の利用者が書いた付箋の指示で agent が動いても、被害を誰でもできる編集の範囲に収めるため
+  - 画面は、`GET /api/session` の `admin` で、管理者かどうかを知る
   - 設定は `wrangler.jsonc` の `vars` の `ACCESS_TEAM_DOMAIN`（`https://<team>.cloudflareaccess.com`）と `ACCESS_AUD`（Access アプリケーションの AUD タグ）。両方が空なら 500 を返す
   - ローカル開発は `.dev.vars` の `DEV_USER_EMAIL` を使う（`.dev.vars.example` を参照）。`/mcp` の主体は `agent:local` になる。ローカルのホスト名（`localhost`、`127.0.0.1`、`[::1]`、`.localhost` で終わる名前）へのリクエストでだけ有効で、Access の設定があれば無視される。**ローカルと見なすホスト名を、これより広げないこと**（`src/worker/access.ts` の `isLocalHost`。`.localhost` はループバック専用の予約名なので、デプロイ先のホスト名には当たらない）
   - ローカルのリバースプロキシ [roji](https://github.com/kan/roji)（`{host}` の置き換えがある 1.5.0 以降）を使うなら `npm run dev:roji`。空いているポートで起動し、`https://wema-kake.<roji のドメイン>` で開ける。**`wrangler dev` の `--host {host} --upstream-protocol https` を外さないこと。** 外すと、Worker から見たオリジンが `http://<ホスト名>` になる。ブラウザが送る `Origin`（`https://<ホスト名>`）と合わなくなり、状態を変えるリクエストと WebSocket の接続が、オリジンの検査で 403 になる
@@ -246,6 +250,7 @@ CREATE TABLE notes (
   foldable   INTEGER NOT NULL DEFAULT 0,  -- 長い本文を畳んで表示する（wema 0.9.0）。開いているかどうかは保存しない
   extra      TEXT,                   -- 付箋の meta（利用側のデータ）の JSON。なければ NULL
   created_by TEXT,                   -- 'user:<id>' / 'agent:<client>'
+  delegate   TEXT,                   -- created_by が agent なら、その agent を認可した人（'user:<email>'）。分からなければ NULL
   updated_at INTEGER NOT NULL,
   updated_by TEXT
 );
@@ -265,6 +270,7 @@ CREATE INDEX edges_to ON edges (to_id);
 CREATE TABLE ops (
   seq         INTEGER PRIMARY KEY,   -- ボード全体の通番
   actor       TEXT NOT NULL,         -- 'user:<id>' / 'agent:<client>'
+  delegate    TEXT,                  -- agent の操作なら、その agent を認可した人（'user:<email>'）。人の操作と、記録する前の操作は NULL
   client_id   TEXT NOT NULL,
   op_id       TEXT NOT NULL,
   summary     TEXT,                  -- MCP の場合、ツール名や LLM が付けた説明
@@ -364,7 +370,7 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 
 | メソッドとパス | 内容 |
 | --- | --- |
-| `GET /api/session` | 認証が有効かの確認用。`{ "actor": "user:<email>" }` を返す |
+| `GET /api/session` | 認証が有効かの確認用。`{ "actor": "user:<email>", "admin": true }` を返す（`admin` は、設定の `admins` で管理者か） |
 | `GET /api/index` | 一覧のボード用。ルートのページ（表示名、色、本文の冒頭、更新日時、子ページの数）と、ルート同士のリンクをまとめて返す。新しい順に 500 ページまで。子ページと孫ページは返さない。ページが 1 つもなければ、最初のページを作ってから返す（1 回だけ。「画面」の節） |
 | `POST /api/pages-info` | ページの概要（表示名、色、付箋の数、親、付箋の配置）をまとめて返す（本文は `{ "names": [...] }`、200 件まで）。子ページの付箋の表示に使う。まだ索引にないページ（作ったばかり）は DO から補い、付箋の配置は null で返す。存在しないページは結果に入らない |
 | `GET /api/pages/<slug>/ancestors` | 先祖のページを、ルートから順に返す（パンくず用） |
@@ -497,7 +503,7 @@ type ServerMsg =
       data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] };
       info: Record<NoteId, { createdBy: string | null; updatedAt: number }> }   // 付箋ごとの付加情報（後述）
   | { type: 'meta'; title: string | null; color: string | null; epoch: string | null; expireDays: number | null }   // 表示名、ページの色、自動で消す日数が変わった、またはページができた。seq は進まない
-  | { type: 'ops'; seq: number; actor: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
+  | { type: 'ops'; seq: number; actor: string; delegate?: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
       createdAt?: number;         // 操作を記録した時刻。配信と、再接続のときの差分に付く。送信元にだけ返す確定（再送への応答など）には付かない
       reverts?: number;           // 取り消しなら、取り消した対象の seq（「取り消し」の節を参照）
       fixups?: HistoryDelta[] }   // fixups は送信元にだけ付ける（後述）
@@ -606,7 +612,7 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 - `move_notes` は、移す先に置く操作と、元のページから消す操作の 2 つを、それぞれのページに記録する。画面のドラッグと違い、移す先は子ページに限らない。子ページを表す付箋は移せない（`move_page` を使う）。移す先に置けたのに元のページから消せなかったときは、エラーの文で、置いた操作の番号を LLM に伝える。**付箋を移すのに `delete_notes` と `add_notes` を組み合わせさせないこと**（作成者が agent に変わる。ツールの説明でも、そう伝えている）
 - ページの削除・改名のツールは当面提供しない。**書き込み系のツールは、存在しないページには適用しない**（`applyOps` の `mustExist`。読んでから適用するまでの間に削除されたページも作り直さない）
 - 書き込み系のツールは、記録した操作の番号（`operation`）を返す。LLM はこれを `revert_operation` に渡せる。**何も変わらなかった操作は番号を返さずにエラーにする**（`applyOps` は seq を進めないので、返すと別の操作の番号になる）
-- `revert_operation` が取り消せるのは、同じ主体（`agent:<client>`）の操作だけ。`operation` を省略すると、取り消しでない直近の自分の操作が対象になる
+- `revert_operation` が取り消せるのは、同じ主体（`agent:<client>`）で、委任者も同じ操作だけ。`operation` を省略すると、取り消しでない直近の自分の操作が対象になる。委任者を記録する前の操作（委任者なし）は、`revert_operation` では取り消せない。管理者から外した人の agent の操作も、他の管理者の agent からは取り消せない。どちらも、画面の「操作の履歴」からは人が取り消せる
 - ツールが断る場合（ページがない、付箋がない、本文の競合など）は `ToolError` を投げ、MCP では `isError` の結果として返す。LLM が読んで直せるようにするため
 - アドバイスの付箋など agent が作った付箋を見分けられるよう、`created_by` を保存する。画面では、付箋の下に、その AI のアイコンを出す（下の「付箋ごとの付加情報」）
 
@@ -625,6 +631,7 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
   - 縦に積んでいる間だけは、作成者、日時、アイコンを `display: none` にしてある（隠した分の高さで、すべての付箋の間隔が広がるため）。出るのは、付箋を選んだときで、そのとき列が積み直される。ホバーでは切り替えていないので、上の決まりとは食い違わない
   - **要素を、付箋の枠に重ねないこと**（負の `margin-top` など）。右下の大きさを変えるハンドルと、下辺の中央のアンカーを覆って、押せなくなる
   - 出している間（ホバー中と選択中）は、付箋ごと手前へ上げる（`style.css` の `z-index: 9998 !important`）。広い画面では、この領域が下の付箋に重なり、後から触った付箋に隠れるため。**`!important` を外さないこと**（wema は付箋の要素へ `z-index` を直接書く。外すと、そちらが優先されて、手前に出なくなる）。**値を 9999 以上にしないこと**（wema の範囲選択の枠とポップアップより手前に出る）。領域だけを上げることはできない（付箋の要素が、重なりの単位になっている）
+  - agent の付箋は、委任者が分かれば「claude.ai（a さんの代理）」の形で出す（`note-authors.ts` の `authorLabel`）。委任者は、付加情報の `delegate`（スナップショットの `info`、配信の `ops` の `delegate`）で届ける
   - AI のアイコンは、主体の名前（OAuth のリダイレクト先のホスト名）から選ぶ（`note-authors.ts` の `agentIcon`）。`claude` で始まれば Claude、`chatgpt` か `openai` で始まれば OpenAI、それ以外（`localhost` を含む）は共通のアイコン。絵柄は `src/web/icons.ts` にあり、Claude と OpenAI のものは Simple Icons（CC0）から写した。クライアントを足すときは、この 2 か所に足す
   - 出るのはページの画面だけ。使い方の画面と一覧の画面には、作成者がいないので出さない
 - **この領域と経路は、付箋への反応（「いいね」など）にも使う前提で作ってある。** 項目を足すときは、`NoteInfo` に足して同じ経路で届け、`NoteAuthors` の `render` に要素を足す。履歴（`ops`）に積まない値は、`ops` とは別のメッセージで届ける
@@ -644,7 +651,7 @@ MCP 経由の変更はブラウザにはリモートの変更として届くた�
 - 取り消しの `ops` には `reverts`（取り消した対象の `seq`）が付く。取り消しは HTTP の API か MCP から行われ、要求元のブラウザも手元には適用していない。**クライアントは、自分の `clientId` の `ops` でも `reverts` があればリモートの変更として適用すること**
 - 取り消しの失敗は `code` で分類する（`not-found` / `conflict` / `forbidden` / `invalid`）。HTTP の API は順に 404 / 409 / 403 / 400 を返す
 - 取り消しも `ops` の 1 つなので、取り消しを取り消せる（元の変更が戻る）。そのとき元の操作の `reverted_by` を消し、元の操作をもう一度取り消せるようにする
-- 実装は `src/worker/revert.ts`。DO の `revert()` の `ownOnly` を指定すると、同じ主体の操作だけを取り消せる（MCP の `revert_operation` で使う）
+- 実装は `src/worker/revert.ts`。DO の `revert()` の `ownOnly` を指定すると、同じ主体で委任者も同じ操作だけを取り消せる（MCP の `revert_operation` で使う）
 - ブラウザでは、ページの画面のメニューの「操作の履歴」から、ops の一覧と取り消しを出す（「画面」の節。既定では agent の操作に絞る）
 
 ### WebMCP（後から追加）

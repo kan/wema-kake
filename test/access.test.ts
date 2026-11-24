@@ -224,6 +224,51 @@ describe('agent と人の入口を分ける', () => {
     expect((await mcp({}, devEnv)).status).toBe(500);
   });
 
+  it('admins を設定すると、/mcp は、管理者が認可した agent だけを通す', async () => {
+    mockCerts();
+    const admins = createApp({ admins: ['Admin@Example.com'] });
+    const request = (e: object, headers: Record<string, string> = {}, url = 'https://wiki.example.com/mcp') =>
+      admins.request(
+        url,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...headers },
+          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' }),
+        },
+        e,
+        createExecutionContext(),
+      );
+    const as = async (email: string) =>
+      request(accessEnv, { 'Cf-Access-Jwt-Assertion': await token({ email, oauth: CLAUDE }) });
+    // email の大文字と小文字は区別しない
+    expect((await as('admin@example.com')).status).toBe(200);
+    const denied = await as('a@example.com');
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toEqual({ error: 'only administrators can use MCP' });
+    // ローカル開発では DEV_USER_EMAIL で判定する
+    const devEnv = { ...env, ACCESS_TEAM_DOMAIN: '', ACCESS_AUD: '', DEV_USER_EMAIL: 'dev@example.com' };
+    expect((await request(devEnv, {}, 'http://localhost:8787/mcp')).status).toBe(403);
+    expect((await request({ ...devEnv, DEV_USER_EMAIL: 'admin@example.com' }, {}, 'http://localhost:8787/mcp')).status)
+      .toBe(200);
+  });
+
+  it('/api/session は、管理者かどうかを返す', async () => {
+    mockCerts();
+    const session = async (a: ReturnType<typeof createApp>, email: string) => {
+      const res = await a.request(
+        'https://wiki.example.com/api/session',
+        { headers: { 'Cf-Access-Jwt-Assertion': await token({ email }) } },
+        accessEnv,
+      );
+      return res.json();
+    };
+    // 省くと、全員が管理者
+    expect(await session(app, 'a@example.com')).toEqual({ actor: 'user:a@example.com', admin: true });
+    const admins = createApp({ admins: ['admin@example.com'] });
+    expect(await session(admins, 'a@example.com')).toEqual({ actor: 'user:a@example.com', admin: false });
+    expect(await session(admins, 'admin@example.com')).toEqual({ actor: 'user:admin@example.com', admin: true });
+  });
+
   it('agent の主体は、認可のリダイレクト先のホスト名から決める', () => {
     expect(agentActor(CLAUDE.client_redirect_uri)).toBe('agent:claude.ai');
     expect(agentActor('https://ChatGPT.com/connector_platform_oauth_redirect')).toBe('agent:chatgpt.com');

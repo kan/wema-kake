@@ -12,7 +12,7 @@ describe('applyOpToInfos', () => {
 
     const created = applyOpToInfos(infos, 'agent:claude.ai', 100, deltas(createNote('n1'), createNote('n2')));
     expect(created).toEqual(new Set(['n1', 'n2']));
-    expect(infos.get('n1')).toEqual({ createdBy: 'agent:claude.ai', updatedAt: 100 });
+    expect(infos.get('n1')).toEqual({ createdBy: 'agent:claude.ai', delegate: null, updatedAt: 100 });
 
     const changed = applyOpToInfos(
       infos,
@@ -25,7 +25,7 @@ describe('applyOpToInfos', () => {
     );
     expect(changed).toEqual(new Set(['n1', 'n2']));
     // 動かしたのが別の人でも、作成者は変わらない
-    expect(infos.get('n1')).toEqual({ createdBy: 'agent:claude.ai', updatedAt: 200 });
+    expect(infos.get('n1')).toEqual({ createdBy: 'agent:claude.ai', delegate: null, updatedAt: 200 });
     expect(infos.has('n2')).toBe(false);
   });
 
@@ -49,7 +49,21 @@ describe('applyOpToInfos', () => {
       100,
       deltas({ type: 'note:update', noteId: 'n1', before: { x: 0 }, after: { x: 10 } }),
     );
-    expect(infos.get('n1')).toEqual({ createdBy: null, updatedAt: 100 });
+    expect(infos.get('n1')).toEqual({ createdBy: null, delegate: null, updatedAt: 100 });
+  });
+
+  it('作成で委任者が入り、更新では変わらない', () => {
+    const infos = new Map<string, NoteInfo>();
+    applyOpToInfos(infos, 'agent:claude.ai', 100, deltas(createNote('n1')), 'user:a@example.com');
+    expect(infos.get('n1')).toEqual({ createdBy: 'agent:claude.ai', delegate: 'user:a@example.com', updatedAt: 100 });
+    applyOpToInfos(
+      infos,
+      'agent:claude.ai',
+      200,
+      deltas({ type: 'note:update', noteId: 'n1', before: { x: 0 }, after: { x: 10 } }),
+      'user:b@example.com',
+    );
+    expect(infos.get('n1')).toEqual({ createdBy: 'agent:claude.ai', delegate: 'user:a@example.com', updatedAt: 200 });
   });
 });
 

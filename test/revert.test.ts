@@ -263,7 +263,7 @@ describe('操作の一覧と取り消しの API', () => {
     const agents = (await (await api(`/api/pages/${slug}/ops?agent=1&limit=1`)).json()) as { ops: unknown[] };
     expect(agents.ops).toEqual([
       {
-        seq: 3, actor: 'agent:chatgpt', summary: 'add_notes',
+        seq: 3, actor: 'agent:chatgpt', delegate: null, summary: 'add_notes',
         reverts: null, revertedBy: null, createdAt: expect.any(Number),
       },
     ]);

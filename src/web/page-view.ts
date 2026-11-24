@@ -636,7 +636,11 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     return el(
       'li',
       { className: reverted ? 'reverted' : '' },
-      el('div', { className: 'op-meta', textContent: `${formatDate(op.createdAt)} ${op.actor}` }),
+      el('div', {
+        className: 'op-meta',
+        // 委任者（agent を認可した人）が分かれば並べる。同じ agent でも、誰の代理かで区別できるように
+        textContent: `${formatDate(op.createdAt)} ${op.actor}${op.delegate ? ` (${op.delegate})` : ''}`,
+      }),
       el('div', { className: 'op-summary', textContent: summary + (reverted ? t('ops.revertedMark') : '') }),
       button,
     );

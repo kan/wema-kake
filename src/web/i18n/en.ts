@@ -80,6 +80,7 @@ export const en = {
   'note.add': 'Add a note',
   'author.agentTitle': (name) => `Note made by AI (${name})`,
   'author.detail': (name, date) => `${name} · ${date}`,
+  'author.onBehalf': (name, delegate) => `${name} (on behalf of ${delegate})`,
   'layout.title': 'Align and arrange',
   'align.left': 'Align left edges',
   'align.center': 'Align horizontal centers',

@@ -11,13 +11,15 @@ import { createNote, edge } from './helpers';
 const app = createApp();
 
 const AGENT = 'agent:claude';
+/** agent を認可した人 */
+const ADMIN = 'user:admin@example.com';
 let pageCount = 0;
 let opCount = 0;
 
 /** ツールを、MCP を通さずに直接呼ぶ（入力の検証は通す） */
-async function call(name: string, input: unknown, actor = AGENT): Promise<any> {
+async function call(name: string, input: unknown, actor = AGENT, delegate = ADMIN): Promise<any> {
   const tool = TOOLS.find((t) => t.name === name)!;
-  return tool.run(new ServerBoardAccess(env, actor), tool.input.parse(input));
+  return tool.run(new ServerBoardAccess(env, { actor, delegate }), tool.input.parse(input));
 }
 
 /** 人が作ったページ。付箋を置いて返す */
@@ -241,7 +243,7 @@ describe('書き込みのツール', () => {
   it('読んだ後に削除されたページには適用せず、作り直さない', async () => {
     const { page, stub } = await newPage([createNote('n1')]);
     await stub.deletePage();
-    const outcome = await new ServerBoardAccess(env, AGENT).apply(page, [createNote('n2') as HistoryDelta], 'late');
+    const outcome = await new ServerBoardAccess(env, { actor: AGENT, delegate: ADMIN }).apply(page, [createNote('n2') as HistoryDelta], 'late');
     expect(outcome).toEqual({ ok: false, reason: 'page not found' });
     expect(await stub.getBoardState()).toBeNull();
   });
@@ -249,7 +251,7 @@ describe('書き込みのツール', () => {
   it('人がその後に編集した付箋の本文は、古い内容を元にした更新では上書きできない', async () => {
     const { page, stub } = await newPage([createNote('n1', { text: 'v1' })]);
     // agent が読んだ後に、人が編集する。update_notes は読み直すので通る。古い before を直接渡す形を確かめる
-    const access = new ServerBoardAccess(env, AGENT);
+    const access = new ServerBoardAccess(env, { actor: AGENT, delegate: ADMIN });
     await stub.applyOps({
       actor: 'user:a', clientId: 'c1', opId: 'human-edit',
       deltas: [{ type: 'note:update', noteId: 'n1', before: { text: 'v1' }, after: { text: 'v2' } }],
@@ -283,6 +285,25 @@ describe('revert_operation', () => {
     const other = await call('add_notes', { page, notes: [{ text: '他の agent' }] }, 'agent:chatgpt');
     await expect(call('revert_operation', { page, operation: other.operation })).rejects.toThrow('not your operation');
     expect((await stub.listOps({ actor: AGENT })).every((op) => op.actor === AGENT)).toBe(true);
+  });
+
+  it('同じクライアントでも、別の人が認可した agent の操作は、自分の操作として扱わない', async () => {
+    const { page, stub } = await newPage([createNote('n1')]);
+    const mine = await call('add_notes', { page, notes: [{ text: '自分' }] });
+    const theirs = await call('add_notes', { page, notes: [{ text: '他の人' }] }, AGENT, 'user:other@example.com');
+    // 委任者を記録する
+    expect((await stub.listOps({ limit: 2 })).map((op) => op.delegate)).toEqual(['user:other@example.com', ADMIN]);
+    await expect(call('revert_operation', { page, operation: theirs.operation })).rejects.toThrow('not your operation');
+    // 省略すると、自分の直前の操作（他の人の agent の操作を飛ばす）
+    expect(await call('revert_operation', { page })).toMatchObject({ reverted: mine.operation });
+    // 委任者を記録する前の操作（委任者なし）も、自分の操作ではない
+    const legacy = await stub.applyOps({
+      actor: AGENT, clientId: 'mcp', opId: 'legacy', deltas: [{ type: 'note:update', noteId: 'n1', before: {}, after: { x: 5 } }],
+    });
+    expect(legacy.ok && legacy.seq).toBeTruthy();
+    await expect(call('revert_operation', { page, operation: (legacy as { seq: number }).seq })).rejects.toThrow(
+      'not your operation',
+    );
   });
 
   it('人がその後に変更した付箋は戻さず、skipped で返す', async () => {
@@ -446,7 +467,7 @@ describe('MCP のハンドラ', () => {
 
   it('読み取りだけの主体に渡す BoardAccess は、書き込みのツールを直接呼んでも断る', async () => {
     const { page, notesOf } = await newPage([createNote('n1')]);
-    const access = readOnlyAccess(new ServerBoardAccess(env, AGENT));
+    const access = readOnlyAccess(new ServerBoardAccess(env, { actor: AGENT, delegate: ADMIN }));
     const run = (name: string, input: unknown) => {
       const tool = TOOLS.find((t) => t.name === name)!;
       return tool.run(access, tool.input.parse(input));

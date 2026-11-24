@@ -9,6 +9,11 @@ import type { HistoryDelta } from './delta';
 export interface NoteInfo {
   /** 作成者（'user:<email>' / 'agent:<client>'）。分からなければ null */
   createdBy: string | null;
+  /**
+   * 作成者が agent なら、その委任者（agent を認可した人の 'user:<email>'）。分からなければ null。
+   * 古い Worker のスナップショットには入っていない
+   */
+  delegate?: string | null;
   /** 最後に変更した時刻（UNIX ミリ秒）。移動や大きさの変更でも変わる */
   updatedAt: number;
 }
@@ -26,23 +31,26 @@ export const isAgentActor = (actor: string | null): boolean => actor?.startsWith
  * @param actor 操作の主体
  * @param at 操作を記録した時刻
  * @param deltas サーバーが実際に適用したデルタ
+ * @param delegate 操作の委任者（`OpsMsg.delegate`）
  */
 export function applyOpToInfos(
   infos: Map<string, NoteInfo>,
   actor: string,
   at: number,
   deltas: HistoryDelta[],
+  delegate: string | null = null,
 ): Set<string> {
   const changed = new Set<string>();
   for (const d of deltas) {
     if (d.type === 'note:create') {
-      infos.set(d.note.id, { createdBy: actor, updatedAt: at });
+      infos.set(d.note.id, { createdBy: actor, delegate, updatedAt: at });
       changed.add(d.note.id);
     } else if (d.type === 'note:delete') {
       if (infos.delete(d.note.id)) changed.add(d.note.id);
     } else if (d.type === 'note:update') {
       // 手元にない付箋の更新は、作成者が分からないまま、時刻だけを持つ
-      infos.set(d.noteId, { createdBy: infos.get(d.noteId)?.createdBy ?? null, updatedAt: at });
+      const cur = infos.get(d.noteId);
+      infos.set(d.noteId, { createdBy: cur?.createdBy ?? null, delegate: cur?.delegate ?? null, updatedAt: at });
       changed.add(d.noteId);
     }
   }

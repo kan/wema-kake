@@ -19,6 +19,15 @@ function actorLabel(actor: string): string {
 }
 
 /**
+ * 作成者の名前。agent で委任者（agent を認可した人）が分かれば、「Claude（A さんの代理）」の形にする。
+ * 管理者が 2 人以上いると、どちらの agent も同じ主体（agent:claude.ai）になるため
+ */
+export function authorLabel(actor: string, delegate: string | null | undefined): string {
+  const name = actorLabel(actor);
+  return isAgentActor(actor) && delegate ? t('author.onBehalf', name, actorLabel(delegate)) : name;
+}
+
+/**
  * agent の名前（OAuth のリダイレクト先のホスト名）から、アイコンを選ぶ。知らないクライアントと、
  * 手元のクライアント（`localhost`。どの AI かは分からない）は、共通のアイコンにする
  */
@@ -46,9 +55,9 @@ export class NoteAuthors {
     container.append(
       el('span', {
         className: 'note-author',
-        textContent: createdBy === null ? date : t('author.detail', actorLabel(createdBy), date),
+        textContent: createdBy === null ? date : t('author.detail', authorLabel(createdBy, info.delegate), date),
         // 名前は短くしてあるので、主体の全体（email のドメインなど）は、ここで確かめられるようにする
-        title: createdBy ?? '',
+        title: createdBy === null ? '' : [createdBy, info.delegate].filter(Boolean).join(' / '),
       }),
     );
     if (createdBy !== null && isAgentActor(createdBy)) {

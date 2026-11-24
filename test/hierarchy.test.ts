@@ -402,7 +402,7 @@ describe('索引と API', () => {
   it('リンクの文字にエンティティがあっても、1 回だけ復号する', async () => {
     const slug = await create('entity', undefined, `<a href="/p/target-x">&amp;lt;b&amp;gt; と &lt;</a>`);
     const tool = TOOLS.find((t) => t.name === 'read_board')!;
-    const board = (await tool.run(new ServerBoardAccess(env, 'agent:test'), { page: slug })) as any;
+    const board = (await tool.run(new ServerBoardAccess(env, { actor: 'agent:test', delegate: 'user:admin@example.com' }), { page: slug })) as any;
     expect(board.notes[0].text).toBe('&lt;b&gt; と < [[target-x]]');
   });
 
@@ -525,7 +525,7 @@ describe('子ページの色と、その付箋の色', () => {
 describe('MCP', () => {
   const call = async (name: string, input: unknown): Promise<any> => {
     const tool = TOOLS.find((t) => t.name === name)!;
-    return tool.run(new ServerBoardAccess(env, 'agent:test'), tool.input.parse(input));
+    return tool.run(new ServerBoardAccess(env, { actor: 'agent:test', delegate: 'user:admin@example.com' }), tool.input.parse(input));
   };
 
   it('read_board は子ページの付箋を child_page で返し、list_pages は親を返す', async () => {

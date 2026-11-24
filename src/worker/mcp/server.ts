@@ -3,7 +3,7 @@
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { type BoardAccess, TOOLS, ToolError, toolAnnotations } from '../../shared/tools';
 import type { WemaKakeEnv } from '../config';
-import { ServerBoardAccess } from './board-access';
+import { type McpPrincipal, ServerBoardAccess } from './board-access';
 
 /**
  * `write` が false なら、読み取りのツールだけを登録する。ツールの一覧に出ないので、LLM は呼ぼうと
@@ -70,10 +70,15 @@ export function readOnlyAccess(access: BoardAccess): BoardAccess {
 
 /**
  * `/mcp` のハンドラ。認証は呼び出し側（`src/worker/index.ts`）が済ませていて、
- * そこで決めた変更の主体（`agent:<client>`）と、その主体が書き込みのツールを使えるかを受け取る
+ * そこで決めた変更の主体（`agent:<client>` と、その委任者）と、その主体が書き込みのツールを使えるかを受け取る
  */
-export function handleMcp(request: Request, env: WemaKakeEnv, actor: string, write: boolean): Promise<Response> {
-  const server = new ServerBoardAccess(env, actor);
+export function handleMcp(
+  request: Request,
+  env: WemaKakeEnv,
+  principal: McpPrincipal,
+  write: boolean,
+): Promise<Response> {
+  const server = new ServerBoardAccess(env, principal);
   const access = write ? server : readOnlyAccess(server);
   // リクエストごとにハンドラとサーバーを作る（MCP のサーバーは、同時に走るリクエストで共有できない）。
   // 2026-07-28 版と、それより前の版（initialize あり）の両方を受ける。前の版はステートレスで受ける

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { FIRST_PAGE_SLUG, firstPageTitle } from '../src/shared/guide';
 import { DEFAULT_SITE, parseSiteConfig, SITE_META_NAME } from '../src/shared/site';
 import { agentActor } from '../src/worker/access';
-import { canWrite, resolveConfig, type WemaKakeConfig } from '../src/worker/config';
+import { canWrite, isAdmin, resolveConfig, type WemaKakeConfig } from '../src/worker/config';
 import { createApp } from '../src/worker/index';
 
 /** HTML から、`<title>` の中身と、サイトの設定の `<meta>` を取り出す */
@@ -34,12 +34,15 @@ const html = { Accept: 'text/html' };
 
 describe('resolveConfig', () => {
   it('省いた項目を既定の値で埋める', () => {
-    expect(resolveConfig()).toEqual({ siteName: 'wema-kake', defaultLang: 'en', mcp: { write: true }, firstPage: true });
-    expect(resolveConfig({ siteName: 'Notes', defaultLang: 'ja', mcp: false, firstPage: false })).toEqual({
+    expect(resolveConfig()).toEqual({
+      siteName: 'wema-kake', defaultLang: 'en', mcp: { write: true }, firstPage: true, admins: null,
+    });
+    expect(resolveConfig({ siteName: 'Notes', defaultLang: 'ja', mcp: false, firstPage: false, admins: [] })).toEqual({
       siteName: 'Notes',
       defaultLang: 'ja',
       mcp: false,
       firstPage: false,
+      admins: new Set(),
     });
   });
 
@@ -48,6 +51,24 @@ describe('resolveConfig', () => {
     expect(() => resolveConfig({ defaultLang: 'fr' as never })).toThrow(/defaultLang/);
     expect(() => resolveConfig({ mcp: 'false' as never })).toThrow(/mcp/);
     expect(() => resolveConfig({ firstPage: 0 as never })).toThrow(/firstPage/);
+  });
+
+  it('admins は email の一覧。小文字にそろえる', () => {
+    expect(resolveConfig({ admins: ['A@Example.com'] }).admins).toEqual(new Set(['a@example.com']));
+    expect(() => resolveConfig({ admins: 'a@example.com' as never })).toThrow(/admins/);
+    // 主体の形や、email でない値は、黙って誰も管理者でなくなるので、起動時に断る
+    for (const email of ['user:a@example.com', 'a', '', ' a@example.com', 1]) {
+      expect(() => resolveConfig({ admins: [email as never] }), String(email)).toThrow(/admins/);
+    }
+  });
+
+  it('isAdmin は、admins を省くと全員を、設定すると並べた人だけを管理者にする', () => {
+    expect(isAdmin(resolveConfig(), 'a@example.com')).toBe(true);
+    const config = resolveConfig({ admins: ['admin@example.com'] });
+    expect(isAdmin(config, 'ADMIN@example.com')).toBe(true);
+    expect(isAdmin(config, 'a@example.com')).toBe(false);
+    expect(isAdmin(config, undefined)).toBe(false);
+    expect(isAdmin(resolveConfig({ admins: [] }), 'admin@example.com')).toBe(false);
   });
 
   it('mcp の書き込みの設定を確かめる', () => {

@@ -164,6 +164,20 @@ const noteRows = (sql: SqlStorage) => sql.exec(`SELECT * FROM notes ORDER BY row
 export const readNotes = (sql: SqlStorage) => noteRows(sql).map(rowToNote);
 const readEdges = (sql: SqlStorage) => sql.exec(`SELECT * FROM edges ORDER BY rowid`).toArray().map(rowToEdge);
 
+/**
+ * 付箋の作成者と、その委任者（作成者が agent なら、その agent を認可した人の `user:<email>`）。
+ * 他のページへ移すとき、ゴミ箱へ移すときに引き継ぐ
+ */
+export interface Author {
+  createdBy: string | null;
+  delegate: string | null;
+}
+
+const authorOf = (row: Obj): Author => ({
+  createdBy: row.created_by as string | null,
+  delegate: (row.delegate as string | null | undefined) ?? null,
+});
+
 /** ボードと、付箋ごとの付加情報（作成者、更新日時）。画面に渡す */
 export function readBoardWithInfos(sql: SqlStorage): { data: BoardData; info: NoteInfos } {
   const rows = noteRows(sql);
@@ -171,7 +185,7 @@ export function readBoardWithInfos(sql: SqlStorage): { data: BoardData; info: No
   const info: NoteInfos = Object.fromEntries(
     rows.map((row) => [
       row.id as string,
-      { createdBy: row.created_by as string | null, updatedAt: row.updated_at as number },
+      { ...authorOf(row), updatedAt: row.updated_at as number },
     ]),
   );
   return { data: { version: 1, notes: rows.map(rowToNote), edges: readEdges(sql) }, info };
@@ -186,7 +200,7 @@ export function readBoardWithAuthors(sql: SqlStorage): Pick<BoardState, 'notes' 
 }
 
 /** 他のページへ移すために読んだ付箋。作成者と、最後に変更した時刻が付く */
-export type TakenNote = WemaNote & { createdBy: string | null; updatedAt: number };
+export type TakenNote = WemaNote & Author & { updatedAt: number };
 
 /** 付箋 `ids` と、その付箋どうしをつなぐ接続線。他のページへ移す付箋を読む */
 export function readNotesAmong(sql: SqlStorage, ids: string[]): { notes: TakenNote[]; edges: WemaEdge[] } {
@@ -198,7 +212,7 @@ export function readNotesAmong(sql: SqlStorage, ids: string[]): { notes: TakenNo
       .toArray()
       .map((row) => ({
         ...rowToNote(row),
-        createdBy: row.created_by as string | null,
+        ...authorOf(row),
         updatedAt: row.updated_at as number,
       })),
     edges: sql
@@ -257,7 +271,7 @@ export interface Applied {
   /** 送信元が送っていないのにサーバーが足したデルタ（付箋の削除に伴う接続線の削除） */
   fixups: HistoryDelta[];
   /** 消した付箋の id から、その作成者（ゴミ箱へ移すときに引き継ぐ） */
-  removedAuthors: Map<string, string | null>;
+  removedAuthors: Map<string, Author>;
 }
 
 /**
@@ -270,8 +284,8 @@ export interface Applied {
  *   変える前に保存した text を編集できるようにするため。後者は、送信元がサニタイズ前の
  *   text を手元に持ったまま続けて編集した場合のため
  * - 更新で `after` にキーがなく `before` にあるものは、未設定に戻す
- * - 作成した付箋の作成者は `actor`。`authors` に付箋の id があれば、その値にする（他のページから
- *   移した付箋の作成者を引き継ぐ）。`authors` はサーバーが読んだ値だけを渡すこと
+ * - 作成した付箋の作成者は `actor`（委任者は `delegate`）。`authors` に付箋の id があれば、その値にする
+ *   （他のページから移した付箋の作成者を引き継ぐ）。`authors` はサーバーが読んだ値だけを渡すこと
  */
 export function applyDeltas(
   sql: SqlStorage,
@@ -279,11 +293,12 @@ export function applyDeltas(
   actor: string,
   now: number,
   cleanBefore?: Map<HistoryDelta, string>,
-  authors?: ReadonlyMap<string, string | null>,
+  authors?: ReadonlyMap<string, Author>,
+  delegate: string | null = null,
 ): Applied {
   const applied: HistoryDelta[] = [];
   const fixups: HistoryDelta[] = [];
-  const removedAuthors = new Map<string, string | null>();
+  const removedAuthors = new Map<string, Author>();
 
   for (const d of deltas) {
     switch (d.type) {
@@ -291,12 +306,13 @@ export function applyDeltas(
         const n = d.note;
         if (exists(sql, 'notes', n.id)) throw new RejectError(`note already exists: ${n.id}`);
         assertNotPlaced(sql, n, n.id);
+        const author = authors?.get(n.id) ?? { createdBy: actor, delegate };
         sql.exec(
           `INSERT INTO notes (id, x, y, width, height, text, color, z_index, auto_size, foldable, extra,
-                              created_by, updated_at, updated_by)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                              created_by, delegate, updated_at, updated_by)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           n.id, n.x, n.y, n.width, n.height, n.text, n.color, n.zIndex, n.autoSize ? 1 : 0,
-          n.foldable ? 1 : 0, metaJson(n.meta), authors?.has(n.id) ? authors.get(n.id) : actor, now, actor,
+          n.foldable ? 1 : 0, metaJson(n.meta), author.createdBy, author.delegate, now, actor,
         );
         applied.push(d);
         break;
@@ -356,7 +372,7 @@ export function applyDeltas(
         if (rest.length > 0) {
           sql.exec(`DELETE FROM edges WHERE from_id = ? OR to_id = ?`, cur.id, cur.id);
         }
-        removedAuthors.set(cur.id, row.created_by as string | null);
+        removedAuthors.set(cur.id, authorOf(row));
         sql.exec(`DELETE FROM notes WHERE id = ?`, cur.id);
         applied.push({ type: 'note:delete', note: cur });
         break;

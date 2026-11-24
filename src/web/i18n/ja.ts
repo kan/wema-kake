@@ -95,6 +95,8 @@ export const ja = {
   'author.agentTitle': (name: string) => `AI（${name}）が作った付箋`,
   /** 付箋の作成者と、最後に更新した日時 */
   'author.detail': (name: string, date: string) => `${name}・${date}`,
+  /** agent の付箋の作成者（委任者が分かるとき）。`delegate` は、agent を認可した人 */
+  'author.onBehalf': (name: string, delegate: string) => `${name}（${delegate} さんの代理）`,
   'layout.title': '整列と配置',
   'align.left': '左端をそろえる',
   'align.center': '左右の中央をそろえる',
