@@ -182,3 +182,11 @@ export interface Profile {
   /** アイコンの画像の URL（/img/<key>） */
   icon: string | null;
 }
+
+/** `GET /api/profile` の応答。自分の表示名とアイコンに、メールの設定を添える（issue #131） */
+export interface OwnProfile extends Profile {
+  /** 自分が作ったページに、ほかの人が付箋を足したらメールで知らせるか */
+  notifyNotes: boolean;
+  /** このサイトがメールを送れるか（送れなければ、画面に設定を出さない） */
+  mail: boolean;
+}

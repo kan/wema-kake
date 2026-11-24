@@ -99,6 +99,19 @@ const USER_ACTOR_PREFIX = 'user:';
 export const emailOfActor = (actor: string): string | undefined =>
   actor.startsWith(USER_ACTOR_PREFIX) ? actor.slice(USER_ACTOR_PREFIX.length) : undefined;
 
+/**
+ * 表示名を設定していない人の名前（email の `@` より前）。agent はその名前（OAuth のクライアント）。
+ * 画面（src/web/profiles.ts）と、メールの文面（src/worker/page-do.ts）で使う
+ */
+export function defaultName(actor: string): string {
+  const email = emailOfActor(actor);
+  if (email !== undefined) return email.split('@')[0] || email;
+  return actor.slice(actor.indexOf(':') + 1);
+}
+
+/** 主体の、出す名前。表示名（`name`）が無ければ defaultName */
+export const nameOrDefault = (name: string | null | undefined, actor: string): string => name || defaultName(actor);
+
 /** email から、人の主体（'user:<email>'）を作る */
 export const userActor = (email: string): string => `${USER_ACTOR_PREFIX}${email}`;
 

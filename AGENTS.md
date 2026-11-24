@@ -229,6 +229,14 @@ MCP クライアント ──/mcp──> MCP ┘          │
   - 承認待ちと拒否の人は、どちらも同じく断る。拒否した人は、もう一度承認を求められない（管理者が、利用者の画面で承認に変えられる）
   - **開いたままの WebSocket も確かめ直す。** Worker は、管理者でない人の接続に `APPROVAL_CHECK_HEADER`（email）を付けて DO へ渡す。DO は、hello と ops を受けたときと配信のとき（見ているだけの人はメッセージを送らないため）に、D1 の `users` を読む。承認済みでなければ、その人の接続をコード 4403（`CLOSE_NOT_APPROVED`）で閉じる。クライアントは読み込み直し、承認待ちの表示になる。承認済みと確かめた結果は、Worker（isolate ごと。`src/worker/users.ts` の `APPROVAL_CACHE_MS`）と DO がそれぞれ 30 秒覚えている。取り消しが届くのは、長くてもその分だけ遅れる。取り消しを受けた isolate では、覚えた結果をすぐに捨てる。**Worker の覚えた結果は `/api` と `/img` にだけ使い、画面の読み込み（HTML）、WebSocket の接続、`GET /api/session` では D1 を読む。** ほかの isolate で拒否された人が、古い結果で画面を開き直したり、つなぎ直したりできないようにするため。DO は、Worker が接続の直前に確かめた結果を、そのまま覚える。DO が D1 を読めなかったときは、承認済みとして扱う（接続のときに Worker が確かめているので、一時的な失敗で接続を切らない）
   - 管理者は、ヘッダーの利用者のアイコン（承認待ちの人数の印つき。`src/web/toolbar.ts` の `usersLink`）から、利用者の画面（`/users`）を開き、承認と拒否をする
+- **メールでの通知**（[#131](https://github.com/kan/wema-kake/issues/131)。`src/worker/mail.ts`）。Cloudflare Email Service の `send_email` バインディング（`EMAIL`）と、vars の `EMAIL_FROM`（送信元のアドレス）が**両方あるときだけ**送る。どちらかが無ければ、何も送らず、プロフィールの画面にも設定を出さない
+  - 送るのは 3 つ。新しい人が承認待ちになったら管理者の全員へ（`approvalOf` が表に入れたとき。1 人につき 1 度。管理者ごとに別のメールにする）、管理者が承認したら本人へ（承認済みの人を承認し直したときは送らない）、自分が作ったページ（#130 の `created_by`）にほかの人が付箋を足したら作った人へ
+  - 承認の 2 つは、サイトの既定の言語（設定の `defaultLang`）で書く。`waitUntil` で送り、応答を待たせない
+  - **送信に失敗しても例外にしない**（`sendMail` が受け止めてログに残す）。承認や書き込みを、メールのために失敗させない
+  - 新しい付箋のメールは、受け取ると決めた人（D1 の `profiles.notify_notes`。既定は受け取らない）にだけ送る。言語は、その人が設定を変えたときの画面の言語（`profiles.notify_lang`）
+  - 付箋のたびには送らない。作った人でない人（作った人の代理の agent も除く）が付箋を足すと、DO は、その操作の `seq` と時刻を `meta` の `note_notice` に記録する（記録があれば何もしない）。`NOTE_NOTICE_DELAY_MS`（10 分）後の alarm で、その `seq` からの操作の履歴を数えて、1 通にまとめて送る。数えるのは、今もページにある付箋だけ（消した付箋は数えず、削除を戻した付箋は 1 枚）。取り消した操作と取り消しの操作は数えない。受け取るかと、承認待ちか拒否されていないか（`isRefused`）は、送るときに D1 で確かめる（書き込みのたびに D1 を読まない）。D1 を読めなければ記録を残して alarm の再実行に任せ、読めたら送る前に記録を消す（送信に失敗しても送り直さない）
+  - DO は設定（サイトの名前）を読めないので、新しい付箋のメールは、送信元の名前を付けず、件名にもサイトの名前を入れない
+  - 文面の URL は vars の `SITE_ORIGIN` から作る。空ならパスだけになる
   - 設定は `wrangler.jsonc` の `vars` の `ACCESS_TEAM_DOMAIN`（`https://<team>.cloudflareaccess.com`）と `ACCESS_AUD`（Access アプリケーションの AUD タグ）。両方が空なら 500 を返す
   - ローカル開発は `.dev.vars` の `DEV_USER_EMAIL` を使う（`.dev.vars.example` を参照）。`/mcp` の主体は `agent:local` になる。ローカルのホスト名（`localhost`、`127.0.0.1`、`[::1]`、`.localhost` で終わる名前）へのリクエストでだけ有効で、Access の設定があれば無視される。**ローカルと見なすホスト名を、これより広げないこと**（`src/worker/access.ts` の `isLocalHost`。`.localhost` はループバック専用の予約名なので、デプロイ先のホスト名には当たらない）
   - ローカルのリバースプロキシ [roji](https://github.com/kan/roji)（`{host}` の置き換えがある 1.5.0 以降）を使うなら `npm run dev:roji`。空いているポートで起動し、`https://wema-kake.<roji のドメイン>` で開ける。**`wrangler dev` の `--host {host} --upstream-protocol https` を外さないこと。** 外すと、Worker から見たオリジンが `http://<ホスト名>` になる。ブラウザが送る `Origin`（`https://<ホスト名>`）と合わなくなり、状態を変えるリクエストと WebSocket の接続が、オリジンの検査で 403 になる
@@ -414,7 +422,8 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | `PUT /api/pages/<slug>/notes/<id>/reactions/<kind>` | 付箋にリアクションを付ける（`DELETE` で外す）。同じ人は付箋 1 枚につき種類ごとに 1 つで、付け直しと外し直しは何もしない。付箋の今のリアクション（`{ "reactions": [...] }`）を返す。ページか付箋がなければ 404、知らない種類は 400 |
 | `POST /api/images` | 画像のアップロード（本文は画像のバイト列、`Content-Type` は png / jpeg / gif / webp / avif）。`{ "url": "/img/<key>" }` を返す。10MB まで |
 | `GET /img/<key>` | 画像の取得（R2）。利用者のアイコンも、ここで返す |
-| `GET /api/profile` | 自分の表示名とアイコン（`{ "name": "..." \| null, "icon": "/img/<key>" \| null }`） |
+| `GET /api/profile` | 自分の表示名とアイコン（`{ "name": "..." \| null, "icon": "/img/<key>" \| null, "notifyNotes": false, "mail": true }`）。`notifyNotes` は新しい付箋のメールを受け取るか、`mail` はサイトがメールを送れるか（#131） |
+| `PUT /api/profile/notify` | 新しい付箋のメールを受け取るかを変える（本文は `{ "notes": true, "lang": "ja" }`。`lang` はメールの言語で `ja` か `en`、ほかは 400） |
 | `PUT /api/profile` | 自分の表示名を変える（本文は `{ "name": "..." }`。空文字で未設定に戻す）。32 文字まで、制御文字は 400。ほかの人と同じ名前も許す |
 | `PUT /api/profile/icon` | 自分のアイコンを変える（本文は画像のバイト列。`Content-Type` は `image/webp` か `image/jpeg` で、ほかは 415。64KB を超えれば 413）。前の画像は R2 から消す。`{ "ok": true, "icon": "/img/<key>" }` を返す |
 | `DELETE /api/profile/icon` | 自分のアイコンを外す（画像は R2 から消す） |

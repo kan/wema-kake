@@ -18,6 +18,7 @@
 - 付箋の下の作成者の表示に、その人のアイコンを出すようにした。AI の付箋は、委任者のアイコンを出す。いいねのボタンには、付けた人のアイコンを 3 個まで重ねて並べ、残りは「+n」で出す（[#122](https://github.com/kan/wema-kake/issues/122)）
 - 付箋をドラッグしている途中や、大きさを変えている途中の動きを、同じページを開いているほかの人の画面でも出すようにした。これまでは、離した時点で一度に移っていた。途中の動きは保存せず、操作の履歴にも残らない（[#123](https://github.com/kan/wema-kake/issues/123)）
 - 同じページを開いているほかの人のアイコンを、ヘッダーへ出すようにした。その人が選んでいる付箋を、その人の色の枠で囲み、本文を編集していれば「a が編集中」と出す。同じ付箋を同時に書き換えて、片方の変更が断られることを減らすため（[#124](https://github.com/kan/wema-kake/issues/124)）
+- Cloudflare Email Service が使えるときは、メールで知らせるようにした。新しい人が承認待ちになったら管理者へ、承認したら本人へ、自分が作ったページにほかの人が付箋を足したら作った人へ送る。新しい付箋のメールは、プロフィールの画面で受け取ると決めた人にだけ、10 分ほどの間の付箋を 1 通にまとめて送る。`wrangler.jsonc` に `send_email` のバインディング（`EMAIL`）と vars の `EMAIL_FROM` を足したときだけ送り、無ければこれまでどおり。D1 の `profiles` に列を足したので、`npm run deploy` で更新する。雛形の README の「メールで知らせる」（[#131](https://github.com/kan/wema-kake/issues/131)）
 - 雛形の README の「Access の設定」に、Muse のコールバック URL（`https://agent.meta.ai/api/hatch/oauth/callback`）を足した。Allowed redirect URIs に入れないと、Muse でコネクタを登録する途中で Access が `redirect_uri is not allowed by the account configuration` を返して断る。「MCP で書き込めるクライアントを限る」で並べる名前は `agent.meta.ai`
 
 ### 変更

@@ -234,4 +234,8 @@ export const en = {
   'profile.tooLarge': 'Could not make the image small enough',
   'failed.profile': (reason) => `Could not save your name (${reason})`,
   'failed.icon': (reason) => `Could not change your icon (${reason})`,
+  'profile.notifyNotes': 'Email me when someone else adds notes to a page I created',
+  'profile.notifyNotesHint':
+    'Notes added within about 10 minutes are sent together in one email, in the language the screen was in when you changed this setting',
+  'failed.notify': (reason) => `Could not save your email setting (${reason})`,
 } satisfies typeof ja;

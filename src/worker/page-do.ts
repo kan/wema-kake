@@ -7,6 +7,7 @@ import {
   UNSET_PAGE_COLOR,
   type OpSummary,
   type PageSummary,
+  type Profile,
   type RevertOutcome,
 } from '../shared/api';
 import {
@@ -18,7 +19,7 @@ import {
   type WemaNote,
 } from '../shared/delta';
 import { systemSummary } from '../shared/op-summary';
-import { isReactionKind, type Reaction } from '../shared/note-info';
+import { emailOfActor, isAgentActor, isReactionKind, nameOrDefault, type Reaction } from '../shared/note-info';
 import { canDeletePage, ownerOf } from '../shared/page-owner';
 import { DAY_MS, EXPIRE_DAYS_CHOICES, isExpirable, isTrash, TRASH_EXPIRE_DAYS, TRASH_SLUG } from '../shared/trash';
 import {
@@ -70,8 +71,10 @@ import {
   touchPage,
   writePage,
 } from './indexer';
+import { canSendMail, mailText, sendMail, siteUrl, writerList } from './mail';
+import { noteNoticeOf, profilesOfActors } from './profiles';
 import { applyRevert } from './revert';
-import { isApproved } from './users';
+import { isApproved, isRefused } from './users';
 import { SanitizeError } from './sanitize';
 import {
   clampLimit,
@@ -406,6 +409,23 @@ WHERE seq = 1
   AND (SELECT value FROM meta WHERE key = 'slug') IS NOT '${TRASH_SLUG}';
 `,
 ];
+
+/** 新しい付箋のメールを、最初の付箋から何ミリ秒まとめるか（issue #131）。1 ページから、この間隔より多くは送らない */
+export const NOTE_NOTICE_DELAY_MS = 10 * 60 * 1000;
+/** 新しい付箋のメールに名前を並べる人数 */
+const MAX_NOTICE_WRITERS = 5;
+
+/** 新しい付箋のメールを送るまで、meta の `note_notice` に持つ値 */
+interface PendingNotice {
+  /** 数え始めた時刻 */
+  since: number;
+  /** 数え始めた操作の seq。送るときに、ここからの操作の履歴を数える */
+  fromSeq: number;
+}
+
+/** `by` の書き込みが、ページを作った人 `owner` の（本人か、その代理の agent）か */
+const isWriterOf = (owner: string, by: { actor: string; delegate?: string | null }) =>
+  (ownerOf(by) ?? by.actor).toLowerCase() === owner.toLowerCase();
 
 /** 1 回の alarm で、期限を過ぎた付箋を消す量（本文の文字数の合計）。ops の 1 行の上限に収める */
 const EXPIRE_BATCH_LENGTH = 400_000;
@@ -1122,6 +1142,9 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
         at = Math.min(at, Math.max(from + days * DAY_MS, this.expirePausedUntil()));
       }
     }
+    // 新しい付箋のメール（recordNewNotes）
+    const notice = this.pendingNotice();
+    if (notice !== null) at = Math.min(at, notice.since + NOTE_NOTICE_DELAY_MS);
     if (at !== Infinity) await this.scheduleAlarm(at);
   }
 
@@ -1135,6 +1158,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     // 期限で消した付箋の記録も、同じ alarm で消す
     this.pruneTrashRecords(now);
     if (this.getMeta('index_clean') === null) await this.reindexInOrder(now);
+    await this.sendNoteNotice(now);
     await this.scheduleNextAlarm(Date.now());
   }
 
@@ -1794,7 +1818,99 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       await this.sendToTrash(result.deltas, removedAuthors, by);
       await this.untrash(result.deltas, by);
     }
+    if (result.ok && result.broadcast) this.recordNewNotes(result.seq, result.deltas, input);
     return result;
+  }
+
+  // --- 新しい付箋のメール（issue #131。src/worker/mail.ts） ---
+
+  /**
+   * ほかの人が付箋を足したら、その操作から数え始める。付箋のたびには送らず、最初の付箋から
+   * NOTE_NOTICE_DELAY_MS 後の alarm で、その間の操作の履歴を数えて 1 通にする（数えるのは送るとき。
+   * 書き込みのたびに記録を書き換えない）。作った人のいないページと、作った人（とその代理の agent）の
+   * 付箋では数え始めない。受け取るかどうか（プロフィールの設定）も、送るときに確かめる（書き込みの
+   * たびに D1 を読まないため）
+   */
+  private recordNewNotes(seq: number, deltas: HistoryDelta[], by: Writer): void {
+    if (!canSendMail(this.env) || this.getMeta('note_notice') !== null) return;
+    const owner = this.owner();
+    if (owner === null || createdNotes(deltas).length === 0 || isWriterOf(owner, by)) return;
+    const notice: PendingNotice = { since: Date.now(), fromSeq: seq };
+    this.setMeta('note_notice', JSON.stringify(notice));
+    this.ctx.waitUntil(this.scheduleAlarm(notice.since + NOTE_NOTICE_DELAY_MS));
+  }
+
+  /**
+   * `fromSeq` からの操作で、作った人でない人が足し、今もページにある付箋の数と、足した人（先に足した
+   * 順）。取り消した操作と、取り消しの操作は数えない。同じ付箋を作り直した（削除を戻した）ときは、
+   * 最初に足した人の 1 枚として数える
+   */
+  private newNotesSince(fromSeq: number, owner: string): { count: number; writers: string[] } {
+    const rows = this.sql
+      .exec<{ actor: string; delegate: string | null; body: string }>(
+        'SELECT actor, delegate, body FROM ops WHERE seq >= ? AND reverted_by IS NULL AND reverts IS NULL ORDER BY seq',
+        fromSeq,
+      )
+      .toArray();
+    /** 付箋の id から、足した人 */
+    const added = new Map<string, string>();
+    for (const row of rows) {
+      if (isWriterOf(owner, row)) continue;
+      for (const note of createdNotes(JSON.parse(row.body) as HistoryDelta[])) {
+        if (!added.has(note.id)) added.set(note.id, ownerOf(row) ?? row.actor);
+      }
+    }
+    let count = 0;
+    const writers = new Set<string>();
+    for (const [id, writer] of added) {
+      if (this.sql.exec('SELECT 1 FROM notes WHERE id = ?', id).toArray().length === 0) continue;
+      count++;
+      writers.add(writer);
+    }
+    return { count, writers: [...writers] };
+  }
+
+  private pendingNotice(): PendingNotice | null {
+    if (this.version === 0) return null;
+    const raw = this.getMeta('note_notice');
+    return raw === null ? null : (JSON.parse(raw) as PendingNotice);
+  }
+
+  /**
+   * 時刻が来ていれば、数え始めてからの付箋をメールで知らせる。受け取らない人と、承認待ちか拒否された
+   * 人には、送らずに忘れる。D1 を読めなければ記録を残し、alarm の再実行で送り直す
+   */
+  private async sendNoteNotice(now: number): Promise<void> {
+    const pending = this.pendingNotice();
+    if (pending === null || now < pending.since + NOTE_NOTICE_DELAY_MS) return;
+    const owner = this.owner();
+    const email = owner === null ? undefined : emailOfActor(owner);
+    const [notice, refused] =
+      email === undefined ? [null, false] : await Promise.all([noteNoticeOf(this.env.DB, email), isRefused(this.env.DB, email)]);
+    // D1 を待つ間に、ページが消されていることがある
+    if (this.version === 0) return;
+    // 数えるのと消すのは、待たずに続けて行う（間に届いた付箋を、どちらの知らせからも漏らさない）。
+    // 消した後に送るのに失敗しても、送り直さない（同じ知らせが重ならないように）
+    const found = owner !== null && notice !== null && !refused ? this.newNotesSince(pending.fromSeq, owner) : null;
+    this.setMeta('note_notice', null);
+    if (email === undefined || notice === null || found === null || found.count === 0) return;
+    const slug = this.slug();
+    const page = this.getMeta('title') ?? slug;
+    const shown = found.writers.slice(0, MAX_NOTICE_WRITERS);
+    // 表示名を引けなくても、email の `@` より前で送る
+    const names = await profilesOfActors(this.env.DB, shown).catch(() => new Map<string, Profile>());
+    const writers = shown.map((actor) => ({ name: nameOrDefault(names.get(actor)?.name, actor), person: !isAgentActor(actor) }));
+    const text = mailText(notice.lang);
+    await sendMail(this.env, {
+      to: email,
+      subject: text.notesSubject(page, found.count),
+      text: text.notesText(
+        page,
+        found.count,
+        writerList(notice.lang, writers, found.writers.length - shown.length),
+        siteUrl(this.env.SITE_ORIGIN, `/p/${slug}`),
+      ),
+    });
   }
 
   // --- 取り消しと履歴 ---

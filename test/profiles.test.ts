@@ -22,7 +22,11 @@ const putName = (email: string, name: unknown) =>
   call(email, '/api/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name }) });
 const putIcon = (email: string, body: Uint8Array, type = 'image/webp') =>
   call(email, '/api/profile/icon', { method: 'PUT', headers: { 'Content-Type': type }, body });
-const profile = async (email: string) => (await (await call(email, '/api/profile')).json()) as Profile;
+/** 表示名とアイコンだけ（メールの設定は mail.test.ts） */
+const profile = async (email: string): Promise<Profile> => {
+  const { name, icon } = (await (await call(email, '/api/profile')).json()) as Profile;
+  return { name, icon };
+};
 const lookup = async (email: string, actors: unknown) => {
   const res = await call(email, '/api/profiles', {
     method: 'POST',
@@ -139,7 +143,7 @@ it('承認が有効なら、承認待ちの人は表示名を変えられない'
   expect(res.status).toBe(403);
   // 管理者は、承認の表に入らないが、表示名を持てる
   expect((await call(ADMIN, '/api/profile', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: '管理者さん' }) }, approvalApp)).status).toBe(200);
-  expect(await (await call(ADMIN, '/api/profile', {}, approvalApp)).json()).toEqual({ name: '管理者さん', icon: null });
+  expect(await (await call(ADMIN, '/api/profile', {}, approvalApp)).json()).toMatchObject({ name: '管理者さん', icon: null });
 });
 
 it('read_board は、作成者が表示名を設定していれば created_by_name を付ける', async () => {

@@ -152,4 +152,11 @@ export interface WemaKakeEnv {
   SITE_ORIGIN?: string;
   /** ローカル開発で Access の代わりに使う email。ローカルのホスト名へのリクエストでだけ有効 */
   DEV_USER_EMAIL?: string;
+  /**
+   * メールの送信（Cloudflare Email Service の `send_email` バインディング。issue #131）。
+   * `EMAIL_FROM` と両方あるときだけ送る（src/worker/mail.ts）
+   */
+  EMAIL?: SendEmail;
+  /** 送信元のアドレス。Email Service に登録したドメインのもの */
+  EMAIL_FROM?: string;
 }

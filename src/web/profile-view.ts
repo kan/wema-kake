@@ -2,13 +2,13 @@
 //
 // アイコンの画像は、ブラウザで正方形に切り抜き（中央）、`ICON_SIZE` に縮めて、WebP にしてから上げる
 // （WebP を書き出せないブラウザでは JPEG）。`MAX_ICON_BYTES` を超えたら、画質を下げて作り直す。
-import { ICON_CONTENT_TYPES, ICON_SIZE, MAX_DISPLAY_NAME_LENGTH, MAX_ICON_BYTES } from '../shared/api';
-import { emailOfActor } from '../shared/note-info';
-import { getProfile, removeIcon, setDisplayName, uploadIcon } from './api';
+import { ICON_CONTENT_TYPES, ICON_SIZE, MAX_DISPLAY_NAME_LENGTH, MAX_ICON_BYTES, type OwnProfile } from '../shared/api';
+import { defaultName, emailOfActor } from '../shared/note-info';
+import { getProfile, removeIcon, setDisplayName, setNoteNotice, uploadIcon } from './api';
 import { appLink, el, type FailureKey, failureMessage } from './dom';
-import { t } from './i18n';
+import { lang, t } from './i18n';
 import { onViewEnd, viewSignal } from './navigation';
-import { avatar, defaultName, onProfilesChange, profileOf, updateOwnProfile } from './profiles';
+import { avatar, onProfilesChange, profileOf, updateOwnProfile } from './profiles';
 import { viewSession } from './session';
 import { site } from './site';
 import { header, langButton, toast } from './toolbar';
@@ -28,8 +28,8 @@ export function openProfile(app: HTMLElement): void {
   Promise.all([viewSession(), getProfile()])
     .then(([{ actor }, profile]) => {
       if (signal.aborted) return;
-      updateOwnProfile(actor, profile);
-      body.replaceChildren(profileForm(actor, notify));
+      updateOwnProfile(actor, { name: profile.name, icon: profile.icon });
+      body.replaceChildren(profileForm(actor, notify, profile));
     })
     .catch((e) => {
       if (!signal.aborted) body.replaceChildren(el('p', { textContent: failureMessage('failed.profile', e) }));
@@ -37,7 +37,12 @@ export function openProfile(app: HTMLElement): void {
 }
 
 /** `run` の間は `button` を押せなくし、失敗したら `failKey` の文言で知らせる */
-function busy<T>(button: HTMLButtonElement, run: () => Promise<T>, notify: (text: string) => void, failKey: FailureKey) {
+function busy<T>(
+  button: HTMLButtonElement | HTMLInputElement,
+  run: () => Promise<T>,
+  notify: (text: string) => void,
+  failKey: FailureKey,
+) {
   button.disabled = true;
   run()
     .catch((err) => notify(failureMessage(failKey, err)))
@@ -46,7 +51,39 @@ function busy<T>(button: HTMLButtonElement, run: () => Promise<T>, notify: (text
     });
 }
 
-function profileForm(actor: string, notify: (text: string) => void): HTMLElement {
+/**
+ * 自分が作ったページに、ほかの人が付箋を足したらメールで知らせるか（issue #131）。サイトがメールを
+ * 送れなければ出さない。メールの言語は、切り替えたときの画面の言語にする
+ */
+function noteNoticeField(profile: OwnProfile, notify: (text: string) => void): HTMLElement | null {
+  if (!profile.mail) return null;
+  const checkbox = el('input', { type: 'checkbox', checked: profile.notifyNotes });
+  checkbox.addEventListener('change', () => {
+    const on = checkbox.checked;
+    busy(
+      checkbox,
+      async () => {
+        try {
+          await setNoteNotice(on, lang);
+        } catch (err) {
+          checkbox.checked = !on;
+          throw err;
+        }
+        notify(t('profile.saved'));
+      },
+      notify,
+      'failed.notify',
+    );
+  });
+  return el(
+    'div',
+    { className: 'profile-notify' },
+    el('label', {}, checkbox, el('span', { textContent: t('profile.notifyNotes') })),
+    el('p', { className: 'profile-hint', textContent: t('profile.notifyNotesHint') }),
+  );
+}
+
+function profileForm(actor: string, notify: (text: string) => void, profile: OwnProfile): HTMLElement {
   const current = () => profileOf(actor) ?? { name: null, icon: null };
   const preview = el('span', { className: 'profile-avatar' });
   const remove = el('button', { type: 'button', className: 'text-button', textContent: t('profile.removeIcon') });
@@ -131,6 +168,7 @@ function profileForm(actor: string, notify: (text: string) => void): HTMLElement
       el('p', { className: 'profile-hint', textContent: t('profile.iconHint') }),
     ),
     nameForm,
+    noteNoticeField(profile, notify),
     // ほかの人には、名前とアイコンの説明（ツールチップ）に、この email も出る
     el('p', { className: 'profile-hint', textContent: t('profile.account', emailOfActor(actor) ?? actor) }),
   );

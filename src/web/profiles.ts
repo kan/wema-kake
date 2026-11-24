@@ -3,7 +3,7 @@
 // 名前を出す画面は、`requestProfiles` で引く。出す前に待つか、先に描いて、届いたら `onProfilesChange` で
 // 描き直す。表示名を設定していない人は、email の `@` より前を名前にする。
 import { MAX_PROFILE_LOOKUP, type Profile } from '../shared/api';
-import { emailOfActor, isAgentActor } from '../shared/note-info';
+import { emailOfActor, isAgentActor, nameOrDefault } from '../shared/note-info';
 import { lookupProfiles } from './api';
 import { el } from './dom';
 import { t } from './i18n';
@@ -29,15 +29,8 @@ const fresh = (actor: string) => (cache.get(actor)?.until ?? 0) > Date.now();
 /** 引いた結果。まだ引いていない人は undefined、何も設定していない人は、どちらも null */
 export const profileOf = (actor: string): Profile | undefined => cache.get(actor)?.profile;
 
-/** 表示名を設定していない人の名前（email の `@` より前）。agent はその名前（OAuth のクライアント） */
-export function defaultName(actor: string): string {
-  const email = emailOfActor(actor);
-  if (email !== undefined) return email.split('@')[0] || email;
-  return actor.slice(actor.indexOf(':') + 1);
-}
-
 /** 主体の、画面に出す名前。人は表示名（なければ email の `@` より前） */
-export const displayName = (actor: string): string => profileOf(actor)?.name || defaultName(actor);
+export const displayName = (actor: string): string => nameOrDefault(profileOf(actor)?.name, actor);
 
 /**
  * 作成者の名前。agent で委任者（agent を認可した人）が分かれば、「Claude（A さんの代理）」の形にする。

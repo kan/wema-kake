@@ -31,6 +31,8 @@ export async function approvalOf(
   config: ResolvedConfig,
   email: string,
   fresh = false,
+  /** 初めて来た人を、承認待ちとして表に入れたときに呼ぶ（管理者へのメール。issue #131） */
+  onPending?: (email: string) => Promise<void>,
 ): Promise<ApprovalStatus> {
   if (isAdmin(config, email)) return 'approved';
   const key = email.toLowerCase();
@@ -39,16 +41,22 @@ export async function approvalOf(
   // ほとんどのリクエストは、読むだけで済む。書くのは初めて来たときだけにする
   let status = (await statusOf(db, key))?.status;
   if (status === undefined) {
-    // 同じ人のリクエストが同時に来ても、1 行だけになる。先に入った行（別の状態に変えられている
-    // こともある）の状態を返す（DO NOTHING では、競合したときに RETURNING が行を返さない）
-    const row = await db
+    // 同じ人のリクエストが同時に来ても、1 行だけになる。DO NOTHING の RETURNING は、自分が入れたときだけ
+    // 行を返す（承認待ちのメールを 1 度だけ送るのに使う）。競合したときは、先に入った行（別の状態に
+    // 変えられていることもある）の状態を読み直す
+    const inserted = await db
       .prepare(
         `INSERT INTO users (email, status, created_at) VALUES (?, 'pending', ?)
-         ON CONFLICT (email) DO UPDATE SET email = excluded.email RETURNING status`,
+         ON CONFLICT (email) DO NOTHING RETURNING status`,
       )
       .bind(key, Date.now())
       .first<{ status: ApprovalStatus }>();
-    status = row?.status ?? 'pending';
+    if (inserted) {
+      status = inserted.status;
+      await onPending?.(key);
+    } else {
+      status = (await statusOf(db, key))?.status ?? 'pending';
+    }
   }
   if (status === 'approved') approvedAt.set(key, Date.now());
   else approvedAt.delete(key);
@@ -58,6 +66,15 @@ export async function approvalOf(
 /** `email` の人が承認済みか。表を読むだけで、行は作らない（ページの DO から呼ぶ） */
 export async function isApproved(db: D1Database, email: string): Promise<boolean> {
   return (await statusOf(db, email.toLowerCase()))?.status === 'approved';
+}
+
+/**
+ * `email` の人が、承認待ちか拒否されているか（表に入っていて、承認済みでない）。表に無い人は false
+ * （承認が無効なサイトでは、誰も表に入らない）。ページの DO が、メールを送る前に確かめる（issue #131）
+ */
+export async function isRefused(db: D1Database, email: string): Promise<boolean> {
+  const status = (await statusOf(db, email.toLowerCase()))?.status;
+  return status !== undefined && status !== 'approved';
 }
 
 /**
@@ -89,21 +106,22 @@ export async function pendingCount(db: D1Database): Promise<number> {
 }
 
 /**
- * 承認か拒否をする。`by` は管理者の主体。表にない人なら false（まだ来ていない人は、先に承認できない。
- * 来る前に承認するなら、Access の側で許可する範囲を絞る）
+ * 承認か拒否をする。`by` は管理者の主体。返り値は、変える前の状態。表にない人なら null（まだ来ていない
+ * 人は、先に承認できない。来る前に承認するなら、Access の側で許可する範囲を絞る）
  */
 export async function decideUser(
   db: D1Database,
   email: string,
   status: Exclude<ApprovalStatus, 'pending'>,
   by: string,
-): Promise<boolean> {
+): Promise<ApprovalStatus | null> {
   const key = email.toLowerCase();
   // この isolate で覚えている結果は、すぐに捨てる（ほかの isolate では、長くても APPROVAL_CACHE_MS 遅れる）
   approvedAt.delete(key);
-  const result = await db
-    .prepare('UPDATE users SET status = ?, decided_by = ?, decided_at = ? WHERE email = ?')
-    .bind(status, by, Date.now(), key)
-    .run();
-  return result.meta.changes > 0;
+  // 前の状態を読んでから書く（1 回の往復）
+  const [before] = await db.batch<{ status: ApprovalStatus }>([
+    db.prepare('SELECT status FROM users WHERE email = ?').bind(key),
+    db.prepare('UPDATE users SET status = ?, decided_by = ?, decided_at = ? WHERE email = ?').bind(status, by, Date.now(), key),
+  ]);
+  return before.results[0]?.status ?? null;
 }
