@@ -11,7 +11,7 @@ import { el, formatDate } from './dom';
 import { type IconName, icon } from './icons';
 import { t } from './i18n';
 import { onViewEnd } from './navigation';
-import { authorLabel, displayName, onProfilesChange, requestProfiles } from './profiles';
+import { authorLabel, avatar, displayName, onProfilesChange, requestProfiles } from './profiles';
 
 /**
  * agent の名前（OAuth のリダイレクト先のホスト名）から、アイコンを選ぶ。知らないクライアントと、
@@ -25,6 +25,26 @@ function agentIcon(name: string): IconName {
 
 /** リアクションを付けた人の名前（ボタンの説明に並べる） */
 const reactorLabel = (r: Reaction) => authorLabel(r.actor, r.delegate);
+
+/** いいねのボタンに重ねて並べるアイコンの数。超えた分は「+n」で出す */
+const MAX_REACTOR_AVATARS = 3;
+
+/**
+ * リアクションを付けた人のアイコンを、重ねて並べる（issue #122）。agent は、委任者のアイコンにする
+ * （本人と、その代理の agent が両方付けていれば、1 つにまとめる。「+n」も、まとめた後の人数で数える）。
+ * 名前はボタンの説明に並べるので、アイコンには説明を付けない（付けると、ボタンの説明を隠す）
+ */
+function reactorAvatars(reactions: Reaction[]): HTMLElement {
+  const people = [...new Set(reactions.map((r) => (isAgentActor(r.actor) && r.delegate ? r.delegate : r.actor)))];
+  const shown = people.slice(0, MAX_REACTOR_AVATARS).map((actor) => avatar(actor, { decorative: true }));
+  const rest = people.length - shown.length;
+  return el(
+    'span',
+    { className: 'note-reactors' },
+    ...shown,
+    ...(rest > 0 ? [el('span', { className: 'note-reactors-more', textContent: `+${rest}` })] : []),
+  );
+}
 
 export interface ReactionHooks {
   /** ログインしている人の主体（'user:<email>'）。分かるまでは null で、ボタンは押せない */
@@ -57,13 +77,24 @@ export class NoteAuthors {
       ),
     );
     const date = formatDate(info.updatedAt);
+    // 人のアイコン（issue #122）。agent の付箋は、委任者（agent を認可した人）のアイコンを出す。
+    // agent 自身のアイコンは、右に並べる
+    const person = createdBy === null ? null : isAgentActor(createdBy) ? (info.delegate ?? null) : createdBy;
     container.append(
-      el('span', {
-        className: 'note-author',
-        textContent: createdBy === null ? date : t('author.detail', authorLabel(createdBy, info.delegate), date),
-        // 名前は短くしてあるので、主体の全体（email のドメインなど）は、ここで確かめられるようにする
-        title: createdBy === null ? '' : [createdBy, info.delegate].filter(Boolean).join(' / '),
-      }),
+      el(
+        'span',
+        {
+          className: 'note-author',
+          // 名前は短くしてあるので、主体の全体（email のドメインなど）は、ここで確かめられるようにする
+          title: createdBy === null ? '' : [createdBy, info.delegate].filter(Boolean).join(' / '),
+        },
+        // 名前は隣に書き、主体の全体は親の説明に出すので、アイコンには説明を付けない
+        ...(person === null ? [] : [avatar(person, { decorative: true })]),
+        el('span', {
+          className: 'note-author-text',
+          textContent: createdBy === null ? date : t('author.detail', authorLabel(createdBy, info.delegate), date),
+        }),
+      ),
     );
     if (createdBy !== null && isAgentActor(createdBy)) {
       const name = displayName(createdBy);
@@ -94,7 +125,7 @@ export class NoteAuthors {
     });
     button.ariaPressed = String(mine);
     button.append(icon('like'));
-    if (likes.length > 0) button.append(el('span', { textContent: String(likes.length) }));
+    if (likes.length > 0) button.append(el('span', { textContent: String(likes.length) }), reactorAvatars(likes));
     button.addEventListener('click', (e) => {
       // 付箋の選択やドラッグにしない
       e.stopPropagation();

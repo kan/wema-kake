@@ -129,23 +129,32 @@ function hueOf(actor: string): number {
 
 /**
  * 主体のアイコン。画像を設定していれば画像、なければ名前の頭文字を色の付いた円に入れる。
- * 大きさは CSS（`.avatar`）で決める。説明（title）には名前と主体の全体を出す
+ * 大きさは CSS（`.avatar`）で決める。説明（title）には名前と主体の全体を出す。
+ *
+ * `decorative` なら、説明を付けず、読み上げからも外す。隣に名前を書いてある場所や、親の要素が説明を
+ * 持つ場所（いいねのボタン）で使う（アイコンの説明が、親の説明を隠すため）
  */
-export function avatar(actor: string): HTMLElement {
+export function avatar(actor: string, { decorative = false } = {}): HTMLElement {
   const name = displayName(actor);
-  const title = `${name} (${actor})`;
   const image = profileOf(actor)?.icon;
-  if (!image) return initialAvatar(actor, name, title);
-  const img = el('img', { className: 'avatar', src: image, alt: name, title, draggable: false });
+  const describe = (face: HTMLElement) => {
+    if (decorative) face.ariaHidden = 'true';
+    else face.title = `${name} (${actor})`;
+    return face;
+  };
+  if (!image) return describe(initialAvatar(actor, name, decorative));
+  const img = describe(el('img', { className: 'avatar', src: image, alt: decorative ? '' : name, draggable: false }));
   // 替えられたか外されたアイコン（前の画像は、すぐに消える。ほかの人の手元には、引き直すまで前の URL が残る）
-  img.addEventListener('error', () => img.replaceWith(initialAvatar(actor, name, title)), { once: true });
+  img.addEventListener('error', () => img.replaceWith(describe(initialAvatar(actor, name, decorative))), { once: true });
   return img;
 }
 
-function initialAvatar(actor: string, name: string, title: string): HTMLElement {
-  const initial = el('span', { className: 'avatar avatar-initial', textContent: [...name][0]?.toUpperCase() ?? '?', title });
-  initial.role = 'img';
-  initial.ariaLabel = name;
+function initialAvatar(actor: string, name: string, decorative: boolean): HTMLElement {
+  const initial = el('span', { className: 'avatar avatar-initial', textContent: [...name][0]?.toUpperCase() ?? '?' });
+  if (!decorative) {
+    initial.role = 'img';
+    initial.ariaLabel = name;
+  }
   initial.style.setProperty('--avatar-hue', String(hueOf(actor)));
   return initial;
 }

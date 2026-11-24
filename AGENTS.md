@@ -685,6 +685,7 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
   - 自分が作って、まだ確定していない付箋には、付加情報がない（何も描かない）。確定の `ops` が届いたときに入る
 - 表示は `src/web/note-authors.ts`。wema 0.16.0 の `renderNoteAccessory`（付箋の枠のすぐ下の領域）に描き、変わった付箋は `refreshNoteAccessory()` で描き直す（`BoardSync` の `onNoteInfo`）
   - 名前は、利用者の表示名（下の「表示名とアイコン」）。描くときに `requestProfiles` で引き、届いたら全付箋を描き直す（`onProfilesChange`）。主体の全体（email）は、説明（`title`）に出す
+  - 名前の左に、その人のアイコンを出す（[#122](https://github.com/kan/wema-kake/issues/122)）。agent の付箋は委任者のアイコンを出し、AI のアイコンは今までどおり右に並べる。いいねのボタンには、付けた人のアイコンを 3 個まで重ねて並べ、残りは「+n」で出す（`reactorAvatars`）。本人と、その代理の agent の両方が付けていれば、1 つにまとめる。付箋の下のアイコンは、どれも `avatar(actor, { decorative: true })` で作り、説明を付けない（名前は隣かボタンの説明にあり、アイコンの説明がそれを隠すため）
   - **`@kanf/wema` を 0.16.0 より前に下げないこと**（`renderNoteAccessory` がない）
   - **領域（`container`）には、要素を直接入れること。行（`div`）で包まない。** ポインタを受けるのは直接入れた要素だけで、包むと、その行が幅いっぱいにクリックを受けて、広い画面で下の付箋を押せなくなる
   - **ホバーでの出し入れは、`visibility` で書くこと。`display` で切り替えない。** 高さが変わると、縦に積んでいる間は、ホバーのたびに列が積み直されて、付箋がポインタの下で動く
