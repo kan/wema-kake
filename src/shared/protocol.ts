@@ -29,6 +29,27 @@ export const REASON_PAGE_LOCKED = 'page locked';
 /** text の更新で、`before.text` がサーバーの現在値と違ったときの `reject` の `reason` */
 export const REASON_TEXT_CONFLICT = 'text conflict';
 
+/** 途中の動きで送る値のキー。中身に合わせて決まる大きさ（autoSize、foldable の高さ）は送らない */
+export const PREVIEW_KEYS = ['x', 'y', 'width', 'height'] as const;
+
+export type PreviewKey = (typeof PREVIEW_KEYS)[number];
+
+/** 付箋の位置と大きさのうち、途中の動きで変わったもの */
+export type PreviewValues = Partial<Record<PreviewKey, number>>;
+
+/**
+ * ドラッグや大きさの変更の途中の、付箋の位置と大きさ（issue #123）。確定した値ではないので、
+ * サーバーは保存せず、seq も進めずに、ほかの接続へ中継するだけ。確定した値は、操作が終わったときの
+ * `ops` で届く
+ */
+export type PreviewNote = { id: string } & PreviewValues;
+
+/** 送る側が、途中の動きをまとめて送る間隔（ミリ秒） */
+export const PREVIEW_INTERVAL_MS = 50;
+
+/** 1 つの `preview` に入れられる付箋の数。超えた分は送らない（サーバーも捨てる） */
+export const MAX_PREVIEW_NOTES = 100;
+
 /** ブラウザ → サーバー */
 export type ClientMsg =
   /**
@@ -36,7 +57,8 @@ export type ClientMsg =
    * ページが削除されたか作り直されているので、サーバーは CLOSE_PAGE_DELETED で閉じる
    */
   | { type: 'hello'; clientId: string; lastSeq?: number; epoch?: string }
-  | { type: 'ops'; opId: string; deltas: HistoryDelta[] };
+  | { type: 'ops'; opId: string; deltas: HistoryDelta[] }
+  | { type: 'preview'; notes: PreviewNote[] };
 
 /** 確定した変更。送信元も含めた全員に配信する */
 export interface OpsMsg {
@@ -98,4 +120,6 @@ export type ServerMsg =
    * 操作を受け付けなかった。送信元は手元の変更を巻き戻し、`fixups`（サーバーの現在値に
    * 合わせるためのデルタ。text が競合した付箋など）を適用する
    */
-  | { type: 'reject'; opId: string; reason: string; fixups?: HistoryDelta[] };
+  | { type: 'reject'; opId: string; reason: string; fixups?: HistoryDelta[] }
+  /** ほかの接続の、ドラッグや大きさの変更の途中の動き。`clientId` は送り主の接続（サーバーが付ける） */
+  | { type: 'preview'; clientId: string; notes: PreviewNote[] };

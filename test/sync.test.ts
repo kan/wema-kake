@@ -3,15 +3,17 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BoardData, HistoryDelta, WemaEdge, WemaNote } from '../src/shared/delta';
+import type { PreviewValues } from '../src/shared/protocol';
 import {
   BoardSync,
+  type NoteUpdateHandler,
   type SyncBoard,
   type SyncHooks,
   type SyncSocket,
   type SyncStatus,
   toSyncSocket,
 } from '../src/web/sync';
-import { api, createNote, edge, note } from './helpers';
+import { api, createNote, edge, join, note } from './helpers';
 
 type Obj = Record<string, unknown>;
 
@@ -19,13 +21,34 @@ class FakeBoard implements SyncBoard {
   notes = new Map<string, WemaNote>();
   edges = new Map<string, WemaEdge>();
   private handlers: ((payload: { deltas: HistoryDelta[] }) => void)[] = [];
+  private updateHandlers: NoteUpdateHandler[] = [];
+  viewOnly = false;
 
   getNote(id: string) {
     return this.notes.get(id);
   }
 
-  on(_event: 'history:commit', handler: (payload: { deltas: HistoryDelta[] }) => void) {
-    this.handlers.push(handler);
+  isViewOnly() {
+    return this.viewOnly;
+  }
+
+  on(event: 'history:commit', handler: (payload: { deltas: HistoryDelta[] }) => void): void;
+  on(event: 'note:update', handler: NoteUpdateHandler): void;
+  // biome-ignore lint/suspicious/noExplicitAny: 上の 2 つの形の実装
+  on(event: string, handler: any) {
+    if (event === 'history:commit') this.handlers.push(handler);
+    else this.updateHandlers.push(handler);
+  }
+
+  /**
+   * ドラッグの途中（wema は、離すまで history:commit を出さずに、note:update を出し続ける）。
+   * 手元の付箋を動かし、`local` の note:update を出す
+   */
+  drag(id: string, values: PreviewValues) {
+    const prev = this.notes.get(id)!;
+    const note = { ...prev, ...values };
+    this.notes.set(id, note);
+    for (const handler of this.updateHandlers) handler({ note, prev, origin: 'local' });
   }
 
   importData(data: BoardData) {
@@ -122,7 +145,7 @@ async function connectSocket(slug: string): Promise<SyncSocket> {
   return wrapSocket(res.webSocket!);
 }
 
-function newClient(slug: string, connect?: () => Promise<SyncSocket>): Client {
+function newClient(slug: string, connect?: () => Promise<SyncSocket>, previewTimeoutMs?: number): Client {
   const board = new FakeBoard();
   const client: Client = {
     board,
@@ -146,7 +169,7 @@ function newClient(slug: string, connect?: () => Promise<SyncSocket>): Client {
     onNoteInfo: (ids) => client.infoChanges.push(...ids),
     onAuthExpired: () => void (client.authExpired = true),
   };
-  client.sync = new BoardSync(board, connect ?? (() => connectSocket(slug)), hooks);
+  client.sync = new BoardSync(board, connect ?? (() => connectSocket(slug)), hooks, { previewTimeoutMs });
   client.sync.start();
   clients.push(client);
   return client;
@@ -522,5 +545,160 @@ describe('BoardSync', () => {
     a.board.act([{ type: 'note:delete', note: note('n1') }]);
     await synced(a);
     await until(() => b.sync.noteInfo('n1') === undefined && a.sync.noteInfo('n1') === undefined);
+  });
+});
+
+// ドラッグや大きさの変更の途中の動き（issue #123）
+describe('preview', () => {
+  /** 付箋 n1（x: 10, y: 20, 200x150）と、autoSize の n2 があるページに、2 つのクライアントをつなぐ */
+  async function setup(previewTimeoutMs?: number) {
+    const slug = `preview-${++pageCount}`;
+    const a = newClient(slug, undefined, previewTimeoutMs);
+    const b = newClient(slug, undefined, previewTimeoutMs);
+    await Promise.all([synced(a), synced(b)]);
+    a.board.act([createNote('n1'), createNote('n2', { autoSize: true })]);
+    await synced(a);
+    await until(() => b.board.notes.size === 2 && b.sync.noteInfo('n1') !== undefined);
+    return { slug, a, b };
+  }
+
+  it('ドラッグの途中の動きが、ほかの人の画面に届く。保存せず、付加情報も変えない。離すと確定の値になる', async () => {
+    const { slug, a, b } = await setup();
+    const seq = (await env.PAGE.getByName(slug).getSnapshot()).seq;
+    const info = b.sync.noteInfo('n1');
+
+    a.board.drag('n1', { x: 100 });
+    a.board.drag('n1', { x: 150, y: 60 });
+    await until(() => b.board.notes.get('n1')?.x === 150 && b.board.notes.get('n1')?.y === 60);
+    // 大きさの変更も届く
+    a.board.drag('n1', { width: 320 });
+    await until(() => b.board.notes.get('n1')?.width === 320);
+    expect(b.sync.noteInfo('n1')).toEqual(info);
+    expect((await env.PAGE.getByName(slug).getSnapshot()).seq).toBe(seq);
+    expect((await serverState(slug)).notes.find((n) => n.id === 'n1')?.x).toBe(10);
+
+    // 離す（確定）。途中の動きは、確定の値で終わる
+    a.board.act([{ type: 'note:update', noteId: 'n1', before: { x: 10, y: 20, width: 200 }, after: { x: 180, y: 70, width: 320 } }]);
+    await synced(a);
+    await until(() => b.board.notes.get('n1')?.x === 180);
+    expect(b.board.notes.get('n1')).toMatchObject({ x: 180, y: 70, width: 320 });
+  });
+
+  it('確定の ops に無いキーは、確定している値に戻す（元の位置で離したキー）', async () => {
+    const { a, b } = await setup();
+    a.board.drag('n1', { x: 300, y: 300 });
+    await until(() => b.board.notes.get('n1')?.x === 300);
+    // x は元の位置で離し、y だけが変わった
+    a.board.act([{ type: 'note:update', noteId: 'n1', before: { y: 20 }, after: { y: 90 } }]);
+    await synced(a);
+    await until(() => b.board.notes.get('n1')?.y === 90);
+    expect(b.board.notes.get('n1')?.x).toBe(10);
+  });
+
+  it('確定の ops が届かなければ、しばらくして確定している値に戻す', async () => {
+    const { a, b } = await setup(200);
+    a.board.drag('n1', { x: 500 });
+    await until(() => b.board.notes.get('n1')?.x === 500);
+    await until(() => b.board.notes.get('n1')?.x === 10);
+  });
+
+  it('その間にほかの人が確定させた値に戻す', async () => {
+    const { slug, a, b } = await setup(300);
+    a.board.drag('n1', { x: 500 });
+    await until(() => b.board.notes.get('n1')?.x === 500);
+    // ほかの接続（MCP など）が、同じ付箋の x を確定させた
+    await env.PAGE.getByName(slug).applyOps({
+      actor: 'agent:claude.ai', clientId: 'mcp', opId: 'op-x', deltas: [{ type: 'note:update', noteId: 'n1', before: { x: 10 }, after: { x: 40 } }],
+    });
+    await until(() => b.board.notes.get('n1')?.x === 40);
+    // a の途中の動きが続いていれば、また当てる。止まれば、確定した 40 に戻す
+    a.board.drag('n1', { x: 520 });
+    await until(() => b.board.notes.get('n1')?.x === 520);
+    await until(() => b.board.notes.get('n1')?.x === 40);
+  });
+
+  it('1 回に入りきらない数の付箋を動かしても、残りは次に送る', async () => {
+    const { a, b } = await setup();
+    const ids = Array.from({ length: 120 }, (_, i) => `m${i}`);
+    a.board.act(ids.map((id) => createNote(id)));
+    await synced(a);
+    await until(() => b.board.notes.size === 122);
+    for (const id of ids) a.board.drag(id, { x: 700 });
+    await until(() => ids.every((id) => b.board.notes.get(id)?.x === 700));
+  });
+
+  it('手元で動かしている付箋には、ほかの人の途中の動きを当てない', async () => {
+    const { a, b } = await setup();
+    b.board.drag('n1', { x: 77 });
+    a.board.drag('n1', { x: 500 });
+    a.board.drag('n2', { x: 600 });
+    await until(() => b.board.notes.get('n2')?.x === 600);
+    expect(b.board.notes.get('n1')?.x).toBe(77);
+  });
+
+  it('中身に合わせて決まる大きさ（autoSize）は送らない。参照モードの移動は送らない', async () => {
+    const { a, b } = await setup();
+    a.board.drag('n2', { x: 90, width: 999, height: 999 });
+    await until(() => b.board.notes.get('n2')?.x === 90);
+    expect(b.board.notes.get('n2')).toMatchObject({ width: 200, height: 150 });
+
+    a.board.viewOnly = true;
+    a.board.drag('n1', { x: 444 });
+    a.board.drag('n2', { x: 95 });
+    a.board.viewOnly = false;
+    a.board.drag('n2', { x: 96 });
+    await until(() => b.board.notes.get('n2')?.x === 96);
+    expect(b.board.notes.get('n1')?.x).toBe(10);
+  });
+
+  it('操作の確定と同じ処理の中の変更（整列、取り消しなど）は、途中の動きとして送らない', async () => {
+    const { a, b } = await setup();
+    const sent: string[] = [];
+    const socket = (a.sync as unknown as { socket: SyncSocket }).socket;
+    const send = socket.send.bind(socket);
+    socket.send = (data) => {
+      sent.push(data);
+      send(data);
+    };
+    a.board.drag('n1', { x: 30 });
+    a.board.act([{ type: 'note:update', noteId: 'n1', before: { x: 10 }, after: { x: 30 } }]);
+    await synced(a);
+    await until(() => b.board.notes.get('n1')?.x === 30);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(sent.filter((s) => s.includes('"preview"'))).toEqual([]);
+  });
+
+  it('サーバーは、送り主以外へ中継し、送り主の clientId を付ける。不正な内容とロック中のページは捨てる', async () => {
+    const slug = `preview-${++pageCount}`;
+    // ロックできるのは、あるページだけ
+    expect(await env.PAGE.getByName(slug).createPage(slug)).toEqual({ ok: true });
+    const a = await join(slug, 'pa');
+    const b = await join(slug, 'pb');
+    a.send({ type: 'preview', notes: [{ id: 'n1', x: 5, text: 'x' }] });
+    expect(await b.next()).toEqual({ type: 'preview', clientId: 'pa', notes: [{ id: 'n1', x: 5 }] });
+
+    for (const notes of [[], [{ id: 'n1', x: 'a' }], [{ id: 'n1', x: null }], [{ x: 1 }], 'n1']) a.send({ type: 'preview', notes });
+    a.send({ type: 'preview', notes: Array.from({ length: 101 }, (_, i) => ({ id: `n${i}`, x: 1 })) });
+    const locked = await api(`/api/pages/${slug}/lock`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ locked: true }),
+    });
+    expect(locked.status).toBe(200);
+    await locked.arrayBuffer();
+    a.send({ type: 'preview', notes: [{ id: 'n1', x: 6 }] });
+    await b.expectSilent();
+    await a.expectSilent();
+    a.close();
+    b.close();
+  });
+
+  it('1 つの接続から中継する数に、1 秒あたりの上限がある', async () => {
+    const slug = `preview-${++pageCount}`;
+    const a = await join(slug, 'pa');
+    const b = await join(slug, 'pb');
+    for (let i = 0; i < 50; i++) a.send({ type: 'preview', notes: [{ id: 'n1', x: i }] });
+    for (let i = 0; i < 30; i++) expect(await b.next()).toMatchObject({ type: 'preview', notes: [{ x: i }] });
+    await b.expectSilent();
+    a.close();
+    b.close();
   });
 });
