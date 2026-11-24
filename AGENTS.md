@@ -293,6 +293,16 @@ CREATE TABLE trashed (
   trashed_at INTEGER NOT NULL
 );
 
+-- 付箋へのリアクション（「付箋へのリアクション」の節）。ops には積まない
+CREATE TABLE reactions (
+  note_id    TEXT NOT NULL,
+  kind       TEXT NOT NULL,              -- src/shared/note-info.ts の REACTION_KINDS（今は 'like' だけ）
+  actor      TEXT NOT NULL,
+  delegate   TEXT NOT NULL DEFAULT '',   -- agent の委任者。なければ空文字（主キーに NULL を入れない）
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (note_id, kind, actor, delegate)
+);
+
 -- ゴミ箱のページだけが使う。ゴミ箱の付箋が、元はどのページのどの付箋だったか
 CREATE TABLE trash_origins (
   note_id     TEXT PRIMARY KEY,    -- ゴミ箱での id
@@ -391,6 +401,7 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | `POST /api/trash/restore` | ゴミ箱の付箋を、元のページへ戻す（本文は `{ "clientId", "opId", "noteIds" }`）。元の id と位置で置き、作成者は引き継ぐ。元のページごとの結果（`{ "pages": [{ "page", "noteIds", "error"? }] }`）を返す。元のページの記録がない付箋は、`page` が null の結果にまとめ、残りは戻す。戻せなかったものがあれば 409、どの付箋にも記録がなければ 404 |
 | `POST /api/pages/<slug>/transfer` | このページの付箋を、他のページ（`to`）へ移す（写す）（本文は `{ "clientId", "opId", "to", "noteIds", "positions"?, "copy"? }`）。付箋の中身と、送る付箋どうしの接続線は、サーバーが元のページから読む。移すときは作成者を引き継ぎ、このページから消す。写すときは、作成者は写した人になる。`positions`（付箋の id から `{ x, y }`）は、このページでの位置の代わりに使う。送り先では、互いの位置関係を保って、今ある付箋の下に置く。同じ `opId` で送り直しても二重には置かない。置いた後の送り先の概要（`page`。`POST /api/pages-info` と同じ形で、索引への反映を待たない）を返す。ページか付箋がなければ 404、送り先に置けたのに元のページから消せなかった付箋があれば 409（移動の途中に元のページで変わった付箋は、消さずに残す） |
 | `POST /api/pages/<slug>/notes` | 他のページから移す（写す）付箋を置く（本文は `{ "clientId", "opId", "from", "notes", "edges" }`。`from` は付箋が元あったページのスラッグ）。付箋の中身を送る側が渡すので、作成者は送った人になる。**今の画面は使わない。** 更新の前に開いた画面のタブのために残している。ページがなければ 404（作らない） |
+| `PUT /api/pages/<slug>/notes/<id>/reactions/<kind>` | 付箋にリアクションを付ける（`DELETE` で外す）。同じ人は付箋 1 枚につき種類ごとに 1 つで、付け直しと外し直しは何もしない。付箋の今のリアクション（`{ "reactions": [...] }`）を返す。ページか付箋がなければ 404、知らない種類は 400 |
 | `POST /api/images` | 画像のアップロード（本文は画像のバイト列、`Content-Type` は png / jpeg / gif / webp / avif）。`{ "url": "/img/<key>" }` を返す。10MB まで |
 | `GET /img/<key>` | 画像の取得（R2） |
 | `GET /api/pages/<slug>/ops?agent=1&limit=` | 最近の操作（新しい順）。`agent=1` で agent の操作に絞る |
@@ -530,6 +541,7 @@ type ServerMsg =
       reverts?: number;           // 取り消しなら、取り消した対象の seq（「取り消し」の節を参照）
       fixups?: HistoryDelta[] }   // fixups は送信元にだけ付ける（後述）
   | { type: 'reject'; opId: string; reason: string; fixups?: HistoryDelta[] }   // fixups はサーバーの現在値に合わせるデルタ
+  | { type: 'reactions'; reactions: Record<NoteId, Reaction[]>; replace?: true }  // リアクションが変わった。replace は全体（再接続の差分の後に送る）
   | { type: 'preview'; clientId: string; noteId: string; x?: number; y?: number; width?: number; height?: number }
   | { type: 'presence'; clientId: string; selection: string[]; editing?: string };
 ```
@@ -619,6 +631,7 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 | `create_page` | 付箋のないページを作る。`parent` を指定すると、そのページに子ページの付箋を置く（置く先がなければ、ページを作らずに断る） |
 | `move_page` | 既存のページを、別のページの子へ移す（`parent: null` でルートへ戻す）。今の親ページの子ページの付箋を消してから、移す先に置く |
 | `revert_operation` | agent 自身の直前の操作を取り消す（後述の取り消し機能を使う） |
+| `add_reaction` / `remove_reaction` | 付箋に自分のリアクション（いいね）を付ける・外す。agent は、主体と委任者の組ごとに 1 つ。ops に積まないので、`revert_operation` では取り消せない。`read_board` の付箋には、種類ごとの数（`reactions`）が付く |
 
 - `add_notes` / `update_notes` のテキストはプレーンテキスト。改行は `<br>` にし、`- ` の箇条書きと `- [ ]` / `- [x]` のチェックリストだけを HTML に変換する。それ以外はエスケープするので、LLM は HTML を書けない。変換後も必ずサーバーのサニタイズを通す
 - ページへのリンクは `[[スラッグ]]` と書ける（`src/shared/note-text.ts`）。`read_board` の本文にも、ページへのリンクは同じ書式で出る（`src/worker/plain-text.ts`。リンクの文字がスラッグと違えば、文字の後ろに付く）
@@ -665,8 +678,18 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
   - agent の付箋は、委任者が分かれば「claude.ai（a さんの代理）」の形で出す（`note-authors.ts` の `authorLabel`）。委任者は、付加情報の `delegate`（スナップショットの `info`、配信の `ops` の `delegate`）で届ける
   - AI のアイコンは、主体の名前（OAuth のリダイレクト先のホスト名）から選ぶ（`note-authors.ts` の `agentIcon`）。`claude` で始まれば Claude、`chatgpt` か `openai` で始まれば OpenAI、それ以外（`localhost` を含む）は共通のアイコン。絵柄は `src/web/icons.ts` にあり、Claude と OpenAI のものは Simple Icons（CC0）から写した。クライアントを足すときは、この 2 か所に足す
   - 出るのはページの画面だけ。使い方の画面と一覧の画面には、作成者がいないので出さない
-- **この領域と経路は、付箋への反応（「いいね」など）にも使う前提で作ってある。** 項目を足すときは、`NoteInfo` に足して同じ経路で届け、`NoteAuthors` の `render` に要素を足す。履歴（`ops`）に積まない値は、`ops` とは別のメッセージで届ける
+- **この領域と経路は、付箋への反応（「いいね」など）にも使う前提で作ってある。** 項目を足すときは、`NoteInfo` に足して同じ経路で届け、`NoteAuthors` の `render` に要素を足す。履歴（`ops`）に積まない値は、`ops` とは別のメッセージで届ける（リアクションの `reactions`。下の節）
 - 付箋を消して Undo で戻すと、書き込み者は戻した人になる（サーバーは、付箋の作成のたびに、その操作の主体を作成者として書く）。AI の付箋を人が消して戻すと、AI のアイコンが出なくなる
+
+### 付箋へのリアクション
+
+設計は `docs/plan.md` のフェーズ 7 の「付箋へのリアクション」（[#105](https://github.com/kan/wema-kake/issues/105)）。種類と型は `src/shared/note-info.ts`（`REACTION_KINDS`、`Reaction`）。
+
+- 付箋に 1 回押すだけで付けられ、もう一度押すと外れる。同じ人（主体と委任者の組）は、付箋 1 枚につき種類ごとに 1 つ。種類は、まず「いいね」（`like`）だけ
+- **リアクションは付箋の変更ではない。** ページの DO の `reactions` 表に持ち、ops に積まない（取り消しの対象にしない）。付けても外しても、付箋の書き込み者と更新日時は変わらず、`seq` も進まない。DO の `react` が書き込み口で、画面は `PUT` / `DELETE /api/pages/<slug>/notes/<id>/reactions/<kind>`、MCP は `add_reaction` / `remove_reaction` から呼ぶ
+- 届け方: スナップショットの `info` の `reactions`。変わったら、`reactions` のメッセージで、その付箋の今の全体を配信する。再接続して差分で追いつくときは、差分の ops の後に、ページ全体の今の値（`replace: true`）を送る（ops に積まないので、差分に出ない）。画面は `BoardSync` の `onReactions` で付加情報に入れ、`onNoteInfo` で描き直す。`applyOpToInfos` は、付箋の更新でリアクションを消さない
+- 付箋を消すと、リアクションも消す（`applyDeltas` の `note:delete`）。Undo や取り消しで付箋が戻っても、戻らない。他のページへの移動とゴミ箱への移動でも、引き継がない（新しい id になる）
+- 画面: 付箋の下（`renderNoteAccessory`）の、作成者と日時の右に、いいねのボタンを出す（`note-authors.ts` の `reactionButton`）。数と、自分が付けたかを出し、付けた人の名前はボタンの説明に並べる。付いていれば、ホバーしていなくても出す。縦に積んでいる間は、ほかの表示と同じく、選んだときだけ出す。参照モードでも押せる（付箋の変更ではない）。ゴミ箱には出さない
 
 ### 取り消し（revert）
 

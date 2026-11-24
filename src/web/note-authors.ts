@@ -6,7 +6,7 @@
 //
 // この領域には、付箋への反応など、ほかの要素も並べられる。足すときは `render` に足す。
 import type { WemaBoard, WemaNote } from '@kanf/wema';
-import { isAgentActor, type NoteInfo } from '../shared/note-info';
+import { isAgentActor, type NoteInfo, type Reaction, type ReactionKind, sameReactor } from '../shared/note-info';
 import { el, formatDate } from './dom';
 import { type IconName, icon } from './icons';
 import { t } from './i18n';
@@ -37,9 +37,22 @@ function agentIcon(name: string): IconName {
   return 'agent';
 }
 
+/** リアクションを付けた人の名前（ボタンの説明に並べる） */
+const reactorLabel = (r: Reaction) => authorLabel(r.actor, r.delegate);
+
+export interface ReactionHooks {
+  /** ログインしている人の主体（'user:<email>'）。分かるまでは null で、ボタンは押せない */
+  me(): string | null;
+  /** リアクションを付ける（`on` が false なら外す）。押せないとき（同期の前など）は、渡さない */
+  react?(noteId: string, kind: ReactionKind, on: boolean): void;
+}
+
 export class NoteAuthors {
   private board: WemaBoard | undefined;
   private lookup: (noteId: string) => NoteInfo | undefined = () => undefined;
+
+  /** @param reactions リアクションのボタン。渡さなければ出さない */
+  constructor(private readonly reactions?: ReactionHooks) {}
 
   /**
    * wema の `renderNoteAccessory` に渡す。`container` は横並びの入れ物で、ポインタを受けるのは
@@ -68,8 +81,36 @@ export class NoteAuthors {
       badge.title = badge.ariaLabel = t('author.agentTitle', name);
       container.append(badge);
     }
+    if (this.reactions) container.append(this.reactionButton(note.id, info.reactions ?? []));
     return true;
   };
+
+  /**
+   * いいねのボタン。数と、自分が付けたかを出し、押すと付ける・外す。付いていれば、ホバーしていなくても出す
+   * （style.css）。付けた人の名前は、ボタンの説明に並べる
+   */
+  private reactionButton(noteId: string, all: Reaction[]): HTMLButtonElement {
+    const kind: ReactionKind = 'like';
+    const likes = all.filter((r) => r.kind === kind);
+    const me = this.reactions?.me() ?? null;
+    const mine = me !== null && likes.some((r) => sameReactor(r, me));
+    const button = el('button', {
+      type: 'button',
+      className: `note-reaction${likes.length > 0 ? ' has-reactions' : ''}${mine ? ' mine' : ''}`,
+      title: likes.length > 0 ? t('reaction.by', likes.map(reactorLabel).join(', ')) : t('reaction.like'),
+      disabled: me === null || !this.reactions?.react,
+    });
+    button.ariaPressed = String(mine);
+    button.append(icon('like'));
+    if (likes.length > 0) button.append(el('span', { textContent: String(likes.length) }));
+    button.addEventListener('click', (e) => {
+      // 付箋の選択やドラッグにしない
+      e.stopPropagation();
+      this.reactions?.react?.(noteId, kind, !mine);
+    });
+    button.addEventListener('pointerdown', (e) => e.stopPropagation());
+    return button;
+  }
 
   /** @param lookup 付箋の付加情報を返す。サーバーからまだ届いていなければ undefined */
   attach(board: WemaBoard, lookup: (noteId: string) => NoteInfo | undefined): void {

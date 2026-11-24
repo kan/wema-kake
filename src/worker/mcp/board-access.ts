@@ -1,6 +1,7 @@
 // ツール（src/shared/tools.ts）が使う BoardAccess の、サーバー版。ページの DO と D1 を呼ぶ。
 import type { OpSummary, RevertOutcome } from '../../shared/api';
 import type { HistoryDelta } from '../../shared/delta';
+import type { Reaction, ReactionKind } from '../../shared/note-info';
 import { type ApplyOutcome, type BoardAccess, type BoardState, ToolError } from '../../shared/tools';
 import type { WemaKakeEnv } from '../config';
 import { listPages, searchPages } from '../page-queries';
@@ -102,6 +103,12 @@ export class ServerBoardAccess implements BoardAccess {
     if (!result.ok) throw new ToolError(result.reason);
     const { ok: _, ...moved } = result;
     return moved;
+  }
+
+  async react(slug: string, noteId: string, kind: ReactionKind, on: boolean): Promise<Reaction[]> {
+    const result = await this.page(slug).react({ actor: this.actor, delegate: this.delegate, noteId, kind, on });
+    if (!result.ok) throw new ToolError(result.reason);
+    return result.reactions;
   }
 
   async ownOps(slug: string): Promise<OpSummary[]> {

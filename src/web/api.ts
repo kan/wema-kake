@@ -1,4 +1,5 @@
 // サーバーの HTTP API の呼び出し。形は AGENTS.md の「HTTP API」を参照。
+import type { Reaction, ReactionKind } from '../shared/note-info';
 import type {
   IndexLink,
   IndexPage,
@@ -96,6 +97,13 @@ export const setColor = (slug: string, color: string | null) =>
 /** ページのロック（編集の禁止）の設定と解除。管理者だけが呼べる */
 export const setLocked = (slug: string, locked: boolean) =>
   request<{ locked: boolean }>('PUT', `/api/pages/${slug}/lock`, { locked });
+
+/** 付箋のリアクションを付ける（`on` が false なら外す）。付箋の今のリアクションを返す */
+export const react = (slug: string, noteId: string, kind: ReactionKind, on: boolean) =>
+  request<{ reactions: Reaction[] }>(
+    on ? 'PUT' : 'DELETE',
+    `/api/pages/${slug}/notes/${encodeURIComponent(noteId)}/reactions/${kind}`,
+  );
 
 /** ログインしている人と、管理者かどうか */
 export const getSession = () => request<{ actor: string; admin?: boolean }>('GET', '/api/session');

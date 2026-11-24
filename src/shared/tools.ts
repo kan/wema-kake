@@ -8,6 +8,7 @@ import { z } from 'zod';
 import { MAX_LIST_LIMIT, MAX_QUERY_LENGTH, MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome } from './api';
 import type { HistoryDelta, WemaEdge, WemaNote } from './delta';
 import { CHILD_NOTE_SIZE, CHILD_PAGE_KEY, childPageOf, MAX_DEPTH } from './hierarchy';
+import { REACTION_KINDS, type Reaction, type ReactionKind } from './note-info';
 import { textToHtml } from './note-text';
 import { SLUG_RE } from './slug';
 
@@ -23,7 +24,7 @@ export interface PageInfo {
   parent: string | null;
 }
 
-type AuthoredNote = WemaNote & { createdBy: string | null };
+type AuthoredNote = WemaNote & { createdBy: string | null; reactions?: Reaction[] };
 
 export interface BoardState {
   title: string | null;
@@ -72,6 +73,11 @@ export interface BoardAccess {
   ownOps(page: string): Promise<OpSummary[]>;
   /** 自分の操作を取り消す */
   revert(page: string, seq: number, summary: string): Promise<RevertOutcome>;
+  /**
+   * 付箋に、自分（この agent）のリアクションを付ける（`on` が false なら外す）。付箋の今のリアクションを返す。
+   * 付けられなければ（ページや付箋がない）ToolError を投げる
+   */
+  react(page: string, noteId: string, kind: ReactionKind, on: boolean): Promise<Reaction[]>;
 }
 
 const NOTE_WIDTH = 200;
@@ -168,6 +174,14 @@ function assertUnique(ids: string[]): void {
     if (seen.has(id)) throw new ToolError(`duplicate id: ${id}`);
     seen.add(id);
   }
+}
+
+/** 種類ごとのリアクションの数。なければ undefined（read_board の結果に、キーごと出さない） */
+function reactionCounts(reactions: Reaction[]): Partial<Record<ReactionKind, number>> | undefined {
+  if (reactions.length === 0) return undefined;
+  const counts: Partial<Record<ReactionKind, number>> = {};
+  for (const r of reactions) counts[r.kind] = (counts[r.kind] ?? 0) + 1;
+  return counts;
 }
 
 const summaryOf = (tool: string, why: string | undefined) => (why ? `${tool}: ${why}` : tool);
@@ -286,7 +300,7 @@ export const TOOLS: Tool[] = [
   tool({
     name: 'read_board',
     description:
-      '1 ページの付箋（id、本文、座標、大きさ、色、作成者）と接続線（id、from、to、label）を返す。座標は左上が原点で、単位はピクセル。child_page のある付箋は、子ページを表す付箋で、値は子ページの名前（中身は、その名前で read_board を呼ぶと読める）。locked が true のページは、管理者がロックしていて、読めるが書き換えられない。',
+      '1 ページの付箋（id、本文、座標、大きさ、色、作成者）と接続線（id、from、to、label）を返す。座標は左上が原点で、単位はピクセル。child_page のある付箋は、子ページを表す付箋で、値は子ページの名前（中身は、その名前で read_board を呼ぶと読める）。reactions は、付箋に付いたリアクション（いいね）の種類ごとの数（付いている付箋だけ）。locked が true のページは、管理者がロックしていて、読めるが書き換えられない。',
     readOnly: true,
     input: z.object({ page }),
     async run(access, input) {
@@ -305,6 +319,8 @@ export const TOOLS: Tool[] = [
             height: n.height,
             color: n.color,
             created_by: n.createdBy,
+            // リアクションのある付箋だけに付ける（種類ごとの数）
+            reactions: reactionCounts(n.reactions ?? []),
             // 子ページの付箋だけに付ける
             child_page: childPageOf(n),
           })),
@@ -524,6 +540,45 @@ export const TOOLS: Tool[] = [
       });
       const seq = await applyOrThrow(access, input.page, deltas, summaryOf('disconnect_notes', input.reason));
       return { operation: seq };
+    },
+  }),
+
+  tool({
+    name: 'add_reaction',
+    description:
+      '付箋に、軽いリアクション（いいね）を付ける。付箋の本文や書き込み者は変わらない。共感や「見た」を伝えるだけなら、付箋を足して接続線でつなぐより、これを使う。付けた人ごとに 1 つで、すでに付けていれば何もしない。操作の履歴には残らず、revert_operation では取り消せない（remove_reaction で外す）。',
+    readOnly: false,
+    // 自分のリアクションを足すだけ
+    destructive: false,
+    // 2 回目は、もう付けてあるので何も変わらない
+    idempotent: true,
+    input: z.object({
+      page,
+      note_id: z.string(),
+      kind: z.enum(REACTION_KINDS).optional().describe('リアクションの種類。省略すると like（いいね）'),
+    }),
+    async run(access, input) {
+      const reactions = await access.react(input.page, input.note_id, input.kind ?? 'like', true);
+      return { note_id: input.note_id, reactions: reactionCounts(reactions) ?? {} };
+    },
+  }),
+
+  tool({
+    name: 'remove_reaction',
+    description: '自分が付箋に付けたリアクションを外す。付けていなければ何もしない。他の人のリアクションは外せない。',
+    readOnly: false,
+    // 自分が付けたリアクションを消す
+    destructive: true,
+    // 2 回目は、もう外してあるので何も変わらない
+    idempotent: true,
+    input: z.object({
+      page,
+      note_id: z.string(),
+      kind: z.enum(REACTION_KINDS).optional().describe('リアクションの種類。省略すると like（いいね）'),
+    }),
+    async run(access, input) {
+      const reactions = await access.react(input.page, input.note_id, input.kind ?? 'like', false);
+      return { note_id: input.note_id, reactions: reactionCounts(reactions) ?? {} };
     },
   }),
 
