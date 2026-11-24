@@ -17,6 +17,7 @@
 - 利用者ごとに、表示名とアイコンを設定できるようにした。ヘッダーの自分のアイコンから開く画面で設定する。付箋の作成者、いいねを付けた人、操作の履歴、AI の委任者（「claude.ai（a さんの代理）」）に表示名が出る。設定していなければ、これまでどおり email の `@` より前を出し、アイコンは名前の頭文字を色の付いた円で出す。email は名前の説明（ツールチップ）に残る。表示名は 32 文字まで、アイコンの画像はブラウザで 128px の正方形の WebP（書き出せないブラウザでは JPEG）に縮めてから上げる（64KB まで）。MCP の `read_board` の付箋に、作成者の表示名（`created_by_name`）を載せた。D1 に `profiles` の表を足したので、`npm run deploy` で更新する（[#121](https://github.com/kan/wema-kake/issues/121)）
 - 付箋の下の作成者の表示に、その人のアイコンを出すようにした。AI の付箋は、委任者のアイコンを出す。いいねのボタンには、付けた人のアイコンを 3 個まで重ねて並べ、残りは「+n」で出す（[#122](https://github.com/kan/wema-kake/issues/122)）
 - 付箋をドラッグしている途中や、大きさを変えている途中の動きを、同じページを開いているほかの人の画面でも出すようにした。これまでは、離した時点で一度に移っていた。途中の動きは保存せず、操作の履歴にも残らない（[#123](https://github.com/kan/wema-kake/issues/123)）
+- 同じページを開いているほかの人のアイコンを、ヘッダーへ出すようにした。その人が選んでいる付箋を、その人の色の枠で囲み、本文を編集していれば「a が編集中」と出す。同じ付箋を同時に書き換えて、片方の変更が断られることを減らすため（[#124](https://github.com/kan/wema-kake/issues/124)）
 - 雛形の README の「Access の設定」に、Muse のコールバック URL（`https://agent.meta.ai/api/hatch/oauth/callback`）を足した。Allowed redirect URIs に入れないと、Muse でコネクタを登録する途中で Access が `redirect_uri is not allowed by the account configuration` を返して断る。「MCP で書き込めるクライアントを限る」で並べる名前は `agent.meta.ai`
 
 ### 変更

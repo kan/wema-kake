@@ -3,7 +3,7 @@
 import { env, runInDurableObject } from 'cloudflare:test';
 import { afterEach, describe, expect, it } from 'vitest';
 import type { BoardData, HistoryDelta, WemaEdge, WemaNote } from '../src/shared/delta';
-import type { PreviewValues } from '../src/shared/protocol';
+import type { PeerPresence, PreviewValues } from '../src/shared/protocol';
 import {
   BoardSync,
   type NoteUpdateHandler,
@@ -127,6 +127,8 @@ interface Client {
   rejects: string[];
   /** 付加情報が変わったと通知された付箋の id */
   infoChanges: string[];
+  /** 最後に通知された、ほかの接続の presence */
+  peers: ReadonlyMap<string, PeerPresence>;
   authExpired: boolean;
   /** 現在の接続をサーバー側から切る */
   drop(): Promise<void>;
@@ -153,6 +155,7 @@ function newClient(slug: string, connect?: () => Promise<SyncSocket>, previewTim
     titles: [],
     rejects: [],
     infoChanges: [],
+    peers: new Map(),
     authExpired: false,
     drop: () =>
       runInDurableObject(env.PAGE.getByName(slug), (_do, state) => {
@@ -168,6 +171,7 @@ function newClient(slug: string, connect?: () => Promise<SyncSocket>, previewTim
     onReject: (reason) => client.rejects.push(reason),
     onNoteInfo: (ids) => client.infoChanges.push(...ids),
     onAuthExpired: () => void (client.authExpired = true),
+    onPeers: (peers) => void (client.peers = peers),
   };
   client.sync = new BoardSync(board, connect ?? (() => connectSocket(slug)), hooks, { previewTimeoutMs });
   client.sync.start();
@@ -700,5 +704,51 @@ describe('preview', () => {
     await b.expectSilent();
     a.close();
     b.close();
+  });
+});
+
+// 同じページを開いている人と、その選択と編集（issue #124）
+describe('presence', () => {
+  it('ほかの接続と、その選択と編集が届く。切れたら消える', async () => {
+    const slug = `presence-sync-${++pageCount}`;
+    const a = newClient(slug);
+    const b = newClient(slug);
+    await Promise.all([synced(a), synced(b)]);
+    await until(() => a.peers.has(b.sync.clientId) && b.peers.has(a.sync.clientId));
+    expect(a.peers.has(a.sync.clientId)).toBe(false);
+
+    a.sync.setPresence(['n1', 'n2'], 'n2');
+    await until(() => b.peers.get(a.sync.clientId)?.editing === 'n2');
+    expect(b.peers.get(a.sync.clientId)).toMatchObject({ actor: 'user:dev@example.com', selection: ['n1', 'n2'] });
+
+    a.sync.stop();
+    await until(() => b.peers.size === 0);
+  });
+
+  it('つなぎ直したら、選択を送り直す', async () => {
+    const slug = `presence-sync-${++pageCount}`;
+    const a = newClient(slug);
+    const b = newClient(slug);
+    await Promise.all([synced(a), synced(b)]);
+    a.sync.setPresence(['n1']);
+    await until(() => b.peers.get(a.sync.clientId)?.selection.length === 1);
+    await a.drop();
+    await until(() => !b.peers.has(a.sync.clientId));
+    await until(() => b.peers.get(a.sync.clientId)?.selection[0] === 'n1', 5000);
+  });
+
+  it('動かしている人の接続が切れたら、途中の動きをすぐ戻す', async () => {
+    const slug = `presence-sync-${++pageCount}`;
+    const a = newClient(slug);
+    const b = newClient(slug);
+    await Promise.all([synced(a), synced(b)]);
+    a.board.act([createNote('n1')]);
+    await synced(a);
+    await until(() => b.board.notes.has('n1'));
+    a.board.drag('n1', { x: 500 });
+    await until(() => b.board.notes.get('n1')?.x === 500);
+    // 期限（10 秒）を待たずに戻る
+    a.sync.stop();
+    await until(() => b.board.notes.get('n1')?.x === 10, 2000);
   });
 });

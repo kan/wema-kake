@@ -8,10 +8,14 @@ import {
   CLOSE_NOT_APPROVED,
   CLOSE_PAGE_DELETED,
   type ClientMsg,
+  MAX_PRESENCE_SELECTION,
   MAX_PREVIEW_NOTES,
   type OpsMsg,
+  type PeerPresence,
   PING,
   PONG,
+  type Presence,
+  PRESENCE_INTERVAL_MS,
   PREVIEW_INTERVAL_MS,
   PREVIEW_KEYS,
   type PreviewKey,
@@ -142,6 +146,11 @@ export interface SyncHooks {
    * スナップショットで全体が入れ替わったときは呼ばない（ボードが、すべての付箋を描き直す）
    */
   onNoteInfo?(noteIds: Set<string>): void;
+  /**
+   * 同じページにつながっているほかの接続（自分の別のタブを含む）と、その選択と編集が変わった
+   * （issue #124）。切断したときは、空で呼ぶ
+   */
+  onPeers?(peers: ReadonlyMap<string, PeerPresence>): void;
 }
 
 const PING_INTERVAL_MS = 30_000;
@@ -205,6 +214,11 @@ export class BoardSync {
   private previews = new Map<string, ShownPreview>();
   /** 当てている途中の動きのうち、期限を過ぎたものを戻すタイマー（当てている間だけ 1 本動かす） */
   private sweepTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 自分の presence（選んでいる付箋と、編集している付箋） */
+  private presence: Presence = { selection: [] };
+  private presenceTimer: ReturnType<typeof setTimeout> | undefined;
+  /** ほかの接続の presence（clientId ごと） */
+  private peers = new Map<string, PeerPresence>();
 
   /** @param options.previewTimeoutMs `PREVIEW_TIMEOUT_MS` の代わり（テストで短くする） */
   constructor(
@@ -230,7 +244,46 @@ export class BoardSync {
     this.stopRetry?.();
     this.cancelOutgoing();
     this.clearPreviews();
+    if (this.presenceTimer !== undefined) clearTimeout(this.presenceTimer);
     this.socket?.close();
+  }
+
+  // --- 選んでいる付箋と、編集している付箋（issue #124） ---
+
+  /**
+   * 自分の選択と編集を、ほかの接続へ知らせる。`PRESENCE_INTERVAL_MS` ごとに、最後の値をまとめて送る。
+   * 切断中は送らず、つなぎ直したときに送る
+   */
+  setPresence(selection: string[], editing?: string): void {
+    const next = { selection: selection.slice(0, MAX_PRESENCE_SELECTION), editing };
+    // 同じ選択で note:select が出ることがある。変わっていなければ送らない
+    if (next.editing === this.presence.editing && next.selection.join('\n') === this.presence.selection.join('\n')) return;
+    // editing が undefined なら、送るときに JSON から消える
+    this.presence = next;
+    this.presenceTimer ??= setTimeout(() => {
+      this.presenceTimer = undefined;
+      this.send({ type: 'presence', ...this.presence });
+    }, PRESENCE_INTERVAL_MS);
+  }
+
+  private setPeers(peers: Map<string, PeerPresence>): void {
+    if (this.peers.size === 0 && peers.size === 0) return;
+    this.peers = peers;
+    this.hooks.onPeers?.(peers);
+  }
+
+  private onPeer(peer: PeerPresence): void {
+    if (peer.clientId === this.clientId) return;
+    this.setPeers(new Map(this.peers).set(peer.clientId, peer));
+  }
+
+  /** ほかの接続が切れた。その接続の途中の動きは、確定の ops が来ないので、すぐ戻す */
+  private onLeave(clientId: string): void {
+    for (const [noteId, shown] of [...this.previews]) if (shown.clientId === clientId) this.endPreview(noteId);
+    if (!this.peers.has(clientId)) return;
+    const peers = new Map(this.peers);
+    peers.delete(clientId);
+    this.setPeers(peers);
   }
 
   /** 未確定の操作の数 */
@@ -283,6 +336,8 @@ export class BoardSync {
     this.send({ type: 'hello', clientId: this.clientId, lastSeq: this.lastSeq, epoch: this.epoch });
     // 確定を受け取っていない操作を送り直す。適用済みなら、サーバーは記録済みの結果を返す
     for (const { opId, deltas } of this.pending) this.send({ type: 'ops', opId, deltas });
+    // 新しい接続の presence は空から始まるので、送り直す
+    this.send({ type: 'presence', ...this.presence });
 
     const timer = setInterval(() => this.socket?.send(PING), PING_INTERVAL_MS);
     this.stopPing = () => clearInterval(timer);
@@ -292,7 +347,10 @@ export class BoardSync {
     if (this.socket !== socket) return;
     this.socket = undefined;
     this.stopPing?.();
+    // 止めた後は、フックを呼ばない（画面とボードは、もう片付いている）
     if (this.stopped) return;
+    // つなぎ直すと、サーバーがそのときの全員の分を送り直す
+    this.setPeers(new Map());
     // 承認の取り消しも、読み込み直して、サーバーに状態を確かめ直してもらう（承認待ちの表示になる）
     if (code === CLOSE_AUTH_EXPIRED || code === CLOSE_NOT_APPROVED) {
       this.authExpired();
@@ -372,6 +430,14 @@ export class BoardSync {
         break;
       case 'preview':
         this.onPreview(msg.clientId, msg.notes);
+        break;
+      case 'presence': {
+        const { type: _, ...peer } = msg;
+        this.onPeer(peer);
+        break;
+      }
+      case 'leave':
+        this.onLeave(msg.clientId);
         break;
     }
   }

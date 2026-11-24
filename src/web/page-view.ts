@@ -1,5 +1,5 @@
 // ページの画面（/p/<slug>）。wema のボードと、見出し（表示名、バックリンク、操作の履歴、削除）。
-import { WemaBoard, type WemaNote } from '@kanf/wema';
+import { WemaBoard, type WemaNote, type WemaNoteDecoration } from '@kanf/wema';
 import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type SkipReason } from '../shared/api';
 import { CHILD_NOTE_SIZE, CHILD_PAGE_KEY, childPageOf } from '../shared/hierarchy';
 import { parseSystemSummary } from '../shared/op-summary';
@@ -31,6 +31,7 @@ import {
   viewSignal,
 } from './navigation';
 import { NoteAuthors } from './note-authors';
+import { PresenceView } from './presence';
 import { dropOntoChildPages } from './note-drop';
 import { stackOnNarrow } from './stacked-view';
 import { BoardSync, type SyncSocket, type SyncStatus, toSyncSocket } from './sync';
@@ -130,6 +131,14 @@ function summaryText(op: OpSummary): string {
   }
 }
 
+/** 付箋の飾りを重ねる。className はつなぎ、style は後のものを優先する */
+function mergeDecorations(...decorations: (WemaNoteDecoration | undefined)[]): WemaNoteDecoration | undefined {
+  const present = decorations.filter((d) => d !== undefined);
+  if (present.length <= 1) return present[0];
+  const className = present.flatMap((d) => (d.className ? [d.className] : [])).join(' ');
+  return { ...(className ? { className } : {}), style: Object.assign({}, ...present.map((d) => d.style)) };
+}
+
 /** WebSocket で接続し、接続が開いてから返す。開く前に閉じたら失敗にする */
 function connect(slug: string): Promise<SyncSocket> {
   return new Promise((resolve, reject) => {
@@ -185,8 +194,21 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       if (sessionSignal.aborted) return;
       me = session.actor;
       noteAuthors.refresh(board.getNotes().map((note) => note.id));
+      presence.setMe(session.actor);
     })
     .catch(() => undefined);
+  /** 古い付箋を薄く出す飾り。期限のないページ、ロック中、子ページの付箋では undefined */
+  const ageDecoration = (note: WemaNote): WemaNoteDecoration | undefined => {
+    // ロック中は、期限による削除が止まっているので、薄くしない
+    if (expireDays === null || locked || !isExpirable(note)) return undefined;
+    const updatedAt = sync.noteInfo(note.id)?.updatedAt;
+    if (updatedAt === undefined) return undefined;
+    const from = Math.max(updatedAt, expireSince ?? 0);
+    return { style: { '--note-age': noteAge(from, expireDays, Date.now()).toFixed(3) } };
+  };
+  // 同じページを開いているほかの人（issue #124）
+  const presence = new PresenceView((noteId) => board.refreshNoteDecoration(noteId));
+  onViewEnd(presence.attach());
   const board = new WemaBoard({
     container,
     readOnly: true,
@@ -215,14 +237,8 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     // 不透明度は CSS で決める（ホバー中と選択中は濃く戻す）。子ページの付箋は消さないので、薄くしない。
     // 移動では呼ばれないので、更新時刻が変わったら refreshNoteDecoration() で描き直す。
     // ボードは空で作るので、最初に呼ばれるのは同期（sync）ができた後
-    decorateNote(note) {
-      // ロック中は、期限による削除が止まっているので、薄くしない
-      if (expireDays === null || locked || !isExpirable(note)) return undefined;
-      const updatedAt = sync.noteInfo(note.id)?.updatedAt;
-      if (updatedAt === undefined) return undefined;
-      const from = Math.max(updatedAt, expireSince ?? 0);
-      return { style: { '--note-age': noteAge(from, expireDays, Date.now()).toFixed(3) } };
-    },
+    // ほかの人が選んでいる付箋の枠と「編集中」（issue #124）も、ここで付ける
+    decorateNote: (note) => mergeDecorations(ageDecoration(note), presence.decoration(note.id)),
     // 付箋を縦に積んでいる間は、接続線の代わりに、つながっている相手を付箋の下に出す（wema 0.15.0）。
     // 相手が子ページの付箋なら、本文（空）の代わりに、子ページの表示名を出す。表示名が後から
     // 分かったときは、ChildNotes がその付箋を refreshNote() で描き直し、wema が相手の印も描き直す
@@ -495,6 +511,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       popover(backlinksButton, backlinksPanel, { align: 'right' }).root,
       pageNavMenu(),
       ...(inTrash ? [] : [trashLink()]),
+      presence.root,
       usersLink(),
       profileLink(),
       menu.root,
@@ -569,6 +586,36 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
           : (childForm.rejectionMessage(reason) ?? t('sync.rejected', reason)),
       );
     },
+    onPeers: (peers) => presence.update(peers),
+  });
+
+  // 自分の選択と、本文を編集している付箋を、ほかの人へ知らせる（issue #124）。wema の本文は、編集
+  // できる間は常に contentEditable なので、本文にフォーカスがあれば、その付箋を編集している
+  let editing: string | undefined;
+  const sendPresence = () => sync.setPresence(board.getSelection(), editing);
+  const editedNote = (target: EventTarget | null) =>
+    target instanceof Element
+      ? target.closest('.wema-note-content')?.closest<HTMLElement>('.wema-note')?.dataset.noteId
+      : undefined;
+  board.on('note:select', sendPresence);
+  // 編集している付箋が消えても（ほかの人の削除、自分の削除）、focusout は出ない
+  board.on('note:delete', ({ note }) => {
+    if (note.id !== editing) return;
+    editing = undefined;
+    sendPresence();
+  });
+  container.addEventListener('focusin', (e) => {
+    const id = editedNote(e.target);
+    if (id !== undefined && id !== editing) {
+      editing = id;
+      sendPresence();
+    }
+  });
+  container.addEventListener('focusout', (e) => {
+    if (editing !== undefined && editedNote(e.target) === editing) {
+      editing = undefined;
+      sendPresence();
+    }
   });
   noteAuthors.attach(board, (noteId) => sync.noteInfo(noteId));
   sync.start();

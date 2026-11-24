@@ -541,7 +541,7 @@ type ClientMsg =
   | { type: 'hello'; clientId: string; lastSeq?: number; epoch?: string }   // epoch は前に受け取った値（あれば）
   | { type: 'ops'; opId: string; deltas: HistoryDelta[] }       // 原子的に適用
   | { type: 'preview'; notes: PreviewNote[] }                    // 保存しない（「ドラッグ・リサイズ中」の節）
-  | { type: 'presence'; selection: string[]; editing?: string };
+  | { type: 'presence'; selection: string[]; editing?: string }; // 保存しない（「開いている人」の節）
 
 // ドラッグや大きさの変更の途中の、付箋の位置と大きさ
 type PreviewNote = { id: string; x?: number; y?: number; width?: number; height?: number };
@@ -561,7 +561,8 @@ type ServerMsg =
   | { type: 'reject'; opId: string; reason: string; fixups?: HistoryDelta[] }   // fixups はサーバーの現在値に合わせるデルタ
   | { type: 'reactions'; reactions: Record<NoteId, Reaction[]>; replace?: true }  // リアクションが変わった。replace は全体（再接続の差分の後に送る）
   | { type: 'preview'; clientId: string; notes: PreviewNote[] }   // clientId は送り主の接続（サーバーが付ける）
-  | { type: 'presence'; clientId: string; selection: string[]; editing?: string };
+  | { type: 'presence'; clientId: string; actor: string; selection: string[]; editing?: string }  // actor はサーバーが付ける
+  | { type: 'leave'; clientId: string };                         // その接続が切れた
 ```
 
 ### 流れ
@@ -608,6 +609,20 @@ DO で書き込みは直列化されるので、基本はフィールド単位�
 - Undo 履歴はブラウザごとのローカルのもの。他人や agent の変更後に Undo しても、text なら同じ `before` チェックで `reject` されるだけなので特別扱いしない
 - `edge:update` の from/to は wema でも変更不可。サーバーでも無視する
 - `note:update` に zIndex が含まれていても保存しない
+
+### 開いている人
+
+同じページを開いている人と、その人が選んでいる付箋と編集している付箋を出す（[#124](https://github.com/kan/wema-kake/issues/124)。`src/web/presence.ts` の `PresenceView`）。
+
+- 送る側: 付箋の選択（`note:select`）と、本文の編集を `presence` で送る。wema の本文は、編集できる間は常に `contentEditable` なので、**本文（`.wema-note-content`）にフォーカスがあれば、その付箋を編集している**とみなす（`focusin` / `focusout`）。`PRESENCE_INTERVAL_MS`（100ms）ごとに最後の値をまとめて送る。つなぎ直したら送り直す
+- サーバー: 最後の `presence` を、接続ごとにメモリ（`PageDO.presences`）と Attachment に持つ。Attachment は Hibernation の後のためで、大きさの上限（2KB）に入らなければ選択を空にして残す。hello が承認の確かめを待っている間に届いた分も、メモリに持って hello の後に知らせる。送り主以外へ中継するときは、**接続の認証から決めた `actor` を付ける**（クライアントが名乗った値は使わない）。選ぶ付箋は `MAX_PRESENCE_SELECTION`（100）まで。不正な内容と、接続ごとに 1 秒 30 件を超えた分は捨てる
+  - hello を済ませた接続には、つながっているほかの全員の `presence` を送り、ほかの全員へ、その接続の（空の）`presence` を送る
+  - 接続が切れたら（`webSocketClose` / `webSocketError`）、ほかの全員へ `leave` を送る。同じ主体と `clientId` の別の接続（つなぎ直した接続）が残っていれば送らない
+- 受ける側: `BoardSync` が clientId ごとに持ち、`onPeers` で知らせる。`leave` を受けたら、その接続の途中の動き（`preview`）もすぐ戻す。自分が切断したら空にする（つなぎ直すと、サーバーが全員の分を送り直す）
+- 画面
+  - ヘッダーに、開いている人のアイコンを 5 個まで並べる（残りは「+n」）。同じ人の複数のタブは 1 つにまとめる。**自分（同じ主体）の別のタブは出さない**（ヘッダーには自分のアイコンがすでにある）。参照モードの人も出す
+  - ほかの人が選んでいる付箋に、その人の色（頭文字のアイコンと同じ色相、`hueOf`）の枠を付ける。編集していれば、付箋の左上の外に「a が編集中」を出す。wema の `decorateNote` で付け、古い付箋を薄くする飾りと合わせる。自分が選んでいる付箋は、wema の選択の枠を優先する
+  - agent（MCP）は WebSocket でつながらないので出ない
 
 ### 同期対象の方針
 

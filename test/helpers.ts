@@ -9,12 +9,14 @@ export interface Client {
   send(msg: unknown): void;
   /**
    * 次に届くメッセージ。届かなければ失敗する。meta（表示名と epoch の通知。ページができたときにも
-   * 届く）は読み飛ばす
+   * 届く）と、ほかの接続の presence と leave（つながった人の通知。issue #124）は読み飛ばす
    */
   next(): Promise<ServerMsg>;
   /** 次に届く meta。それより前のメッセージは読み飛ばす */
   nextMeta(): Promise<ServerMsg>;
-  /** しばらく待って、meta 以外が何も届いていないことを確かめる */
+  /** 次に届く presence か leave。それより前のメッセージは読み飛ばす */
+  nextPresence(): Promise<ServerMsg>;
+  /** しばらく待って、meta、presence、leave 以外が何も届いていないことを確かめる */
   expectSilent(): Promise<void>;
   close(): void;
   closed: Promise<{ code: number; reason: string }>;
@@ -22,6 +24,9 @@ export interface Client {
 
 /** Worker へリクエストを送る関数。既定は `api`（開発用の主体） */
 export type Fetcher = (path: string, init?: RequestInit) => Promise<Response>;
+
+/** `next()` が読み飛ばす、付箋の変更ではない通知 */
+const isNotice = (msg: ServerMsg) => msg.type === 'meta' || msg.type === 'presence' || msg.type === 'leave';
 
 /** WebSocket で接続する（hello はまだ送らない）。設定や主体を変えるなら、`fetcher` を渡す */
 export async function open(slug: string, headers: Record<string, string> = {}, fetcher: Fetcher = api): Promise<Client> {
@@ -62,11 +67,12 @@ export async function open(slug: string, headers: Record<string, string> = {}, f
     closed,
     send: (msg) => ws.send(typeof msg === 'string' ? msg : JSON.stringify(msg)),
     close: () => ws.close(),
-    next: () => take((msg) => msg.type !== 'meta'),
+    next: () => take((msg) => !isNotice(msg)),
     nextMeta: () => take((msg) => msg.type === 'meta'),
+    nextPresence: () => take((msg) => msg.type === 'presence' || msg.type === 'leave'),
     async expectSilent() {
       if (queue.length === 0) await wait(100);
-      expect(queue.filter((msg) => msg.type !== 'meta')).toEqual([]);
+      expect(queue.filter((msg) => !isNotice(msg))).toEqual([]);
     },
   };
 }

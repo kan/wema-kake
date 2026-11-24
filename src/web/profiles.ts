@@ -120,8 +120,11 @@ async function lookup(): Promise<void> {
 /** 自分の表示名かアイコンを変えたときに呼ぶ（引き直さずに、画面へ反映する） */
 export const updateOwnProfile = (actor: string, profile: Profile): void => store([[actor, profile]], Date.now() + PROFILE_TTL_MS);
 
-/** email から決める、頭文字のアイコンの色相（0〜359）。同じ人は、どの画面でも同じ色になる */
-function hueOf(actor: string): number {
+/**
+ * email から決める、頭文字のアイコンの色相（0〜359）。同じ人は、どの画面でも同じ色になる。
+ * ほかの人が選んでいる付箋の枠（presence.ts）も、この色にする
+ */
+export function hueOf(actor: string): number {
   let hash = 0;
   for (const ch of actor.toLowerCase()) hash = (hash * 31 + ch.codePointAt(0)!) >>> 0;
   return hash % 360;
@@ -147,6 +150,24 @@ export function avatar(actor: string, { decorative = false } = {}): HTMLElement 
   // 替えられたか外されたアイコン（前の画像は、すぐに消える。ほかの人の手元には、引き直すまで前の URL が残る）
   img.addEventListener('error', () => img.replaceWith(describe(initialAvatar(actor, name, decorative))), { once: true });
   return img;
+}
+
+/**
+ * アイコンを、少しずつ重ねて並べる。`max` を超えた分は「+n」で出す。重なりと縁は CSS（`.avatar-stack`）、
+ * 大きさは `className` の側で `--avatar-size` を決める
+ */
+export function avatarStack(
+  actors: string[],
+  { max, className, decorative = false }: { max: number; className: string; decorative?: boolean },
+): HTMLElement {
+  const shown = actors.slice(0, max).map((actor) => avatar(actor, { decorative }));
+  const rest = actors.length - shown.length;
+  return el(
+    'span',
+    { className: `avatar-stack ${className}` },
+    ...shown,
+    ...(rest > 0 ? [el('span', { className: 'avatar-stack-more', textContent: `+${rest}` })] : []),
+  );
 }
 
 function initialAvatar(actor: string, name: string, decorative: boolean): HTMLElement {

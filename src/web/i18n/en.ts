@@ -82,6 +82,8 @@ export const en = {
   'note.add': 'Add a note',
   'author.agentTitle': (name) => `Note made by AI (${name})`,
   'author.detail': (name, date) => `${name} · ${date}`,
+  'presence.title': 'People viewing this page',
+  'presence.editing': (name) => `${name} is editing`,
   'reaction.like': 'Like',
   'reaction.by': (names) => `Liked by ${names}`,
   'author.onBehalf': (name, delegate) => `${name} (on behalf of ${delegate})`,

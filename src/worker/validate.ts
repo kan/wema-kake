@@ -1,7 +1,13 @@
 import type { Anchor, ArrowHead, EdgeRouting, EdgeStyle, LineStyle } from '@kanf/wema';
 import type { BoardContent, HistoryDelta, WemaEdge, WemaNote } from '../shared/delta';
 import { CHILD_PAGE_KEY } from '../shared/hierarchy';
-import { MAX_PREVIEW_NOTES, PREVIEW_KEYS, type PreviewNote } from '../shared/protocol';
+import {
+  MAX_PRESENCE_SELECTION,
+  MAX_PREVIEW_NOTES,
+  type Presence,
+  PREVIEW_KEYS,
+  type PreviewNote,
+} from '../shared/protocol';
 import { isValidSlug } from '../shared/slug';
 
 const MAX_DELTAS = 2000;
@@ -252,6 +258,16 @@ export function parsePreviewNotes(input: unknown): PreviewNote[] {
     for (const key of PREVIEW_KEYS) if (item[key] !== undefined) note[key] = num(item[key], key);
     return note;
   });
+}
+
+/** `presence`（選んでいる付箋と、編集している付箋）を検証し、知っているキーだけを残す */
+export function parsePresence(input: Obj): Presence {
+  const { selection, editing } = input;
+  if (!Array.isArray(selection) || selection.length > MAX_PRESENCE_SELECTION) throw new RejectError('invalid selection');
+  return {
+    selection: [...new Set(selection.map((v) => id(v, 'note id')))],
+    ...(editing === undefined || editing === null ? {} : { editing: id(editing, 'note id') }),
+  };
 }
 
 /** 外から来たデルタの形を検証し、既知のフィールドだけを持つデルタにして返す */
