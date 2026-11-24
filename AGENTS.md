@@ -540,8 +540,11 @@ DO は `applyOps(actor, opId, deltas, summary?)` を唯一の書き込み口と�
 type ClientMsg =
   | { type: 'hello'; clientId: string; lastSeq?: number; epoch?: string }   // epoch は前に受け取った値（あれば）
   | { type: 'ops'; opId: string; deltas: HistoryDelta[] }       // 原子的に適用
-  | { type: 'preview'; noteId: string; x?: number; y?: number; width?: number; height?: number } // 保存しない
+  | { type: 'preview'; notes: PreviewNote[] }                    // 保存しない（「ドラッグ・リサイズ中」の節）
   | { type: 'presence'; selection: string[]; editing?: string };
+
+// ドラッグや大きさの変更の途中の、付箋の位置と大きさ
+type PreviewNote = { id: string; x?: number; y?: number; width?: number; height?: number };
 
 // Server → Client
 type ServerMsg =
@@ -557,7 +560,7 @@ type ServerMsg =
       fixups?: HistoryDelta[] }   // fixups は送信元にだけ付ける（後述）
   | { type: 'reject'; opId: string; reason: string; fixups?: HistoryDelta[] }   // fixups はサーバーの現在値に合わせるデルタ
   | { type: 'reactions'; reactions: Record<NoteId, Reaction[]>; replace?: true }  // リアクションが変わった。replace は全体（再接続の差分の後に送る）
-  | { type: 'preview'; clientId: string; noteId: string; x?: number; y?: number; width?: number; height?: number }
+  | { type: 'preview'; clientId: string; notes: PreviewNote[] }   // clientId は送り主の接続（サーバーが付ける）
   | { type: 'presence'; clientId: string; selection: string[]; editing?: string };
 ```
 
@@ -584,10 +587,17 @@ type ServerMsg =
 
 ### ドラッグ・リサイズ中
 
-wema はドラッグ・リサイズ中も pointermove ごとに `note:update` を出す。
+wema はドラッグ・リサイズ中も pointermove ごとに `note:update` を出す（[#123](https://github.com/kan/wema-kake/issues/123)。実装は `BoardSync` の「途中の動き」の部分）。
 
-- ローカル由来の `note:update` のうち x/y/width/height は間引いて（目安 50ms 程度）`preview` として送る。サーバーは保存せず他のクライアントへ中継するだけ
-- 確定値はドラッグ終了時の `history:commit` で `ops` として送る
+- 送る側: `origin: 'local'` の `note:update` のうち x/y/width/height を、`PREVIEW_INTERVAL_MS`（50ms）ごとにまとめて `preview` で送る。1 つのメッセージに、動いた付箋をまとめて入れる（`MAX_PREVIEW_NOTES` まで。超えた分は次に送る）
+  - **`history:commit` が来たら、その付箋のまだ送っていない分を捨てる。** 確定値は `ops` が運ぶ。整列や取り消しのように、変更と確定が同じ処理の中で続くものは、これで途中の動きとして送られない
+  - 中身に合わせて決まる大きさ（autoSize の幅と高さ、foldable の高さ）は送らない。参照モード（`isViewOnly()`）の移動は、その画面だけの一時的なものなので送らない。切断中は捨てる
+- サーバー: 保存せず、`seq` も進めず、送り主以外へ `clientId` を付けて中継する。知っているキーだけを残し、不正な内容、ロック中のページ、接続ごとに 1 秒 30 件を超えた分は、知らせずに捨てる
+- 受ける側: `applyRemote()` で付箋の位置と大きさを動かす（履歴に積まず、`history:commit` も出ないので、付加情報も変わらない）。当てる前の値を、確定している値として覚える
+  - 新しい `ops` が付箋の x/y/width/height を変えたら、覚えている値を更新する。自分の操作が断られたときも、巻き戻しと `fixups` の値で更新する。動かしていた接続の `ops` なら、途中の動きを終え、`ops` に無いキーは覚えている値に戻す（元の位置で離したキー）
+  - **確定の `ops` が `PREVIEW_TIMEOUT_MS`（10 秒）届かなければ、覚えている値に戻す**（送り主の切断など）。wema のドラッグには中断が無いので、離した後に確定が出ないのは、元の位置で離したときだけ
+  - 手元で動かしている付箋（最後に動かしてから `MOVING_HERE_MS`、2 秒の間）には当てない。当てている付箋を手元で動かし始めたら、戻さずに途中の動きを忘れる（wema はドラッグの始まりを画面の位置で覚えるので、戻すと付箋がポインタの下で跳ぶ。取り消すと、つかんだときに見えていた位置へ戻る）
+  - スナップショットで入れ替えたら、途中の動きをすべて忘れる
 
 ### 競合処理
 

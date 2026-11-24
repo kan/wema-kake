@@ -1,6 +1,7 @@
 import type { Anchor, ArrowHead, EdgeRouting, EdgeStyle, LineStyle } from '@kanf/wema';
 import type { BoardContent, HistoryDelta, WemaEdge, WemaNote } from '../shared/delta';
 import { CHILD_PAGE_KEY } from '../shared/hierarchy';
+import { MAX_PREVIEW_NOTES, PREVIEW_KEYS, type PreviewNote } from '../shared/protocol';
 import { isValidSlug } from '../shared/slug';
 
 const MAX_DELTAS = 2000;
@@ -235,6 +236,22 @@ export function parsePositions(input: unknown): Map<string, { x: number; y: numb
       return [id(key, 'note id'), { x: num(p.x, 'x'), y: num(p.y, 'y') }];
     }),
   );
+}
+
+/**
+ * `preview`（ドラッグや大きさの変更の途中の動き）の付箋の一覧を検証し、知っているキーだけを残す。
+ * 付箋があるかは確かめない（受け取る側が、ない付箋を無視する）
+ */
+export function parsePreviewNotes(input: unknown): PreviewNote[] {
+  if (!Array.isArray(input) || input.length === 0 || input.length > MAX_PREVIEW_NOTES) {
+    throw new RejectError('invalid preview notes');
+  }
+  return input.map((v) => {
+    const item = obj(v, 'preview note');
+    const note: PreviewNote = { id: id(item.id, 'note id') };
+    for (const key of PREVIEW_KEYS) if (item[key] !== undefined) note[key] = num(item[key], key);
+    return note;
+  });
 }
 
 /** 外から来たデルタの形を検証し、既知のフィールドだけを持つデルタにして返す */

@@ -27,6 +27,7 @@ import {
   type OpsMsg,
   PING,
   PONG,
+  type PreviewNote,
   REASON_PAGE_LOCKED,
   type ServerMsg,
 } from '../shared/protocol';
@@ -75,6 +76,7 @@ import {
   MAX_OP_BYTES,
   parseDeltas,
   parseId,
+  parsePreviewNotes,
   RejectError,
 } from './validate';
 
@@ -86,6 +88,11 @@ const OPS_RETENTION_MS = 30 * DAY_MS;
 const OPS_RETENTION_COUNT = 1000;
 /** 受信メッセージの上限（文字数）。1 回の ops に入る text の合計の上限より少し大きくしている */
 const MAX_MESSAGE_LENGTH = 2_000_000;
+/**
+ * 1 つの接続から、1 秒に中継する `preview` の数。送る側は 50ms ごと（1 秒に 20 回）にまとめて送るので、
+ * 余裕を持たせてある。超えた分は捨てる
+ */
+const MAX_PREVIEWS_PER_SECOND = 30;
 /** 再接続時に差分で返す ops の数の上限。これより離れていたらスナップショットを返す */
 const MAX_REPLAY_OPS = 500;
 /** 同じく、差分の合計の大きさ（文字数）の上限。大きな text の更新が続いた場合に効く */
@@ -1900,7 +1907,43 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       this.onHello(ws, attachment, msg);
     } else if (msg.type === 'ops') {
       await this.onOps(ws, attachment, msg);
+    } else if (msg.type === 'preview') {
+      this.onPreview(ws, attachment, msg);
     }
+  }
+
+  /**
+   * ドラッグや大きさの変更の途中の動き（issue #123）。保存せず、seq も進めずに、送り主以外へ中継する。
+   * 承認は確かめ直さない（配信の `broadcast` が、受け取る側で確かめ直す）。不正な内容と、上限を
+   * 超えた分は、知らせずに捨てる（途中の動きなので、届かなくても確定の ops で追いつく）
+   */
+  private onPreview(ws: WebSocket, attachment: Attachment, msg: Record<string, unknown>): void {
+    const { actor, clientId } = attachment;
+    // 上限を先に数える（ロックの判定は、ストレージを読む）
+    if (!clientId || !this.allowPreview(ws) || this.isLocked()) return;
+    let notes: PreviewNote[];
+    try {
+      notes = parsePreviewNotes(msg.notes);
+    } catch {
+      return;
+    }
+    this.broadcast(JSON.stringify({ type: 'preview', clientId, notes } satisfies ServerMsg), {
+      actor,
+      clientId,
+      toSender: null,
+    });
+  }
+
+  /** 接続ごとの、1 秒に中継する `preview` の数の上限。送る側は `PREVIEW_INTERVAL_MS` ごとに送る */
+  private allowPreview(ws: WebSocket): boolean {
+    const now = Date.now();
+    const window = this.previewWindows.get(ws);
+    if (!window || now - window.start >= 1000) {
+      this.previewWindows.set(ws, { start: now, count: 1 });
+      return true;
+    }
+    window.count++;
+    return window.count <= MAX_PREVIEWS_PER_SECOND;
   }
 
   /** 接続直後の同期。`lastSeq` 以降の ops が残っていれば差分を、なければスナップショットを返す */
@@ -2016,6 +2059,8 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
   private approvedAt = new Map<string, number>();
   /** 確かめている最中の問い合わせ（同じ人の問い合わせを、まとめる） */
   private approvalChecks = new Map<string, Promise<boolean>>();
+  /** 接続ごとの、`preview` を数え始めた時刻と数（`allowPreview`）。Hibernation で消えてよい */
+  private previewWindows = new WeakMap<WebSocket, { start: number; count: number }>();
 
   private recentlyApproved(email: string): boolean {
     const at = this.approvedAt.get(email);

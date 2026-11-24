@@ -8,19 +8,75 @@ import {
   CLOSE_NOT_APPROVED,
   CLOSE_PAGE_DELETED,
   type ClientMsg,
+  MAX_PREVIEW_NOTES,
   type OpsMsg,
   PING,
   PONG,
+  PREVIEW_INTERVAL_MS,
+  PREVIEW_KEYS,
+  type PreviewKey,
+  type PreviewNote,
+  type PreviewValues,
   type ServerMsg,
 } from '../shared/protocol';
+
+/** 付箋の値のうち、同期が読むもの */
+type SyncNote = Pick<WemaNote, 'id' | 'autoSize' | 'foldable' | PreviewKey>;
+
+/** ボードの `note:update` のハンドラー */
+export type NoteUpdateHandler = (payload: { note: SyncNote; prev: SyncNote; origin: 'local' | 'remote' }) => void;
 
 /** 同期に使う、ボードの操作。WemaBoard がこの形を満たす */
 export interface SyncBoard {
   applyRemote(deltas: HistoryDelta[]): void;
-  /** 付箋の今の値。付箋の書き込み者を変えるかの判定（大きさの決まり方）に使う */
-  getNote(id: string): Pick<WemaNote, 'autoSize' | 'foldable'> | undefined;
+  /** 付箋の今の値。付箋の書き込み者を変えるかの判定（大きさの決まり方）と、途中の動きの反映に使う */
+  getNote(id: string): SyncNote | undefined;
   importData(data: BoardData): void;
   on(event: 'history:commit', handler: (payload: { deltas: HistoryDelta[] }) => void): void;
+  /** 手元（`local`）のドラッグと大きさの変更の途中の動きを、ほかの人へ送るのに使う */
+  on(event: 'note:update', handler: NoteUpdateHandler): void;
+  /** 参照モードでの移動は、その画面だけの一時的なものなので、ほかの人へ送らない */
+  isViewOnly?(): boolean;
+}
+
+/**
+ * ほかの人の途中の動きを当ててから、確定の ops が届かないまま、確定した値へ戻すまでの時間（ミリ秒）。
+ * 送り主の接続が切れたときや、動かした付箋を元の位置で離したとき（確定の ops が出ない）に戻す
+ */
+export const PREVIEW_TIMEOUT_MS = 10_000;
+
+/**
+ * 手元で最後に動かしてから、この時間（ミリ秒）は、その付箋にほかの人の途中の動きを当てない。元の位置で
+ * 離したとき（確定が出ず、動かし終えたと分からない）に、ほかの人の動きが長く止まらないよう、短くしてある
+ */
+const MOVING_HERE_MS = 2_000;
+
+/** ほかの人の途中の動きを当てている付箋 */
+interface ShownPreview {
+  /** 動かしている接続。その接続の確定の ops が届いたら終わる */
+  clientId: string;
+  /** 当てる前の、確定している値（当てたキーだけ）。確定の ops が届いたら、その値に更新する */
+  base: PreviewValues;
+  /** 最後に途中の動きを受け取った時刻。`PREVIEW_TIMEOUT_MS` を過ぎたら戻す */
+  at: number;
+}
+
+/** デルタが触る付箋の id */
+const noteIdOf = (d: HistoryDelta): string | undefined =>
+  d.type === 'note:update' ? d.noteId : d.type === 'note:create' || d.type === 'note:delete' ? d.note.id : undefined;
+
+/**
+ * 手元の付箋の変更から、途中の動きとして送る値を取り出す。中身に合わせて決まる大きさ（autoSize の幅と
+ * 高さ、foldable の高さ）は、ほかの人の画面でも中身から決まるので送らない。変わっていなければ undefined
+ */
+function previewOf(note: SyncNote, prev: SyncNote): PreviewValues | undefined {
+  const values: PreviewValues = {};
+  for (const key of PREVIEW_KEYS) {
+    if (note.autoSize === true && (key === 'width' || key === 'height')) continue;
+    if (note.foldable === true && key === 'height') continue;
+    if (note[key] !== prev[key]) values[key] = note[key];
+  }
+  return Object.keys(values).length > 0 ? values : undefined;
 }
 
 /** 接続済みのソケット */
@@ -140,13 +196,27 @@ export class BoardSync {
   private retries = 0;
   private stopPing: (() => void) | undefined;
   private stopRetry: (() => void) | undefined;
+  /** まだ送っていない、手元の途中の動き（付箋ごとの最新の値）。`PREVIEW_INTERVAL_MS` ごとにまとめて送る */
+  private outgoing = new Map<string, PreviewNote>();
+  private outgoingTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 手元で動かしている付箋と、最後に動かした時刻。ほかの人の途中の動きを当てない */
+  private movingHere = new Map<string, number>();
+  /** ほかの人の途中の動きを当てている付箋 */
+  private previews = new Map<string, ShownPreview>();
+  /** 当てている途中の動きのうち、期限を過ぎたものを戻すタイマー（当てている間だけ 1 本動かす） */
+  private sweepTimer: ReturnType<typeof setTimeout> | undefined;
 
+  /** @param options.previewTimeoutMs `PREVIEW_TIMEOUT_MS` の代わり（テストで短くする） */
   constructor(
     private readonly board: SyncBoard,
     private readonly connect: () => Promise<SyncSocket>,
     private readonly hooks: SyncHooks = {},
+    private readonly options: { previewTimeoutMs?: number } = {},
   ) {
     board.on('history:commit', ({ deltas }) => this.commit(deltas));
+    board.on('note:update', ({ note, prev, origin }) => {
+      if (origin === 'local') this.moveHere(note, prev);
+    });
   }
 
   start(): void {
@@ -158,6 +228,8 @@ export class BoardSync {
     this.stopped = true;
     this.stopPing?.();
     this.stopRetry?.();
+    this.cancelOutgoing();
+    this.clearPreviews();
     this.socket?.close();
   }
 
@@ -243,6 +315,14 @@ export class BoardSync {
 
   /** ボードで操作が確定した。手元にはすでに適用されている */
   private commit(deltas: HistoryDelta[]): void {
+    // 確定した付箋の途中の動きは、もう送らない（確定の ops が、最後の値を運ぶ）。ドラッグ以外の変更
+    // （整列、取り消しなど）は、変更と確定が同じ処理の中で続くので、途中の動きとしては送られない
+    for (const d of deltas) {
+      const id = noteIdOf(d);
+      if (id === undefined) continue;
+      this.outgoing.delete(id);
+      this.movingHere.delete(id);
+    }
     const op: Pending = { opId: crypto.randomUUID(), deltas, applied: true };
     this.pending.push(op);
     this.send({ type: 'ops', opId: op.opId, deltas });
@@ -257,6 +337,8 @@ export class BoardSync {
         // 付箋を描く処理が読めるよう、ボードを入れ替える前に更新する
         // `info` を返さない古い Worker につながることがある（デプロイの途中）
         this.infos = new Map(Object.entries(msg.info ?? {}));
+        // 入れ替えで、当てていた途中の動きは消える
+        this.clearPreviews();
         this.board.importData(msg.data);
         this.lastSeq = msg.seq;
         this.snapshotSeq = msg.seq;
@@ -288,7 +370,148 @@ export class BoardSync {
       case 'reject':
         this.onReject(msg.opId, msg.reason, msg.fixups ?? []);
         break;
+      case 'preview':
+        this.onPreview(msg.clientId, msg.notes);
+        break;
     }
+  }
+
+  // --- ドラッグや大きさの変更の途中の動き（issue #123） ---
+
+  /** 手元の付箋が動いた。確定（history:commit）しないまま続くものを、途中の動きとして送る */
+  private moveHere(note: SyncNote, prev: SyncNote): void {
+    if (this.board.isViewOnly?.()) return;
+    const values = previewOf(note, prev);
+    if (!values) return;
+    this.movingHere.set(note.id, Date.now());
+    // ほかの人の途中の動きを当てていた付箋を、自分で動かし始めた。戻さずに、自分の動きを優先する
+    this.dropPreview(note.id);
+    this.outgoing.set(note.id, { ...this.outgoing.get(note.id), ...values, id: note.id });
+    this.outgoingTimer ??= setTimeout(() => this.flushPreview(), PREVIEW_INTERVAL_MS);
+  }
+
+  private cancelOutgoing(): void {
+    if (this.outgoingTimer !== undefined) clearTimeout(this.outgoingTimer);
+    this.outgoingTimer = undefined;
+    this.outgoing.clear();
+  }
+
+  private flushPreview(): void {
+    this.outgoingTimer = undefined;
+    const notes = [...this.outgoing.values()].slice(0, MAX_PREVIEW_NOTES);
+    for (const note of notes) this.outgoing.delete(note.id);
+    // 1 回に入りきらなかった付箋は、次に送る
+    if (this.outgoing.size > 0) this.outgoingTimer = setTimeout(() => this.flushPreview(), PREVIEW_INTERVAL_MS);
+    // 切断中の途中の動きは、ためずに捨てる（確定の ops は、再接続の後に送る）
+    if (notes.length > 0 && this.status === 'synced') this.send({ type: 'preview', notes });
+  }
+
+  private get previewTimeoutMs(): number {
+    return this.options.previewTimeoutMs ?? PREVIEW_TIMEOUT_MS;
+  }
+
+  private isMovingHere(noteId: string): boolean {
+    const at = this.movingHere.get(noteId);
+    return at !== undefined && Date.now() - at < MOVING_HERE_MS;
+  }
+
+  /**
+   * ほかの人の途中の動きを、手元の付箋に当てる。履歴には積まず、付加情報（書き込み者、更新日時）も
+   * 変えない（`applyRemote` は history:commit を出さない）。手元で動かしている付箋には当てない
+   */
+  private onPreview(clientId: string, notes: PreviewNote[]): void {
+    if (clientId === this.clientId) return;
+    const deltas: HistoryDelta[] = [];
+    const now = Date.now();
+    for (const { id, ...values } of notes) {
+      const note = this.board.getNote(id);
+      if (!note || this.isMovingHere(id)) continue;
+      let shown = this.previews.get(id);
+      if (shown) Object.assign(shown, { clientId, at: now });
+      else this.previews.set(id, (shown = { clientId, base: {}, at: now }));
+      const before: PreviewValues = {};
+      const after: PreviewValues = {};
+      for (const key of PREVIEW_KEYS) {
+        const value = values[key];
+        if (value === undefined || typeof note[key] !== 'number') continue;
+        before[key] = note[key];
+        after[key] = value;
+        if (!(key in shown.base)) shown.base[key] = note[key];
+      }
+      if (Object.keys(after).length > 0) deltas.push({ type: 'note:update', noteId: id, before, after });
+    }
+    if (deltas.length > 0) this.board.applyRemote(deltas);
+    this.scheduleSweep();
+  }
+
+  /** 当てている途中の動きのうち、いちばん早く期限が来るものに合わせて、タイマーを掛ける */
+  private scheduleSweep(): void {
+    if (this.sweepTimer !== undefined || this.previews.size === 0) return;
+    const oldest = Math.min(...[...this.previews.values()].map((s) => s.at));
+    this.sweepTimer = setTimeout(() => this.sweep(), Math.max(0, oldest + this.previewTimeoutMs - Date.now()));
+  }
+
+  /** 確定の ops が `PREVIEW_TIMEOUT_MS` 届かなかった途中の動きを、確定している値に戻す */
+  private sweep(): void {
+    this.sweepTimer = undefined;
+    const now = Date.now();
+    for (const [id, shown] of [...this.previews]) {
+      if (now - shown.at >= this.previewTimeoutMs) this.endPreview(id);
+    }
+    this.scheduleSweep();
+  }
+
+  /**
+   * 新しく届いた確定の ops を、当てている途中の動きに反映する。確定した値を覚え直し、動かしていた接続の
+   * 確定が届いたら、その付箋の途中の動きを終える（確定の ops に無いキーは、覚えていた値に戻す）
+   */
+  private settlePreviews(msg: OpsMsg): void {
+    this.rebase(msg.deltas);
+    for (const d of msg.deltas) {
+      if (d.type === 'note:update' && msg.clientId === this.previews.get(d.noteId)?.clientId) this.endPreview(d.noteId);
+    }
+  }
+
+  /** 途中の動きを当てている付箋の、確定している値として覚えた値を、`deltas` に合わせる */
+  private rebase(deltas: HistoryDelta[]): void {
+    if (this.previews.size === 0) return;
+    for (const d of deltas) {
+      if (d.type === 'note:delete') {
+        this.dropPreview(d.note.id);
+        continue;
+      }
+      if (d.type !== 'note:update') continue;
+      const shown = this.previews.get(d.noteId);
+      if (!shown) continue;
+      const after = d.after as Record<string, unknown>;
+      for (const key of PREVIEW_KEYS) {
+        const value = after[key];
+        if (typeof value === 'number') shown.base[key] = value;
+      }
+    }
+  }
+
+  /** 途中の動きを終え、付箋を確定している値に戻す */
+  private endPreview(noteId: string): void {
+    const shown = this.previews.get(noteId);
+    if (!shown) return;
+    this.dropPreview(noteId);
+    const note = this.board.getNote(noteId);
+    if (!note) return;
+    const before: PreviewValues = {};
+    for (const key of Object.keys(shown.base) as PreviewKey[]) before[key] = note[key];
+    this.board.applyRemote([{ type: 'note:update', noteId, before, after: { ...shown.base } }]);
+  }
+
+  /** 途中の動きを、付箋を戻さずに忘れる（期限のタイマーは、残っていても空振りするだけ） */
+  private dropPreview(noteId: string): void {
+    this.previews.delete(noteId);
+  }
+
+  private clearPreviews(): void {
+    this.previews.clear();
+    if (this.sweepTimer !== undefined) clearTimeout(this.sweepTimer);
+    this.sweepTimer = undefined;
   }
 
   /** サーバーから最初の応答が届いた。以降は同期している */
@@ -353,11 +576,14 @@ export class BoardSync {
   }
 
   private onOps(msg: OpsMsg): void {
+    const fresh = msg.seq > (this.lastSeq ?? 0);
+    // 古い操作（再送への応答など）の値で、確定している値を覚え直さない
+    if (fresh) this.settlePreviews(msg);
     // すでに受け取った seq までの操作は、付加情報に反映してある（スナップショットに含まれていた操作、
     // 再送への応答）。もう一度反映すると、更新日時が古い値に戻る。
     // 付箋を描く処理が読めるよう、ボードに反映する前に更新する
     const changed =
-      msg.createdAt !== undefined && msg.seq > (this.lastSeq ?? 0)
+      msg.createdAt !== undefined && fresh
         ? applyOpToInfos(this.infos, msg.actor, msg.createdAt, msg.deltas, msg.delegate ?? null, (id) =>
             this.board.getNote(id),
           )
@@ -395,6 +621,8 @@ export class BoardSync {
     // その上に、後続の未確定の操作を適用し直す（巻き戻しと現在値の反映で打ち消されるため）
     const rollback = op.applied ? invertDeltas(op.deltas) : [];
     const later = this.pending.filter((p) => p.applied).flatMap((p) => p.deltas);
+    // ほかの人の途中の動きを当てている付箋では、確定している値として覚えた値も、断られた変更の前に戻す
+    this.rebase([...rollback, ...fixups]);
     this.board.applyRemote([...rollback, ...fixups, ...later]);
     this.hooks.onReject?.(reason);
     this.setStatus(this.status);
