@@ -7,6 +7,8 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-25
+
 ### 追加
 
 - 設定に `admins`（管理者の email の一覧）を足した。設定すると、MCP（`/mcp`）を使えるのは、管理者が認可したコネクタだけになり、ほかは 403 を返す。省くと、これまでどおり全員を管理者として扱う。雛形の README の「管理者を決める」（[#106](https://github.com/kan/wema-kake/issues/106)）
@@ -139,6 +141,7 @@
 
 最初の公開版。利用側が雛形（`npx @kanf/wema-kake init`）から自分の Worker を作り、npm のこのパッケージを使ってデプロイする。
 
+[0.2.0]: https://github.com/kan/wema-kake/releases/tag/v0.2.0
 [0.1.11]: https://github.com/kan/wema-kake/releases/tag/v0.1.11
 [0.1.10]: https://github.com/kan/wema-kake/releases/tag/v0.1.10
 [0.1.9]: https://github.com/kan/wema-kake/releases/tag/v0.1.9
