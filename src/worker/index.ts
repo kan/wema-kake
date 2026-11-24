@@ -4,8 +4,15 @@ import { assetServer } from './assets';
 import { canWrite, isAdmin, resolveConfig, type WemaKakeConfig } from './config';
 import { images } from './images';
 import { handleMcp } from './mcp/server';
-import { ACTOR_HEADER, AUTH_EXPIRES_HEADER } from './page-do';
+import { ACTOR_HEADER, APPROVAL_CHECK_HEADER, AUTH_EXPIRES_HEADER } from './page-do';
 import { pagesApi, validSlug } from './pages-api';
+import { approvalOfRequest, requireApproval, session, usersApi } from './users-api';
+
+/**
+ * ページの中身、画像、WebSocket を返すパス。承認の関所を掛け、どのルートにも合わなければ、画面ではなく
+ * JSON の 404 にする
+ */
+const DATA_PATHS = ['/api/*', '/ws/*', '/img/*'];
 
 /**
  * Worker のアプリを組み立てる。パッケージの入口（src/index.ts）の `createWemaKake` が呼ぶ。
@@ -66,6 +73,14 @@ export function createApp(options: WemaKakeConfig = {}) {
     await next();
   });
 
+  // 認証が有効かと、承認の状態を返す。**承認の関所より前に置くこと**（承認待ちの人が、自分の状態を
+  // 読めるようにする）。ハンドラが応答を返すので、後ろの関所には進まない
+  app.get('/api/session', session);
+  // 承認（設定の `approval`）。承認済みでない人は、ページの中身、画像、WebSocket に届かない。
+  // 画面のアセットには掛けない（承認待ちの表示を出すため。HTML には、下で状態を埋め込む）
+  for (const path of DATA_PATHS) app.use(path, requireApproval);
+
+  app.route('/api/users', usersApi);
   app.route('/api', pagesApi);
   app.route('/', images);
 
@@ -80,15 +95,25 @@ export function createApp(options: WemaKakeConfig = {}) {
     const expiresAt = c.get('authExpiresAt');
     if (expiresAt === undefined) headers.delete(AUTH_EXPIRES_HEADER);
     else headers.set(AUTH_EXPIRES_HEADER, String(expiresAt));
+    // 承認が有効なら、DO が接続の間も承認の状態を確かめ直す（取り消された人の接続を切る）。
+    // 管理者は、表の状態にかかわらず承認済みなので、確かめない
+    if (config.approval && !isAdmin(config, c.get('email'))) headers.set(APPROVAL_CHECK_HEADER, c.get('email'));
+    else headers.delete(APPROVAL_CHECK_HEADER);
     return c.env.PAGE.getByName(c.req.param('slug')).fetch(new Request(c.req.raw, { headers }));
   });
 
   // API のパスで、上のどのルートにも合わなかったもの。画面（index.html）ではなく JSON の 404 にする。
-  // **API のパスの最初の部分を足したら、ここにも足す**（足さないと、そのパスの「ない」が画面の 200 になる）
-  for (const path of ['/api/*', '/ws/*', '/img/*', '/mcp', '/mcp/*']) app.all(path, (c) => c.notFound());
+  // **API のパスの最初の部分を足したら、`DATA_PATHS` に足す**（足さないと、そのパスの「ない」が画面の 200 に
+  // なり、承認の関所も掛からない）
+  for (const path of [...DATA_PATHS, '/mcp', '/mcp/*']) app.all(path, (c) => c.notFound());
 
   // 残りの GET と HEAD は、画面のアセット（`run_worker_first: true` なので、静的ファイルの要求もここに来る）
-  app.on(['GET', 'HEAD'], '*', (c) => serveAsset(c.req.raw, c.env));
+  // 承認が有効なら、ページの読み込み（HTML）に、承認の状態を埋め込む。画面は、承認済みでなければ
+  // 承認待ちの表示だけを出す。スクリプトや画像のアセットの要求では、D1 を読まない
+  app.on(['GET', 'HEAD'], '*', async (c) => {
+    const approval = c.req.header('Accept')?.includes('text/html') ? await approvalOfRequest(c) : undefined;
+    return serveAsset(c.req.raw, c.env, approval === 'approved' ? undefined : approval);
+  });
 
   app.notFound((c) => c.json({ error: 'not found' }, 404));
 

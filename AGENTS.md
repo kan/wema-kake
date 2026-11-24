@@ -61,7 +61,7 @@ MCP クライアント ──/mcp──> MCP ┘          │
 - **パッケージのコードで、グローバルの `Env` を使わない。** バインディングの型は `WemaKakeEnv`。`Env` は `wrangler types` がこのリポジトリの `wrangler.jsonc` から作る型で、`dist/lib` の `.d.ts` に残ると、利用側では別物を指す
 - **バインディング、`assets`、DO の `migrations` を変えたら、`wrangler.jsonc` と `template/wrangler.jsonc` の両方を直す。** 利用側の `wrangler.jsonc` に要る変更は、破壊的変更になる（`docs/package.md` の「互換の決まり」）
 - **`run_worker_first` は `true` のまま保つ。** すべてのリクエストを Worker が受け、API のどのルートにも合わない GET と HEAD を画面のアセットとして返す（`src/worker/index.ts` の末尾）。パスを足しても、利用側の設定は変わらない
-  - **API のパスの最初の部分（`/api/` など）を足したら、`src/worker/index.ts` の JSON の 404 を返す一覧にも足す。** 足さないと、そのパスの「ない」が、画面の 200 になる
+  - **API のパスの最初の部分（`/api/` など）を足したら、`src/worker/index.ts` の `DATA_PATHS` に足す。** 足さないと、そのパスの「ない」が画面の 200 になり、承認の関所（設定の `approval`）も掛からない。ページの中身を返さない入口（`/mcp` など）は、`DATA_PATHS` ではなく、JSON の 404 を返す一覧にだけ足す
 - **`bin/wema-kake.mjs` は、雛形の中の埋める場所を名指ししている**（`replaceOnce`）。`template/src/config.ts`、`template/wrangler.jsonc`、`template/package.json`、`template/README.md` のその行を変えたら、あちらも直す（見つからなければ init が落ちるので、黙って既定の値のまま出ることはない）
 - テストは `src/` を直接読むので、`dist/lib` は要らない。`dist/web` は要る（画面のアセットを返す処理を確かめる）ので、`pretest` が `build:web` を回す
 - 雛形が通るかの確かめ方: `npm pack` → 別のディレクトリで `npx --package=<tgz> wema-kake init <dir> --yes --no-install` → そこで `npm install <tgz>` → `npm run typecheck`、`npx wrangler deploy --dry-run`、`npm run dev`
@@ -221,6 +221,14 @@ MCP クライアント ──/mcp──> MCP ┘          │
   - **`/mcp` は、JWT の `email`（コネクタを認可した人）が管理者でなければ 403 を返す**（`src/worker/index.ts`）。OAuth のクライアントの登録は Access が受けるので止められないが、ツールは使えない。ローカル開発では `DEV_USER_EMAIL` で判定する
   - **agent の権限は、一般の利用者と同じにする。** 導入したのが管理者でも、管理者だけの操作（ページのロックなど）を agent にさせない。他の利用者が書いた付箋の指示で agent が動いても、被害を誰でもできる編集の範囲に収めるため
   - 画面は、`GET /api/session` の `admin` で、管理者かどうかを知る
+- **利用者の承認**（設定の `approval`。[#120](https://github.com/kan/wema-kake/issues/120)）。有効にすると、Access を通って初めて来た人を、D1 の `users` に承認待ちとして入れる。管理者が承認するまで、その人はページの読み書きができない。省くと無効（Access を通った人は、そのまま使える）
+  - **有効にするには `admins` に 1 人以上が要る**（`resolveConfig` で例外にする）。管理者は、`users` の状態にかかわらず承認済みとして扱い、表にも入れない（管理者を、表の状態で締め出さない）
+  - 関所は `src/worker/index.ts` の `requireApproval`（`src/worker/users-api.ts`）。**`/api/*`、`/ws/*`、`/img/*` に掛け、承認済みでなければ 403（`{ "error": "not approved", "approval": "pending" }`）を返す。** `/api` に足した入口は、自動でこの関所を通る。**`/api`、`/ws`、`/img` の外に、ページの中身や画像を返す入口を足すときは、そのパスを `DATA_PATHS` に足す**（関所と JSON の 404 の両方が掛かる）
+  - **`GET /api/session` は関所より前に置く**（承認待ちの人が、自分の状態を読めるようにする）。ハンドラが応答を返すので、後ろの関所には進まない
+  - 画面のアセットには掛けない（承認待ちの表示を出すため）。代わりに、HTML の要求（`Accept: text/html`）では、承認済みでない人の `index.html` に `<meta name="wema-kake-approval" content="pending">` を埋め込む（`src/worker/assets.ts`）。画面は、これが付いていれば、どのパスでも承認待ちの表示だけを出す（`src/web/main.ts`、`src/web/users-view.ts` の `openApprovalWait`）
+  - 承認待ちと拒否の人は、どちらも同じく断る。拒否した人は、もう一度承認を求められない（管理者が、利用者の画面で承認に変えられる）
+  - **開いたままの WebSocket も確かめ直す。** Worker は、管理者でない人の接続に `APPROVAL_CHECK_HEADER`（email）を付けて DO へ渡す。DO は、hello と ops を受けたときと配信のとき（見ているだけの人はメッセージを送らないため）に、D1 の `users` を読む。承認済みでなければ、その人の接続をコード 4403（`CLOSE_NOT_APPROVED`）で閉じる。クライアントは読み込み直し、承認待ちの表示になる。承認済みと確かめた結果は、Worker（isolate ごと。`src/worker/users.ts` の `APPROVAL_CACHE_MS`）と DO がそれぞれ 30 秒覚えている。取り消しが届くのは、長くてもその分だけ遅れる。取り消しを受けた isolate では、覚えた結果をすぐに捨てる。**Worker の覚えた結果は `/api` と `/img` にだけ使い、画面の読み込み（HTML）、WebSocket の接続、`GET /api/session` では D1 を読む。** ほかの isolate で拒否された人が、古い結果で画面を開き直したり、つなぎ直したりできないようにするため。DO は、Worker が接続の直前に確かめた結果を、そのまま覚える。DO が D1 を読めなかったときは、承認済みとして扱う（接続のときに Worker が確かめているので、一時的な失敗で接続を切らない）
+  - 管理者は、ヘッダーの利用者のアイコン（承認待ちの人数の印つき。`src/web/toolbar.ts` の `usersLink`）から、利用者の画面（`/users`）を開き、承認と拒否をする
   - 設定は `wrangler.jsonc` の `vars` の `ACCESS_TEAM_DOMAIN`（`https://<team>.cloudflareaccess.com`）と `ACCESS_AUD`（Access アプリケーションの AUD タグ）。両方が空なら 500 を返す
   - ローカル開発は `.dev.vars` の `DEV_USER_EMAIL` を使う（`.dev.vars.example` を参照）。`/mcp` の主体は `agent:local` になる。ローカルのホスト名（`localhost`、`127.0.0.1`、`[::1]`、`.localhost` で終わる名前）へのリクエストでだけ有効で、Access の設定があれば無視される。**ローカルと見なすホスト名を、これより広げないこと**（`src/worker/access.ts` の `isLocalHost`。`.localhost` はループバック専用の予約名なので、デプロイ先のホスト名には当たらない）
   - ローカルのリバースプロキシ [roji](https://github.com/kan/roji)（`{host}` の置き換えがある 1.5.0 以降）を使うなら `npm run dev:roji`。空いているポートで起動し、`https://wema-kake.<roji のドメイン>` で開ける。**`wrangler dev` の `--host {host} --upstream-protocol https` を外さないこと。** 外すと、Worker から見たオリジンが `http://<ホスト名>` になる。ブラウザが送る `Origin`（`https://<ホスト名>`）と合わなくなり、状態を変えるリクエストと WebSocket の接続が、オリジンの検査で 403 になる
@@ -381,7 +389,9 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 
 | メソッドとパス | 内容 |
 | --- | --- |
-| `GET /api/session` | 認証が有効かの確認用。`{ "actor": "user:<email>", "admin": true }` を返す（`admin` は、設定の `admins` で管理者か） |
+| `GET /api/session` | 認証が有効かの確認用。`{ "actor": "user:<email>", "admin": true }` を返す（`admin` は、設定の `admins` で管理者か）。承認（設定の `approval`）が有効なら、`approval`（`pending` / `approved` / `rejected`）を、管理者には `pendingUsers`（承認待ちの人数）も足す。承認の関所より前にあり、承認待ちの人も呼べる |
+| `GET /api/users` | 利用者の一覧（`{ "users": [{ "email", "status", "created_at", "decided_by", "decided_at" }] }`）。承認待ち、管理者、ほかの人の順に並べる。管理者は設定の `admins` から足し、`"admin": true` を付ける（表に入らないので、`created_at` は null）。**管理者だけが呼べる**（ほかは 403）。承認が無効なら 404 |
+| `PUT /api/users/<email>/status` | 承認か拒否（本文は `{ "status": "approved" }` か `"rejected"`）。管理者だけ。まだ来ていない人は 404、ほかの値と、管理者を対象にしたときは 400 |
 | `GET /api/index` | 一覧のボード用。ルートのページ（表示名、色、本文の冒頭、更新日時、子ページの数）と、ルート同士のリンクをまとめて返す。新しい順に 500 ページまで。子ページと孫ページは返さない。ページが 1 つもなければ、最初のページを作ってから返す（1 回だけ。「画面」の節） |
 | `POST /api/pages-info` | ページの概要（表示名、色、付箋の数、親、付箋の配置）をまとめて返す（本文は `{ "names": [...] }`、200 件まで）。子ページの付箋の表示に使う。まだ索引にないページ（作ったばかり）は DO から補い、付箋の配置は null で返す。存在しないページは結果に入らない |
 | `GET /api/pages/<slug>/ancestors` | 先祖のページを、ルートから順に返す（パンくず用） |

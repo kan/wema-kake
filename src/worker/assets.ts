@@ -3,7 +3,10 @@
 //
 // HTML（index.html。SPA なので、/p/<slug> などにもこれが返る）には、サイトの設定を `<meta>` で
 // 埋め込み、`<title>` をサイトの名前にする（src/shared/site.ts）。
-import { SITE_META_NAME, type SiteConfig } from '../shared/site';
+//
+// 承認（設定の `approval`）が済んでいない人の HTML には、承認の状態も `<meta>` で埋め込む。
+import type { ApprovalStatus } from '../shared/api';
+import { APPROVAL_META_NAME, SITE_META_NAME, type SiteConfig } from '../shared/site';
 import type { WemaKakeEnv } from './config';
 
 const escapeAttr = (value: string) =>
@@ -15,9 +18,14 @@ export function assetServer(site: SiteConfig) {
   const content: SiteConfig = { siteName: site.siteName, defaultLang: site.defaultLang };
   const meta = `<meta name="${SITE_META_NAME}" content="${escapeAttr(JSON.stringify(content))}">`;
   const title = { element: (el: Element) => void el.setInnerContent(site.siteName) };
-  const head = { element: (el: Element) => void el.prepend(meta, { html: true }) };
+  // 承認の状態は ApprovalStatus のどれか（エスケープの要らない英字だけ）
+  const head = (approval: ApprovalStatus | undefined) => ({
+    element: (el: Element) =>
+      void el.prepend(approval ? `${meta}<meta name="${APPROVAL_META_NAME}" content="${approval}">` : meta, { html: true }),
+  });
 
-  return async (request: Request, env: WemaKakeEnv): Promise<Response> => {
+  /** `approval` は、承認が済んでいない人の状態（HTML に埋め込む）。承認済みか、承認が無効なら省く */
+  return async (request: Request, env: WemaKakeEnv, approval?: ApprovalStatus): Promise<Response> => {
     // ページの読み込み（HTML を取りに来るリクエスト）は、条件付きの取得にしない。アセットの ETag は
     // ファイルの中身だけで決まるので、設定だけを変えてデプロイしたときに、304 で古い設定の HTML が
     // 使われ続ける。index.html は小さいので、毎回送る
@@ -36,6 +44,6 @@ export function assetServer(site: SiteConfig) {
     // 書き換えた本文は、元の ETag と中身が合わない
     headers.delete('ETag');
     headers.delete('Content-Length');
-    return new HTMLRewriter().on('title', title).on('head', head).transform(new Response(res.body, { status: res.status, statusText: res.statusText, headers }));
+    return new HTMLRewriter().on('title', title).on('head', head(approval)).transform(new Response(res.body, { status: res.status, statusText: res.statusText, headers }));
   };
 }

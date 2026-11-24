@@ -36,6 +36,13 @@ export function setPopLeave(run: PopLeave): void {
   popLeave = run;
 }
 
+/**
+ * 読み込みなしで切り替えられる画面のパスか（一覧、使い方、利用者、ページ）。画面を足すときは、ここと
+ * main.ts の `renderPath` に足す。ページのスラッグの形は、`renderPath` が確かめる
+ */
+export const isAppPath = (path: string): boolean =>
+  path === '/' || path === '/help' || path === '/users' || path.startsWith('/p/');
+
 /** パスがページ（/p/<slug>）なら、そのスラッグ。スラッグの形は確かめない */
 export const pageSlugOf = (path: string): string | undefined => /^\/p\/([^/]+)\/?$/.exec(path)?.[1];
 
@@ -96,13 +103,13 @@ async function pop(path: string): Promise<void> {
 }
 
 /**
- * サイト内の URL へ移る。一覧（/）、ページ（/p/<slug>）、使い方（/help）なら、読み込みなしで切り替える。
- * それ以外は、ページ全体の読み込みで移る
+ * サイト内の URL へ移る。一覧（/）、ページ（/p/<slug>）、使い方（/help）、利用者（/users）なら、
+ * 読み込みなしで切り替える。それ以外は、ページ全体の読み込みで移る
  */
 export function navigate(url: string, transition?: Transition): void {
   const target = new URL(url, location.href);
   const { pathname } = target;
-  if (target.origin !== location.origin || !(pathname === '/' || pathname === '/help' || pathname.startsWith('/p/'))) {
+  if (target.origin !== location.origin || !isAppPath(pathname)) {
     location.assign(target.href);
     return;
   }

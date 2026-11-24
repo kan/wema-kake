@@ -123,3 +123,32 @@ export interface RevertOutcome {
   /** その後に変更されていたなどの理由で、取り消さなかったもの */
   skipped: Skipped[];
 }
+
+/** 利用者の承認の状態（設定の `approval` が有効なとき）。管理者は、いつも approved */
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected';
+
+/** 承認待ちと拒否の人が `/api` と `/ws` と `/img` を呼んだときの 403 の `error` */
+export const ERROR_NOT_APPROVED = 'not approved';
+
+/** 利用者の画面に出す 1 人分（`GET /api/users`） */
+export interface UserEntry {
+  email: string;
+  status: ApprovalStatus;
+  /** 設定の `admins` の人。表には入らず、いつも承認済み（承認も拒否もできない） */
+  admin?: true;
+  /** 初めて来た時刻（UNIX ミリ秒）。管理者は null（表に入らないので、記録がない） */
+  created_at: number | null;
+  /** 最後に承認か拒否をした管理者の主体（'user:<email>'）。まだなら null */
+  decided_by: string | null;
+  decided_at: number | null;
+}
+
+/** `GET /api/session` の応答 */
+export interface Session {
+  actor: string;
+  admin: boolean;
+  /** 承認の状態。設定の `approval` が無効なら省く */
+  approval?: ApprovalStatus;
+  /** 承認待ちの人数。承認が有効で、管理者のときだけ */
+  pendingUsers?: number;
+}

@@ -1,13 +1,16 @@
 // サーバーの HTTP API の呼び出し。形は AGENTS.md の「HTTP API」を参照。
 import type { Reaction, ReactionKind } from '../shared/note-info';
-import type {
-  IndexLink,
-  IndexPage,
-  OpSummary,
-  PageSummary,
-  RestoreOutcome,
-  RevertOutcome,
-  RootHit,
+import {
+  ERROR_NOT_APPROVED,
+  type IndexLink,
+  type IndexPage,
+  type OpSummary,
+  type PageSummary,
+  type RestoreOutcome,
+  type RevertOutcome,
+  type RootHit,
+  type Session,
+  type UserEntry,
 } from '../shared/api';
 
 /** ページへのリンクを出すのに要るもの。表示名が未設定なら null（スラッグを出す） */
@@ -34,6 +37,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   });
   const json = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
   if (!res.ok || json === null) {
+    // 承認（設定の `approval`）を取り消された。読み込み直すと、承認待ちの表示になる
+    if (res.status === 403 && json?.error === ERROR_NOT_APPROVED) location.reload();
     throw new ApiError(json?.error ?? `${method} ${path}: ${res.status}`, res.status);
   }
   return json;
@@ -106,7 +111,14 @@ export const react = (slug: string, noteId: string, kind: ReactionKind, on: bool
   );
 
 /** ログインしている人と、管理者かどうか */
-export const getSession = () => request<{ actor: string; admin?: boolean }>('GET', '/api/session');
+export const getSession = () => request<Session>('GET', '/api/session');
+
+/** 利用者の一覧（管理者だけ。承認が有効なときだけ） */
+export const listUsers = async () => (await request<{ users: UserEntry[] }>('GET', '/api/users')).users;
+
+/** 利用者を承認するか拒否する（管理者だけ） */
+export const decideUser = (email: string, status: 'approved' | 'rejected') =>
+  request<{ ok: true }>('PUT', `/api/users/${encodeURIComponent(email)}/status`, { status });
 
 export const setExpiry = (slug: string, days: number | null) =>
   request<{ expireDays: number | null }>('PUT', `/api/pages/${slug}/expiry`, { days });
@@ -165,12 +177,15 @@ export async function uploadImage(file: File): Promise<string> {
 
 /**
  * 認証がまだ有効かを確かめる。期限が切れていると、API は 401 を返すか、Access が
- * ログイン画面へリダイレクトする。通信できないだけの場合は、有効として扱う（再接続を続ける）
+ * ログイン画面へリダイレクトする。通信できないだけの場合は、有効として扱う（再接続を続ける）。
+ * 承認（設定の `approval`）を取り消されていても false にする（読み込み直すと、承認待ちの表示になる）
  */
 export async function isAuthenticated(): Promise<boolean> {
   try {
     const res = await fetch('/api/session', { redirect: 'manual' });
-    return res.status !== 401 && res.type !== 'opaqueredirect';
+    if (res.status === 401 || res.type === 'opaqueredirect') return false;
+    const session = res.ok ? ((await res.json().catch(() => null)) as Session | null) : null;
+    return session?.approval === undefined || session.approval === 'approved';
   } catch {
     return true;
   }
