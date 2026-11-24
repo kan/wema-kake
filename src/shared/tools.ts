@@ -45,6 +45,8 @@ export interface BoardAccess {
   ): Promise<{ name: string; title: string | null; parent: string | null; snippet?: string }[]>;
   /** ページがまだ作られていなければ null */
   readBoard(page: string): Promise<BoardState | null>;
+  /** 主体（'user:<email>'）から、表示名を設定した人の表示名を引く。設定していない人と agent は入らない */
+  displayNames(actors: string[]): Promise<Map<string, string>>;
   /** 親ページのスラッグ（ルートなら null）。ページがなければ undefined。索引ではなく、ページの今の値を返す */
   parentOf(page: string): Promise<string | null | undefined>;
   /** ページの親が `parent` なら、ルートへ戻す（親の記録が古く、親ページに子ページの付箋がないときに使う） */
@@ -300,11 +302,14 @@ export const TOOLS: Tool[] = [
   tool({
     name: 'read_board',
     description:
-      '1 ページの付箋（id、本文、座標、大きさ、色、作成者）と接続線（id、from、to、label）を返す。座標は左上が原点で、単位はピクセル。child_page のある付箋は、子ページを表す付箋で、値は子ページの名前（中身は、その名前で read_board を呼ぶと読める）。reactions は、付箋に付いたリアクション（いいね）の種類ごとの数（付いている付箋だけ）。locked が true のページは、管理者がロックしていて、読めるが書き換えられない。',
+      '1 ページの付箋（id、本文、座標、大きさ、色、作成者）と接続線（id、from、to、label）を返す。座標は左上が原点で、単位はピクセル。created_by は作成者の主体（user:<email> か agent:<名前>）で、created_by_name は、作成者が設定した表示名（設定していなければ付かない）。child_page のある付箋は、子ページを表す付箋で、値は子ページの名前（中身は、その名前で read_board を呼ぶと読める）。reactions は、付箋に付いたリアクション（いいね）の種類ごとの数（付いている付箋だけ）。locked が true のページは、管理者がロックしていて、読めるが書き換えられない。',
     readOnly: true,
     input: z.object({ page }),
     async run(access, input) {
       const board = await existingBoard(access, input.page);
+      const names = await access.displayNames([
+        ...new Set(board.notes.flatMap((n) => (n.createdBy === null ? [] : [n.createdBy]))),
+      ]);
       return {
         title: board.title,
         // ロックされていれば付ける（書き込みのツールは断られる）
@@ -319,6 +324,8 @@ export const TOOLS: Tool[] = [
             height: n.height,
             color: n.color,
             created_by: n.createdBy,
+            // 作成者が表示名を設定していれば付ける（人を名前で呼べるように）
+            created_by_name: n.createdBy === null ? undefined : names.get(n.createdBy),
             // リアクションのある付箋だけに付ける（種類ごとの数）
             reactions: reactionCounts(n.reactions ?? []),
             // 子ページの付箋だけに付ける

@@ -8,13 +8,12 @@ import { ApiError, decideUser, listUsers } from './api';
 import { appLink, el, failureMessage, formatDate } from './dom';
 import { t } from './i18n';
 import { viewSignal } from './navigation';
+import { userActor } from '../shared/note-info';
+import { avatar, displayName, profileOf, requestProfiles } from './profiles';
 import { site } from './site';
 import { header, langButton, toast, trashLink } from './toolbar';
 
 const NOTICE_MS = 8000;
-
-/** 管理者の主体（'user:<email>'）を、画面に出す形にする */
-const actorEmail = (actor: string) => (actor.startsWith('user:') ? actor.slice('user:'.length) : actor);
 
 function button(label: string, onClick: () => void): HTMLButtonElement {
   const b = el('button', { type: 'button', className: 'text-button', textContent: label });
@@ -34,7 +33,9 @@ export function openUsers(app: HTMLElement): void {
   const notify = toast(app, NOTICE_MS);
   const load = (): Promise<void> =>
     listUsers()
-      .then((users) => {
+      .then(async (users) => {
+        // 一覧の人と、承認か拒否をした管理者の表示名を、描く前に引く
+        await requestProfiles(users.flatMap((user) => [userActor(user.email), ...(user.decided_by ? [user.decided_by] : [])]));
         if (!signal.aborted) body.replaceChildren(usersTable(users, load, notify));
       })
       .catch((e) => {
@@ -79,7 +80,14 @@ function usersTable(users: UserEntry[], reload: () => Promise<void>, notify: (te
         el(
           'tr',
           {},
-          el('td', { textContent: user.email }),
+          // 表示名とアイコン（issue #121）も並べる。承認するかを、名前で見分けられるように
+          el(
+            'td',
+            { className: 'user-email' },
+            avatar(userActor(user.email)),
+            el('span', { textContent: user.email }),
+            el('span', { className: 'user-name', textContent: profileOf(userActor(user.email))?.name ?? '' }),
+          ),
           el(
             'td',
             {},
@@ -91,7 +99,7 @@ function usersTable(users: UserEntry[], reload: () => Promise<void>, notify: (te
           el('td', {
             className: 'user-decided',
             textContent:
-              user.decided_by !== null && user.decided_at !== null ? t('users.decided', actorEmail(user.decided_by), formatDate(user.decided_at)) : '',
+              user.decided_by !== null && user.decided_at !== null ? t('users.decided', displayName(user.decided_by), formatDate(user.decided_at)) : '',
           }),
           el(
             'td',

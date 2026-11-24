@@ -6,6 +6,7 @@ import { lang, t } from './i18n';
 import { openIndex } from './index-view';
 import { isAppPath, pageSlugOf, startRouter, type Transition } from './navigation';
 import { openPage } from './page-view';
+import { openProfile } from './profile-view';
 import { unapproved } from './site';
 import { openApprovalWait, openUsers } from './users-view';
 
@@ -26,6 +27,7 @@ function renderPath(path: string, initial: boolean, arrival?: Transition): boole
     if (isPage) openPage(app, slug, arrival);
     else if (path === '/help') openHelp(app);
     else if (path === '/users') openUsers(app);
+    else if (path === '/profile') openProfile(app);
     else openIndex(app, arrival);
     return true;
   }

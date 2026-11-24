@@ -11,21 +11,7 @@ import { el, formatDate } from './dom';
 import { type IconName, icon } from './icons';
 import { t } from './i18n';
 import { onViewEnd } from './navigation';
-
-/** 主体（'user:<email>' / 'agent:<client>'）の、画面に出す名前。email は `@` より前だけを出す */
-function actorLabel(actor: string): string {
-  const name = actor.slice(actor.indexOf(':') + 1);
-  return actor.startsWith('user:') ? name.split('@')[0] || name : name;
-}
-
-/**
- * 作成者の名前。agent で委任者（agent を認可した人）が分かれば、「Claude（A さんの代理）」の形にする。
- * 管理者が 2 人以上いると、どちらの agent も同じ主体（agent:claude.ai）になるため
- */
-export function authorLabel(actor: string, delegate: string | null | undefined): string {
-  const name = actorLabel(actor);
-  return isAgentActor(actor) && delegate ? t('author.onBehalf', name, actorLabel(delegate)) : name;
-}
+import { authorLabel, displayName, onProfilesChange, requestProfiles } from './profiles';
 
 /**
  * agent の名前（OAuth のリダイレクト先のホスト名）から、アイコンを選ぶ。知らないクライアントと、
@@ -64,6 +50,12 @@ export class NoteAuthors {
     if (!info) return false;
 
     const { createdBy } = info;
+    // 表示名がまだ届いていなければ引く。届いたら `attach` で描き直す
+    void requestProfiles(
+      [createdBy, info.delegate, ...(info.reactions ?? []).flatMap((r) => [r.actor, r.delegate])].filter(
+        (actor): actor is string => typeof actor === 'string',
+      ),
+    );
     const date = formatDate(info.updatedAt);
     container.append(
       el('span', {
@@ -74,7 +66,7 @@ export class NoteAuthors {
       }),
     );
     if (createdBy !== null && isAgentActor(createdBy)) {
-      const name = actorLabel(createdBy);
+      const name = displayName(createdBy);
       const badge = icon(agentIcon(name));
       badge.classList.add('note-agent', `note-agent-${agentIcon(name)}`);
       badge.role = 'img';
@@ -116,7 +108,10 @@ export class NoteAuthors {
   attach(board: WemaBoard, lookup: (noteId: string) => NoteInfo | undefined): void {
     this.board = board;
     this.lookup = lookup;
+    // 表示名が届いたら、すべての付箋の名前を描き直す（届くのは、画面を開いたときと、新しい人が来たとき）
+    const off = onProfilesChange(() => this.refresh(board.getNotes().map((note) => note.id)));
     onViewEnd(() => {
+      off();
       this.board = undefined;
     });
   }

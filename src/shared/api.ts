@@ -152,3 +152,28 @@ export interface Session {
   /** 承認待ちの人数。承認が有効で、管理者のときだけ */
   pendingUsers?: number;
 }
+
+/** 表示名の長さの上限（文字数。サロゲートペアは 1 文字と数える）。ほかの人と同じ名前も許す */
+export const MAX_DISPLAY_NAME_LENGTH = 32;
+
+/** アイコンの画像の一辺（px）。ブラウザで正方形に切り抜いて、この大きさに縮めてから上げる */
+export const ICON_SIZE = 128;
+
+/** アイコンの画像の大きさの上限（バイト） */
+export const MAX_ICON_BYTES = 64 * 1024;
+
+/**
+ * アイコンの画像の形式。ブラウザは先頭から試す。WebP を書き出せないブラウザ（Safari。iOS はどのブラウザも
+ * 同じ）のために、JPEG も受け付ける
+ */
+export const ICON_CONTENT_TYPES = ['image/webp', 'image/jpeg'] as const;
+
+/** `POST /api/profiles` で 1 回に引ける主体の数の上限 */
+export const MAX_PROFILE_LOOKUP = 500;
+
+/** 利用者の表示名とアイコン（issue #121）。どちらも未設定なら null */
+export interface Profile {
+  name: string | null;
+  /** アイコンの画像の URL（/img/<key>） */
+  icon: string | null;
+}

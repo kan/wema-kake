@@ -215,4 +215,20 @@ export const en = {
   'users.forbidden': 'Only administrators can use this page',
   'failed.users': (reason) => `Could not load the users (${reason})`,
   'failed.decide': (reason) => `Could not change it (${reason})`,
+
+  'profile.open': 'Your name and icon',
+  'profile.title': 'Name and icon',
+  'profile.name': 'Display name',
+  'profile.nameHint': (max) =>
+    `Up to ${max} characters. Leave it empty to show the part of your email before the @. Others may use the same name`,
+  'profile.save': 'Save',
+  'profile.saved': 'Saved',
+  'profile.chooseIcon': 'Choose an image',
+  'profile.removeIcon': 'Remove the image',
+  'profile.iconHint': 'The image is cropped to a square at its center and scaled down. Without an image, your initial is shown',
+  'profile.account': (email) => `Account: ${email} (others also see it in the tooltip on your name)`,
+  'profile.notImage': 'Could not read it as an image',
+  'profile.tooLarge': 'Could not make the image small enough',
+  'failed.profile': (reason) => `Could not save your name (${reason})`,
+  'failed.icon': (reason) => `Could not change your icon (${reason})`,
 } satisfies typeof ja;

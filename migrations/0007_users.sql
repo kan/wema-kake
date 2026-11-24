@@ -1,6 +1,6 @@
 -- 利用者。設定の `approval` が有効なときに、Access を通って初めて来た人を承認待ちとして入れる。
 -- 管理者（設定の `admins`）は、この表にかかわらず承認済みとして扱う。
--- 表示名とアイコン（issue #121）も、この表に足す
+-- 表示名とアイコン（issue #121）は、管理者も持てるように、別の表（0008_profiles.sql）に持つ
 CREATE TABLE users (
   email      TEXT PRIMARY KEY,                     -- 小文字にした email
   status     TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),

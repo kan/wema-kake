@@ -6,6 +6,7 @@ import {
   type IndexPage,
   type OpSummary,
   type PageSummary,
+  type Profile,
   type RestoreOutcome,
   type RevertOutcome,
   type RootHit,
@@ -29,11 +30,13 @@ export class ApiError extends Error {
   }
 }
 
+/** `body` は JSON にして送る。`Blob` なら、そのまま、その形式で送る（アイコンの画像） */
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const raw = body instanceof Blob;
   const res = await fetch(path, {
     method,
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: body === undefined ? undefined : { 'Content-Type': raw ? body.type : 'application/json' },
+    body: body === undefined ? undefined : raw ? body : JSON.stringify(body),
   });
   const json = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
   if (!res.ok || json === null) {
@@ -163,6 +166,22 @@ export const transferNotes = (
     copy: boolean;
   },
 ) => request<{ ok: true; page: PageSummary | null }>('POST', `/api/pages/${slug}/transfer`, body);
+
+/** 自分の表示名とアイコン（issue #121） */
+export const getProfile = () => request<Profile>('GET', '/api/profile');
+
+/** 自分の表示名を変える。空文字で未設定に戻す */
+export const setDisplayName = (name: string) => request<{ ok: true; name: string | null }>('PUT', '/api/profile', { name });
+
+/** 自分のアイコンを変える（WebP、`MAX_ICON_BYTES` まで）。新しいアイコンの URL を返す */
+export const uploadIcon = async (image: Blob): Promise<string> =>
+  (await request<{ ok: true; icon: string }>('PUT', '/api/profile/icon', image)).icon;
+
+export const removeIcon = () => request<{ ok: true; icon: null }>('DELETE', '/api/profile/icon');
+
+/** 主体の一覧から、表示名とアイコンを引く。何も設定していない人は入らない */
+export const lookupProfiles = (actors: string[]) =>
+  request<{ profiles: Record<string, Profile> }>('POST', '/api/profiles', { actors });
 
 /** 画像を R2 に上げ、付箋に入れる URL を返す */
 export async function uploadImage(file: File): Promise<string> {

@@ -413,7 +413,12 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | `POST /api/pages/<slug>/notes` | 他のページから移す（写す）付箋を置く（本文は `{ "clientId", "opId", "from", "notes", "edges" }`。`from` は付箋が元あったページのスラッグ）。付箋の中身を送る側が渡すので、作成者は送った人になる。**今の画面は使わない。** 更新の前に開いた画面のタブのために残している。ページがなければ 404（作らない） |
 | `PUT /api/pages/<slug>/notes/<id>/reactions/<kind>` | 付箋にリアクションを付ける（`DELETE` で外す）。同じ人は付箋 1 枚につき種類ごとに 1 つで、付け直しと外し直しは何もしない。付箋の今のリアクション（`{ "reactions": [...] }`）を返す。ページか付箋がなければ 404、知らない種類は 400 |
 | `POST /api/images` | 画像のアップロード（本文は画像のバイト列、`Content-Type` は png / jpeg / gif / webp / avif）。`{ "url": "/img/<key>" }` を返す。10MB まで |
-| `GET /img/<key>` | 画像の取得（R2） |
+| `GET /img/<key>` | 画像の取得（R2）。利用者のアイコンも、ここで返す |
+| `GET /api/profile` | 自分の表示名とアイコン（`{ "name": "..." \| null, "icon": "/img/<key>" \| null }`） |
+| `PUT /api/profile` | 自分の表示名を変える（本文は `{ "name": "..." }`。空文字で未設定に戻す）。32 文字まで、制御文字は 400。ほかの人と同じ名前も許す |
+| `PUT /api/profile/icon` | 自分のアイコンを変える（本文は画像のバイト列。`Content-Type` は `image/webp` か `image/jpeg` で、ほかは 415。64KB を超えれば 413）。前の画像は R2 から消す。`{ "ok": true, "icon": "/img/<key>" }` を返す |
+| `DELETE /api/profile/icon` | 自分のアイコンを外す（画像は R2 から消す） |
+| `POST /api/profiles` | 主体の一覧から表示名とアイコンを引く（本文は `{ "actors": ["user:<email>", ...] }`、500 件まで）。`{ "profiles": { "<主体>": { "name", "icon" } } }` を返す。何かを設定した人だけが入り、キーは渡した主体の文字列のまま。agent は入らない |
 | `GET /api/pages/<slug>/ops?agent=1&limit=` | 最近の操作（新しい順）。`agent=1` で agent の操作に絞る |
 | `POST /api/pages/<slug>/ops/<seq>/revert` | 操作の取り消し（本文は `{ "clientId": "...", "opId": "..." }`）。`{ seq, applied, skipped }` を返す |
 | `GET /ws/<slug>` | WebSocket |
@@ -679,6 +684,7 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
   - **`applyOpToInfos` の結果は、サーバーが付箋の行に書く値（`src/worker/apply-ops.ts` の `applyDeltas`）と同じにすること。** 作成で書き込み者と時刻が入り、更新で時刻が変わり、移動以外の変更なら書き込み者も変わる（`changesWriter`）。画面は、付箋の大きさの決まり方（autoSize、foldable）を、手元のボードの値とデルタから決める。片方の規則を変えたら、もう片方も変える（合っているかは `test/sync.test.ts` が確かめている）
   - 自分が作って、まだ確定していない付箋には、付加情報がない（何も描かない）。確定の `ops` が届いたときに入る
 - 表示は `src/web/note-authors.ts`。wema 0.16.0 の `renderNoteAccessory`（付箋の枠のすぐ下の領域）に描き、変わった付箋は `refreshNoteAccessory()` で描き直す（`BoardSync` の `onNoteInfo`）
+  - 名前は、利用者の表示名（下の「表示名とアイコン」）。描くときに `requestProfiles` で引き、届いたら全付箋を描き直す（`onProfilesChange`）。主体の全体（email）は、説明（`title`）に出す
   - **`@kanf/wema` を 0.16.0 より前に下げないこと**（`renderNoteAccessory` がない）
   - **領域（`container`）には、要素を直接入れること。行（`div`）で包まない。** ポインタを受けるのは直接入れた要素だけで、包むと、その行が幅いっぱいにクリックを受けて、広い画面で下の付箋を押せなくなる
   - **ホバーでの出し入れは、`visibility` で書くこと。`display` で切り替えない。** 高さが変わると、縦に積んでいる間は、ホバーのたびに列が積み直されて、付箋がポインタの下で動く
@@ -700,6 +706,18 @@ claude.ai / ChatGPT のコネクタとして登録し、定期タスクなど**�
 - 届け方: スナップショットの `info` の `reactions`。変わったら、`reactions` のメッセージで、その付箋の今の全体を配信する。再接続して差分で追いつくときは、差分の ops の後に、ページ全体の今の値（`replace: true`）を送る（ops に積まないので、差分に出ない）。画面は `BoardSync` の `onReactions` で付加情報に入れ、`onNoteInfo` で描き直す。`applyOpToInfos` は、付箋の更新でリアクションを消さない
 - 付箋を消すと、リアクションも消す（`applyDeltas` の `note:delete`）。Undo や取り消しで付箋が戻っても、戻らない。他のページへの移動とゴミ箱への移動でも、引き継がない（新しい id になる）
 - 画面: 付箋の下（`renderNoteAccessory`）の、作成者と日時の右に、いいねのボタンを出す（`note-authors.ts` の `reactionButton`）。数と、自分が付けたかを出し、付けた人の名前はボタンの説明に並べる。付いていれば、ホバーしていなくても出す。縦に積んでいる間は、ほかの表示と同じく、選んだときだけ出す。参照モードでも押せる（付箋の変更ではない）。ゴミ箱には出さない
+
+### 表示名とアイコン
+
+利用者ごとの表示名とアイコン（[#121](https://github.com/kan/wema-kake/issues/121)）。サーバーは `src/worker/profiles.ts` と `src/worker/profiles-api.ts` にある。画面は `src/web/profiles.ts`（引いた結果を覚える）と `src/web/profile-view.ts`（設定の画面 `/profile`。ヘッダーの自分のアイコンから開く）。
+
+- **D1 の `profiles`（`migrations/0008_profiles.sql`）に持ち、承認の `users` には足さないこと。** 管理者は `users` に入らず、承認が無効なら誰も入らないので、そこに持つと、その人たちが設定できない。キーは小文字の email
+- アイコンの画像は、付箋の画像と同じ R2 に置き、`/img/<key>` で返す（承認の関所も同じく掛かる）。替えたときと外したときは、前の画像を R2 から消す。**ブラウザで中央を正方形に切り抜き、128px の WebP にしてから上げる。** WebP を書き出せないブラウザ（Safari。iOS はどのブラウザも同じ）では JPEG にする。64KB を超えたら、画質を下げて作り直す。サーバーは形式の申告と大きさだけを確かめる（中身は見ない。返すときは `nosniff` と `sandbox` の CSP が付く）
+- 表示名は 32 文字まで（サロゲートペアは 1 文字）。制御文字は断る。ほかの人と同じ名前も許す（断ると、ほかの人がその名前を使っていることが分かってしまう。見分けるのは、説明に出す email）
+- 画面に出す名前: 表示名があればそれ、なければ email の `@` より前（`displayName`）。agent はクライアントの名前で、委任者が分かれば「claude.ai（a さんの代理）」の a さんを表示名にする（`authorLabel`）。**email（主体の全体）は、名前の説明（`title`）に残すこと。** 同じ名前の人を見分けるため
+- アイコンがない人は、名前の頭文字を、email から決めた色の円に入れて出す（`avatar`）
+- 画面は、名前を出すときに `requestProfiles` で引く。同じ描画の中の呼び出しは 1 回にまとめ、引いた結果は 60 秒使う（ほかの人が変えた名前は、長くてもそれだけ遅れて出る）。届いたら `onProfilesChange` で知らせる。自分の変更は `updateOwnProfile` で、すぐに反映する
+- MCP の `read_board` の付箋には、作成者が表示名を設定していれば `created_by_name` を付ける（`created_by` の主体はそのまま。判定は主体で行うため）
 
 ### 取り消し（revert）
 

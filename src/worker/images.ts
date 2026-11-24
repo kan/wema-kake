@@ -16,6 +16,28 @@ const EXTENSIONS: Record<string, string> = {
 
 const KEY_RE = new RegExp(`^[0-9a-f-]{36}\\.(${Object.values(EXTENSIONS).join('|')})$`);
 
+/** 送られてきた本文の形式（`Content-Type` の、引数を除いた部分。小文字） */
+export const contentTypeOf = (header: string | undefined): string => header?.split(';')[0].trim().toLowerCase() ?? '';
+
+/**
+ * 画像を R2 に置き、キーを返す（`/img/<key>` で返せる形。`KEY_RE`）。`contentType` は `EXTENSIONS` のどれか。
+ * 付箋の画像と、利用者のアイコン（src/worker/profiles-api.ts）が使う
+ */
+export async function storeImage(
+  bucket: R2Bucket,
+  body: ArrayBuffer,
+  contentType: string,
+  uploadedBy: string,
+  purpose?: string,
+): Promise<string> {
+  const key = `${crypto.randomUUID()}.${EXTENSIONS[contentType]}`;
+  await bucket.put(key, body, {
+    httpMetadata: { contentType },
+    customMetadata: { uploadedBy, ...(purpose ? { purpose } : {}) },
+  });
+  return key;
+}
+
 export const images = new Hono<AuthEnv>();
 
 /** 本文に画像のバイト列、Content-Type に画像の形式を入れて送る */
@@ -27,17 +49,12 @@ images.post(
     onError: (c) => c.json({ error: 'image too large' }, 413),
   }),
   async (c) => {
-    const contentType = c.req.header('Content-Type')?.split(';')[0].trim().toLowerCase() ?? '';
-    const ext = EXTENSIONS[contentType];
-    if (!ext) return c.json({ error: 'unsupported image type' }, 415);
+    const contentType = contentTypeOf(c.req.header('Content-Type'));
+    if (!EXTENSIONS[contentType]) return c.json({ error: 'unsupported image type' }, 415);
     const body = await c.req.arrayBuffer();
     if (body.byteLength === 0) return c.json({ error: 'empty image' }, 400);
 
-    const key = `${crypto.randomUUID()}.${ext}`;
-    await c.env.IMAGES.put(key, body, {
-      httpMetadata: { contentType },
-      customMetadata: { uploadedBy: c.get('actor') },
-    });
+    const key = await storeImage(c.env.IMAGES, body, contentType, c.get('actor'));
     return c.json({ url: `/img/${key}` }, 201);
   },
 );
