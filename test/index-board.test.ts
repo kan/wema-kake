@@ -4,7 +4,7 @@ import { buildIndexBoard } from '../src/web/index-board';
 import { sanitizeHtml } from '../src/worker/sanitize';
 
 const page = (name: string, over: Partial<IndexPage> = {}): IndexPage => ({
-  name, title: null, color: null, note_count: 1, updated_at: 0, excerpt: '', child_count: 0, ...over,
+  name, title: null, color: null, note_count: 1, updated_at: 0, excerpt: '', child_count: 0, created_by: null, ...over,
 });
 const link = (from_page: string, to_page: string, missing = 0): IndexLink => ({ from_page, to_page, missing });
 const build = (pages: IndexPage[], links: IndexLink[] = [], width = 1000, height = 600) =>

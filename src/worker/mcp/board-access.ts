@@ -72,7 +72,8 @@ export class ServerBoardAccess implements BoardAccess {
   }
 
   async createPage(slug: string, title: string): Promise<'created' | 'exists' | 'invalid title'> {
-    const result = await this.page(slug).createPage(title);
+    // 作った人は、agent を委任した人になる（issue #130）
+    const result = await this.page(slug).createPage(title, { actor: this.actor, delegate: this.delegate });
     return result.ok ? 'created' : result.reason;
   }
 

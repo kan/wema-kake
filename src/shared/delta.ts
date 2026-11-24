@@ -52,6 +52,8 @@ export interface Snapshot {
    * 外したことがなければ null。古い Worker では付かない
    */
   expireSince?: number | null;
+  /** ページを作った人（'user:<email>'）。記録が無ければ null（管理者だけが消せる。issue #130） */
+  owner?: string | null;
   data: BoardData;
   /** 付箋ごとの付加情報（作成者、更新日時）。`data` の付箋と同じ id を持つ */
   info: NoteInfos;

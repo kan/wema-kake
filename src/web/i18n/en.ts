@@ -62,6 +62,7 @@ export const en = {
   'page.deleteConfirm': (name) =>
     `Delete the page “${name}”? All its notes and history will be removed. This cannot be undone.`,
   'page.alreadyDeleted': 'This page has already been deleted',
+  'page.notOwner': 'Only the person who created this page and admins can delete it',
   'page.deletedAlert': 'This page was deleted. Returning to the list of pages.',
   'page.titleHint': (slug) => `/p/${slug} (click to rename)`,
   'page.color': 'Page color',

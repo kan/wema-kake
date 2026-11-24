@@ -7,7 +7,7 @@ import { isValidSlug } from '../shared/slug';
 import type { AuthEnv } from './access';
 import { isAdmin } from './config';
 import { createFirstPage } from './first-page';
-import { REASON_PAGE_LOCKED } from '../shared/protocol';
+import { REASON_NOT_PAGE_OWNER, REASON_PAGE_LOCKED } from '../shared/protocol';
 import { REASON_PAGE_NOT_FOUND, type RevertFailure } from './page-do';
 import { listPages, searchPages, searchRoots } from './page-queries';
 import { type TransferFailure, transferNotes } from './transfer';
@@ -47,7 +47,7 @@ pagesApi.get('/index', async (c) => {
     db.batch([
       db
         .prepare(
-          `SELECT name, title, color, note_count, updated_at, substr(plain_text, 1, ?) AS excerpt,
+          `SELECT name, title, color, note_count, updated_at, substr(plain_text, 1, ?) AS excerpt, created_by,
                   (SELECT count(*) FROM pages c WHERE c.parent = pages.name) AS child_count
            FROM pages WHERE parent IS NULL ORDER BY updated_at DESC LIMIT ?`,
         )
@@ -143,15 +143,16 @@ pagesApi.get('/pages/:slug', validSlug, async (c) => {
 /** ページの新規作成（本文は `{ "title": "..." }`。表示名は省略できる）。すでにあれば 409 */
 pagesApi.post('/pages/:slug', validSlug, async (c) => {
   const body = await c.req.json<{ title?: unknown }>().catch(() => null);
-  const result = await c.env.PAGE.getByName(c.req.param('slug')).createPage(body?.title);
+  const result = await c.env.PAGE.getByName(c.req.param('slug')).createPage(body?.title, { actor: c.get('actor') });
   if (result.ok) return c.json(result, 201);
   return c.json({ error: result.reason }, result.reason === 'exists' ? 409 : 400);
 });
 
-/** ページの削除。取り消しはできない */
+/** ページの削除。取り消しはできない。消せるのは、ページを作った人と管理者だけ（ほかの人は 403） */
 pagesApi.delete('/pages/:slug', validSlug, async (c) => {
-  const result = await c.env.PAGE.getByName(c.req.param('slug')).deletePage(c.get('actor'));
-  if (!result.ok) return c.json({ error: result.reason }, 423);
+  const admin = isAdmin(c.get('config'), c.get('email'));
+  const result = await c.env.PAGE.getByName(c.req.param('slug')).deletePage(c.get('actor'), { admin });
+  if (!result.ok) return c.json({ error: result.reason }, result.reason === REASON_NOT_PAGE_OWNER ? 403 : 423);
   return c.json({ ok: true });
 });
 
@@ -345,6 +346,7 @@ pagesApi.put('/pages/:slug/title', validSlug, async (c) => {
   const body = await c.req.json<{ title?: unknown; mustExist?: unknown }>().catch(() => null);
   const result = await c.env.PAGE.getByName(c.req.param('slug')).setTitle(body?.title, {
     mustExist: body?.mustExist === true,
+    by: { actor: c.get('actor') },
   });
   if (result.ok) return c.json(result);
   return c.json({ error: result.reason }, settingStatus(result.reason));

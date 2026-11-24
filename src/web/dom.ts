@@ -1,3 +1,5 @@
+import { REASON_NOT_PAGE_OWNER } from '../shared/protocol';
+import { ApiError } from './api';
 import { lang, type MessageKey, t } from './i18n';
 import { internalUrl } from './links';
 import { navigate } from './navigation';
@@ -87,6 +89,14 @@ export function randomSlug(): string {
 /** ページの削除を確かめる（ページの画面と一覧の画面で、同じ文言を出す） */
 export function confirmDeletePage(name: string): boolean {
   return confirm(t('page.deleteConfirm', name));
+}
+
+/** ページの削除に失敗したときの文言。作った人と管理者でなければ、その旨を出す（issue #130） */
+export function deleteFailure(e: unknown): string {
+  // 403 は、承認の取り消しや、ほかのオリジンからの要求でも返る
+  return e instanceof ApiError && e.message === REASON_NOT_PAGE_OWNER
+    ? t('page.notOwner')
+    : failureMessage('failed.delete', e);
 }
 
 export function errorMessage(e: unknown): string {

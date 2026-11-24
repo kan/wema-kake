@@ -26,6 +26,9 @@ export const PONG = 'pong';
  */
 export const REASON_PAGE_LOCKED = 'page locked';
 
+/** ページを作った人と管理者以外が、ページを消そうとしたときの `error`（issue #130）。HTTP の API は 403 にする */
+export const REASON_NOT_PAGE_OWNER = 'not page owner';
+
 /** text の更新で、`before.text` がサーバーの現在値と違ったときの `reject` の `reason` */
 export const REASON_TEXT_CONFLICT = 'text conflict';
 
@@ -136,6 +139,8 @@ export type ServerMsg =
       expireDays: number | null;
       locked?: boolean;
       expireSince?: number | null;
+      /** ページを作った人（'user:<email>'）。記録が無ければ null で、管理者だけが消せる（issue #130） */
+      owner?: string | null;
     }
   /**
    * 操作を受け付けなかった。送信元は手元の変更を巻き戻し、`fixups`（サーバーの現在値に

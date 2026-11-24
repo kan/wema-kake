@@ -19,6 +19,7 @@ import {
 } from '../shared/delta';
 import { systemSummary } from '../shared/op-summary';
 import { isReactionKind, type Reaction } from '../shared/note-info';
+import { canDeletePage, ownerOf } from '../shared/page-owner';
 import { DAY_MS, EXPIRE_DAYS_CHOICES, isExpirable, isTrash, TRASH_EXPIRE_DAYS, TRASH_SLUG } from '../shared/trash';
 import {
   CLOSE_AUTH_EXPIRED,
@@ -29,6 +30,7 @@ import {
   PONG,
   type Presence,
   type PreviewNote,
+  REASON_NOT_PAGE_OWNER,
   REASON_PAGE_LOCKED,
   type ServerMsg,
 } from '../shared/protocol';
@@ -392,6 +394,17 @@ CREATE TABLE reactions (
   PRIMARY KEY (note_id, kind, actor, delegate)
 );
 `,
+  // ページを作った人（meta の created_by。issue #130）。これより前に作ったページは、履歴の最初の操作
+  // （seq が 1。古い履歴は消えるので、残っているときだけ）の主体を作った人とみなす。agent の操作なら
+  // 委任者、system の操作（最初のページ）とゴミ箱なら、記録しない（管理者だけが消せる）。
+  // 新しく作るページは ops が空なので、ここでは入らず、migrate が作った人を記録する
+  `
+INSERT OR IGNORE INTO meta (key, value)
+SELECT 'created_by', CASE WHEN actor LIKE 'agent:%' THEN delegate ELSE actor END FROM ops
+WHERE seq = 1
+  AND (actor LIKE 'user:%' OR (actor LIKE 'agent:%' AND delegate LIKE 'user:%'))
+  AND (SELECT value FROM meta WHERE key = 'slug') IS NOT '${TRASH_SLUG}';
+`,
 ];
 
 /** 1 回の alarm で、期限を過ぎた付箋を消す量（本文の文字数の合計）。ops の 1 行の上限に収める */
@@ -425,7 +438,11 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     this.version = this.readVersion();
     // 書き込みのないページには何も保存しない（存在しないスラッグを開いただけで
     // ストレージが残らないようにする）。スキーマは最初の書き込みで作る
-    if (this.version > 0) this.migrate();
+    if (this.version > 0 && this.version < MIGRATIONS.length) {
+      this.migrate();
+      // 移行で足した値（作った人など）を、一覧の索引にも写す。編集されないページでも写るように、ここで予約する
+      this.scheduleIndexing();
+    }
   }
 
   private get sql(): SqlStorage {
@@ -450,14 +467,18 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     return hasMeta ? Number(this.getMeta('version') ?? 0) : 0;
   }
 
-  /** スキーマを最新にする。書き込みの前に呼ぶ */
-  private migrate(): void {
+  /**
+   * スキーマを最新にする。書き込みの前に呼ぶ。
+   * @param by この書き込みでページができるなら、その書き込みの主体（作った人として記録する。`ownerOf`）
+   */
+  private migrate(by?: Writer): void {
     if (this.version >= MIGRATIONS.length) return;
     this.ctx.storage.transactionSync(() => {
       this.sql.exec(META_TABLE);
+      const created = this.version === 0;
       // 自分のスラッグは、スキーマを作るとき（最初の書き込み）に保存する。D1 への反映（alarm）は
       // リクエストを伴わずに起動され、そこでは名前を取得できない可能性があるため
-      if (this.version === 0) {
+      if (created) {
         if (this.ctx.id.name) this.setMeta('slug', this.ctx.id.name);
         // ページを作るたびに変わる値。削除して作り直したページを、前のページと見分けるのに使う
         this.setMeta('epoch', crypto.randomUUID());
@@ -465,6 +486,8 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       for (const migration of MIGRATIONS.slice(this.version)) {
         this.sql.exec(migration);
       }
+      const owner = created && by && !isTrash(this.slugOrNull() ?? '') ? ownerOf(by) : null;
+      if (owner) this.setMeta('created_by', owner);
       this.setMeta('version', String(MIGRATIONS.length));
     });
     const created = this.version === 0;
@@ -483,7 +506,13 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       expireDays: this.expireDays(),
       locked: this.isLocked(),
       expireSince: this.unlockedAt(),
+      owner: this.owner(),
     } satisfies ServerMsg);
+  }
+
+  /** ページを作った人（'user:<email>'）。記録が無ければ null（管理者だけが消せる） */
+  private owner(): string | null {
+    return this.version > 0 ? this.getMeta('created_by') : null;
   }
 
   /** ページがロック（編集の禁止）されているか（`setLocked`） */
@@ -579,6 +608,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       expireDays: this.expireDays(),
       locked: this.isLocked(),
       expireSince: this.unlockedAt(),
+      owner: this.owner(),
       ...readBoardWithInfos(this.sql),
     };
   }
@@ -598,7 +628,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    */
   setTitle(
     input: unknown,
-    options: { mustExist?: boolean } = {},
+    options: { mustExist?: boolean; by?: Writer } = {},
   ):
     | { ok: true; title: string | null }
     | { ok: false; reason: 'invalid title' | typeof REASON_PAGE_NOT_FOUND | typeof REASON_PAGE_LOCKED } {
@@ -606,7 +636,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     if (title === undefined) return { ok: false, reason: 'invalid title' };
     if (options.mustExist && this.version === 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
     if (this.isLocked()) return { ok: false, reason: REASON_PAGE_LOCKED };
-    this.migrate();
+    this.migrate(options.by);
     this.setMeta('title', title);
     this.broadcast(this.metaJson());
     this.scheduleIndexing();
@@ -974,11 +1004,11 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * ページを新しく作る。すでにあれば何もしない（既存のページの表示名を書き換えない）。
    * 付箋を書き込めばページはできるので、これは表示名だけのページを先に作るためのもの。
    */
-  createPage(input: unknown): { ok: true } | { ok: false; reason: 'exists' | 'invalid title' } {
+  createPage(input: unknown, by?: Writer): { ok: true } | { ok: false; reason: 'exists' | 'invalid title' } {
     const title = parseTitle(input ?? '');
     if (title === undefined) return { ok: false, reason: 'invalid title' };
     if (this.version > 0) return { ok: false, reason: 'exists' };
-    this.migrate();
+    this.migrate(by);
     this.setMeta('title', title);
     this.scheduleIndexing();
     return { ok: true };
@@ -1008,7 +1038,14 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
    * ページを削除する。付箋、接続線、履歴、表示名と、D1 の索引を消す。取り消しはできない。
    * 貼った画像は R2 に残る（どのページの画像かを記録していない）。
    */
-  deletePage(actor = 'system'): Promise<{ ok: true } | { ok: false; reason: typeof REASON_PAGE_LOCKED }> {
+  deletePage(
+    actor = 'system',
+    { admin = actor === 'system' }: { admin?: boolean } = {},
+  ): Promise<{ ok: true } | { ok: false; reason: typeof REASON_PAGE_LOCKED | typeof REASON_NOT_PAGE_OWNER }> {
+    // 消せるのは、作った人と管理者だけ（issue #130）。ロックと同じく、順番待ちに入る前に断る
+    if (this.version > 0 && !canDeletePage(this.owner(), actor, admin)) {
+      return Promise.resolve({ ok: false, reason: REASON_NOT_PAGE_OWNER });
+    }
     // ロック中のページは消さない。順番待ちに入る前に断る（入ると、待っている書き込みが削除として断られる）
     if (this.isLocked()) return Promise.resolve({ ok: false, reason: REASON_PAGE_LOCKED });
     // 順番を待っている書き込みと、削除の途中で届く書き込みは、削除の後に実行させない
@@ -1202,6 +1239,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
       layout: buildLayout(notes),
       noteCount: notes.length,
       now,
+      owner: this.owner(),
     };
 
     const content = await buildPageContent(slug, notes.map((note) => note.text), this.env.SITE_ORIGIN);
@@ -1702,7 +1740,7 @@ export class PageDO extends DurableObject<WemaKakeEnv> {
     }
 
     if (input.mustExist && this.version === 0) return { ok: false, reason: REASON_PAGE_NOT_FOUND };
-    this.migrate();
+    this.migrate(input);
 
     // 再接続後の再送。適用済みの結果をそのまま返す
     const done = this.findOp(input.actor, input.clientId, input.opId);

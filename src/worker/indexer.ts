@@ -57,6 +57,8 @@ export interface PageRow {
   layout: string;
   noteCount: number;
   now: number;
+  /** ページを作った人。記録が無ければ null（D1 には空文字で入れる。migrations/0009_page_owner.sql） */
+  owner: string | null;
 }
 
 /** 配置に入れる付箋の数の上限 */
@@ -81,8 +83,10 @@ export function buildLayout(notes: Pick<WemaNote, 'x' | 'y' | 'width' | 'height'
  */
 export async function touchPage(db: D1Database, slug: string, row: PageRow): Promise<boolean> {
   const result = await db
-    .prepare(`UPDATE pages SET note_count = ?, updated_at = ?, parent = ?, layout = ?, color = ? WHERE name = ?`)
-    .bind(row.noteCount, row.now, row.parent, row.layout, row.color, slug)
+    .prepare(
+      `UPDATE pages SET note_count = ?, updated_at = ?, parent = ?, layout = ?, color = ?, created_by = ? WHERE name = ?`,
+    )
+    .bind(row.noteCount, row.now, row.parent, row.layout, row.color, row.owner ?? '', slug)
     .run();
   return result.meta.changes > 0;
 }
@@ -116,13 +120,14 @@ export async function writePage(
   await db.batch([
     db
       .prepare(
-        `INSERT INTO pages (name, title, plain_text, note_count, updated_at, parent, layout, color)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `INSERT INTO pages (name, title, plain_text, note_count, updated_at, parent, layout, color, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT (name) DO UPDATE SET title = excluded.title, plain_text = excluded.plain_text,
            note_count = excluded.note_count, updated_at = excluded.updated_at,
-           parent = excluded.parent, layout = excluded.layout, color = excluded.color`,
+           parent = excluded.parent, layout = excluded.layout, color = excluded.color,
+           created_by = excluded.created_by`,
       )
-      .bind(slug, row.title, content.plainText, row.noteCount, row.now, row.parent, row.layout, row.color),
+      .bind(slug, row.title, content.plainText, row.noteCount, row.now, row.parent, row.layout, row.color, row.owner ?? ''),
     db.prepare(`DELETE FROM links WHERE from_page = ?`).bind(slug),
     db
       .prepare(`INSERT INTO links (from_page, to_page) SELECT ?, value FROM json_each(?)`)

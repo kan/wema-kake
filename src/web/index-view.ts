@@ -1,12 +1,14 @@
 // 一覧の画面（/）。ページの一覧を wema のボードで表す（docs/plan.md の 3.7 節）。
 // ページ 1 つが付箋 1 枚、ページ間のリンクが接続線。検索は、一致するページの付箋だけを残す。
 import { WemaBoard, type WemaViewport } from '@kanf/wema';
-import { type IndexLink, type IndexPage, MAX_QUERY_LENGTH } from '../shared/api';
+import { type IndexLink, type IndexPage, MAX_QUERY_LENGTH, type Session } from '../shared/api';
+import { canDeletePage } from '../shared/page-owner';
 import * as api from './api';
 import { pageNavMenu } from './bookmarks';
 import {
   appLink,
   confirmDeletePage,
+  deleteFailure,
   el,
   errorMessage,
   failureMessage,
@@ -19,6 +21,7 @@ import { attachNoteActions } from './index-actions';
 import { buildIndexBoard, descendantHitsHtml, type IndexBoard } from './index-board';
 import { navigate, onViewEnd, pageSlugOf, setPopLeave, type Transition, viewSignal } from './navigation';
 import { checkedSlug, pageFields } from './page-form';
+import { viewSession } from './session';
 import { site } from './site';
 import { stackOnNarrow } from './stacked-view';
 import {
@@ -271,6 +274,14 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
 
   /** 削除を送っている途中のページ。付箋は残っているが、操作はさせない */
   const deleting = new Set<string>();
+  /** ログインしている人。分かるまでは、削除のボタンを出す（消せなければ、サーバーが断る） */
+  let session: Session | undefined;
+  viewSession().then(
+    (value) => {
+      session = value;
+    },
+    () => {},
+  );
 
   const hideActions = attachNoteActions(canvas, {
     // 未作成のページ（リンクだけがある）は、一覧に含まれないので操作できない
@@ -292,6 +303,12 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
           }
         });
     },
+    canRemove(slug) {
+      const owner = pages.find((p) => p.name === slug)?.created_by;
+      // 索引にまだ作った人が入っていないページ（null）は、サーバーに任せる
+      if (owner === null || owner === undefined || session === undefined) return true;
+      return canDeletePage(owner || null, session.actor, session.admin);
+    },
     remove(slug) {
       const page = pages.find((p) => p.name === slug);
       if (!page) return;
@@ -300,7 +317,7 @@ export function openIndex(app: HTMLElement, arrival?: Transition): void {
       api
         .deletePage(slug)
         .then(() => dropPage(slug))
-        .catch((e: unknown) => notify(failureMessage('failed.delete', e)))
+        .catch((e: unknown) => notify(deleteFailure(e)))
         .finally(() => deleting.delete(slug));
     },
   });

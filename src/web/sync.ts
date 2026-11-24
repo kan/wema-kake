@@ -130,6 +130,8 @@ export interface SyncHooks {
    * スナップショットと meta のたびに呼ぶ
    */
   onLock?(locked: boolean, expireSince: number | null): void;
+  /** ページを作った人（記録が無ければ null）。スナップショットと meta のたびに呼ぶ。古い Worker では呼ばない */
+  onOwner?(owner: string | null): void;
   /** 認証の期限が切れた。再接続はできないので、ページを読み込み直して認証し直す */
   onAuthExpired?(): void;
   /**
@@ -408,6 +410,7 @@ export class BoardSync {
         // 返さない古い Worker につながることがある（デプロイの途中）
         this.hooks.onExpireDays?.(msg.expireDays ?? null);
         this.hooks.onLock?.(msg.locked ?? false, msg.expireSince ?? null);
+        if (msg.owner !== undefined) this.hooks.onOwner?.(msg.owner);
         this.synced();
         break;
       case 'meta':
@@ -416,6 +419,7 @@ export class BoardSync {
         this.hooks.onColor?.(msg.color);
         this.hooks.onExpireDays?.(msg.expireDays ?? null);
         this.hooks.onLock?.(msg.locked ?? false, msg.expireSince ?? null);
+        if (msg.owner !== undefined) this.hooks.onOwner?.(msg.owner);
         // 差分で追いつく場合は、最初に meta が届く
         this.synced();
         break;

@@ -397,7 +397,7 @@ D1 への反映は DO の `alarm()` で行う（`src/worker/indexer.ts`）。変
 | `GET /api/pages/<slug>/ancestors` | 先祖のページを、ルートから順に返す（パンくず用） |
 | `GET /api/pages?limit=&updated_after=&name=` | ページ一覧（D1）。更新の新しい順。`name` を渡すと、表示名かスラッグにその文字を含むページに絞る（英字の大文字と小文字は区別しない。本文は見ない） |
 | `POST /api/pages/<slug>` | ページの新規作成（本文は `{ "title": "..." }`。表示名は省略できる）。すでにあれば 409 を返し、何も変えない |
-| `DELETE /api/pages/<slug>` | ページの削除。取り消しはできない |
+| `DELETE /api/pages/<slug>` | ページの削除。取り消しはできない。作った人と管理者だけ（ほかの人は 403） |
 | `GET /api/search?q=` | 全文検索（D1）。3 文字以上は FTS、3 文字未満は LIKE。`roots=1` を付けると、一致したページのスラッグと、そのルートのスラッグだけを返す（一覧の絞り込み用。スラッグも照合する） |
 | `GET /api/pages/<slug>` | スナップショット（`seq`、`title`、付箋と接続線） |
 | `GET /api/pages/<slug>/backlinks` | このページへリンクしているページ（D1） |
@@ -550,10 +550,11 @@ type PreviewNote = { id: string; x?: number; y?: number; width?: number; height?
 type ServerMsg =
   | { type: 'snapshot'; seq: number; title: string | null; color: string | null; epoch: string | null; expireDays: number | null;
       locked?: boolean; expireSince?: number | null;   // ロック中か、期限を数え始める時刻（「ページのロック」の節）
+      owner?: string | null;      // ページを作った人。削除のボタンを出すかに使う（issue #130）
       data: { version: 1; notes: WemaNote[]; edges: WemaEdge[] };
       info: Record<NoteId, { createdBy: string | null; updatedAt: number }> }   // 付箋ごとの付加情報（後述）
   | { type: 'meta'; title: string | null; color: string | null; epoch: string | null; expireDays: number | null;
-      locked?: boolean; expireSince?: number | null }   // 表示名、ページの色、自動で消す日数、ロックが変わった、またはページができた。seq は進まない
+      locked?: boolean; expireSince?: number | null; owner?: string | null }   // 表示名、ページの色、自動で消す日数、ロックが変わった、またはページができた。seq は進まない
   | { type: 'ops'; seq: number; actor: string; delegate?: string; clientId: string; opId: string; deltas: HistoryDelta[]; summary?: string;
       createdAt?: number;         // 操作を記録した時刻。配信と、再接続のときの差分に付く。送信元にだけ返す確定（再送への応答など）には付かない
       reverts?: number;           // 取り消しなら、取り消した対象の seq（「取り消し」の節を参照）
@@ -827,6 +828,10 @@ WebMCP 版はブラウザ内で wema の API を直接呼ぶので、LLM の変�
   - 最初のページ（スラッグは `first-page`）: ページが 1 つもない環境で、一覧（`GET /api/index`）を最初に開いたときに、サーバーが、開いた人の言語で作る（`src/worker/first-page.ts`）。作ったことを D1 の `settings` の `first_page` に記録するので、すべてのページを消しても作り直さない。マイグレーションを適用した時点でページのあった環境には、作らない
   - 使い方の画面（`/help`、`src/web/help-view.ts`）: ページの画面のメニューの「使い方」から移る。試すためのボードで、編集できるが、**サーバーに保存せず、同期もしない**（ページとして置くと、内容が保存されて他の人にも見える）。画面を離れると消える
 - ページの削除は画面からだけ行える（`DELETE /api/pages/<slug>`）。ページの画面のメニューと、一覧の付箋の上のボタンから行う。DO の内容と D1 の索引を消し、取り消しはできない。接続中のブラウザはコード 4410 で閉じ、ブラウザは再接続せずに一覧へ戻る。貼った画像は R2 に残る
+- **ページを消せるのは、そのページを作った人と管理者だけ**（issue #130。ほかの人は 403、`REASON_NOT_PAGE_OWNER`）。判定は DO の `deletePage` が行い、画面は削除のボタンを、消せる人にだけ出す（`src/shared/page-owner.ts` の `canDeletePage`）。作った人かログインしている人がまだ分からなければ、画面はボタンを出し、判定をサーバーに任せる
+  - 作った人は DO の `meta` の `created_by`（'user:<email>'）。ページができる書き込み（`migrate` に渡す主体）で記録し、後から変えない。agent なら委任者で、委任者の分からない agent と system（最初のページ）とゴミ箱は記録しない（管理者だけが消せる）
+  - 記録を始める前のページは、移行で、履歴の最初の操作（`seq` が 1）の主体を作った人とみなす。古い履歴は消えるので、最初の操作が残っていなければ記録しない
+  - `snapshot` と `meta` で `owner` として渡す。一覧のために D1 の `pages.created_by` にも写す（記録が無ければ空文字、まだ索引に反映していなければ NULL）。移行したページは、DO を起こしたときに索引への反映を予約するので、編集されなくても写る
 - **削除したページが、古い書き込みで作り直されないようにする仕組みが 2 つある。どちらも外さないこと**
   - epoch: ページを作るたびに変わる値（DO の `meta`）。`snapshot` と `meta` でブラウザに渡し、ブラウザは再接続の `hello` で送り返す。サーバーの今の値と違えば、ページが削除されたか作り直されているので、4410 で閉じる。切断中だったタブが、未確定の操作を送り直すのを防ぐ
   - DO の `write()`: `applyOps` と `revert` はこれを通す。順番を待っている間に削除が始まった書き込みは、実行せずに拒否する
