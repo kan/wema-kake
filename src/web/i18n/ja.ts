@@ -278,4 +278,7 @@ export const ja = {
   'profile.tooLarge': '画像を小さくできませんでした',
   'failed.profile': (reason: string) => `表示名を保存できませんでした（${reason}）`,
   'failed.icon': (reason: string) => `アイコンを変えられませんでした（${reason}）`,
+  'profile.notifyNotes': '自分が作ったページに、ほかの人が付箋を足したらメールで知らせる',
+  'profile.notifyNotesHint': '10 分ほどの間に足された付箋を、1 通にまとめて送ります。メールの言語は、この設定を変えたときの画面の言語です',
+  'failed.notify': (reason: string) => `メールの設定を保存できませんでした（${reason}）`,
 };

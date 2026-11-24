@@ -3,6 +3,7 @@
 //
 // 承認の `users` とは別の表にする。管理者と、承認が無効なときの利用者も、表示名とアイコンを持てるようにするため。
 import { MAX_DISPLAY_NAME_LENGTH, type Profile } from '../shared/api';
+import { DEFAULT_LANG, type Lang, resolveLang } from '../shared/i18n';
 import { emailOfActor } from '../shared/note-info';
 
 interface ProfileRow {
@@ -71,6 +72,28 @@ export async function profilesOfActors(db: D1Database, actors: Iterable<string>)
 const upsert = (column: 'name' | 'icon') =>
   `INSERT INTO profiles (email, ${column}, updated_at) VALUES (?, ?, ?)
    ON CONFLICT (email) DO UPDATE SET ${column} = excluded.${column}, updated_at = excluded.updated_at`;
+
+/** 新しい付箋のメールの設定（issue #131）。受け取らない人、まだ何も設定していない人は null */
+export async function noteNoticeOf(db: D1Database, email: string): Promise<{ lang: Lang } | null> {
+  const row = await db
+    .prepare('SELECT notify_notes, notify_lang FROM profiles WHERE email = ?')
+    .bind(email.toLowerCase())
+    .first<{ notify_notes: number; notify_lang: string | null }>();
+  if (!row?.notify_notes) return null;
+  return { lang: resolveLang(row.notify_lang ?? undefined, [], DEFAULT_LANG) };
+}
+
+/** 新しい付箋のメールを受け取るかを変える。`lang` はメールの言語 */
+export async function setNoteNotice(db: D1Database, email: string, on: boolean, lang: Lang): Promise<void> {
+  await db
+    .prepare(
+      `INSERT INTO profiles (email, notify_notes, notify_lang, updated_at) VALUES (?, ?, ?, ?)
+       ON CONFLICT (email) DO UPDATE SET notify_notes = excluded.notify_notes, notify_lang = excluded.notify_lang,
+         updated_at = excluded.updated_at`,
+    )
+    .bind(email.toLowerCase(), on ? 1 : 0, lang, Date.now())
+    .run();
+}
 
 /** 表示名を変える（null で未設定に戻す） */
 export async function setDisplayName(db: D1Database, email: string, name: string | null): Promise<void> {

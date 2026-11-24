@@ -1,19 +1,53 @@
 // 表示名とアイコン（issue #121）の API。`/api` の下に置くので、承認の関所を通る。
-//   GET    /api/profile        自分の表示名とアイコン
+//   GET    /api/profile        自分の表示名とアイコン（と、メールの設定）
+//   PUT    /api/profile/notify 新しい付箋のメールを受け取るか（issue #131）
 //   PUT    /api/profile        自分の表示名を変える（本文は `{ "name": "..." }`。空文字で未設定に戻す）
 //   PUT    /api/profile/icon   自分のアイコンを変える（本文は WebP か JPEG の画像）
 //   DELETE /api/profile/icon   自分のアイコンを外す
 //   POST   /api/profiles       主体の一覧から、表示名とアイコンをまとめて引く
 import { Hono } from 'hono';
 import { bodyLimit } from 'hono/body-limit';
-import { ICON_CONTENT_TYPES, MAX_DISPLAY_NAME_LENGTH, MAX_ICON_BYTES, MAX_PROFILE_LOOKUP } from '../shared/api';
+import {
+  ICON_CONTENT_TYPES,
+  MAX_DISPLAY_NAME_LENGTH,
+  MAX_ICON_BYTES,
+  MAX_PROFILE_LOOKUP,
+  type OwnProfile,
+} from '../shared/api';
+import { isLang } from '../shared/i18n';
 import type { AuthEnv } from './access';
 import { contentTypeOf, storeImage } from './images';
-import { parseDisplayName, profileOf, profilesOfActors, setDisplayName, setIcon } from './profiles';
+import { canSendMail } from './mail';
+import {
+  noteNoticeOf,
+  parseDisplayName,
+  profileOf,
+  profilesOfActors,
+  setDisplayName,
+  setIcon,
+  setNoteNotice,
+} from './profiles';
 
 export const profilesApi = new Hono<AuthEnv>();
 
-profilesApi.get('/profile', async (c) => c.json(await profileOf(c.env.DB, c.get('email'))));
+profilesApi.get('/profile', async (c) => {
+  const email = c.get('email');
+  const [profile, notice] = await Promise.all([profileOf(c.env.DB, email), noteNoticeOf(c.env.DB, email)]);
+  return c.json({ ...profile, notifyNotes: notice !== null, mail: canSendMail(c.env) } satisfies OwnProfile);
+});
+
+/**
+ * 自分が作ったページに、ほかの人が付箋を足したらメールで知らせるか（issue #131）。
+ * 本文は `{ "notes": true, "lang": "ja" }`。`lang` はメールの言語（画面の言語を送る）
+ */
+profilesApi.put('/profile/notify', async (c) => {
+  const body = await c.req.json<{ notes?: unknown; lang?: unknown }>().catch(() => null);
+  if (typeof body?.notes !== 'boolean' || typeof body.lang !== 'string' || !isLang(body.lang)) {
+    return c.json({ error: 'notes must be a boolean and lang must be "ja" or "en"' }, 400);
+  }
+  await setNoteNotice(c.env.DB, c.get('email'), body.notes, body.lang);
+  return c.json({ ok: true });
+});
 
 profilesApi.put('/profile', async (c) => {
   const body = await c.req.json<{ name?: unknown }>().catch(() => null);

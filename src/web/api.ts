@@ -1,10 +1,12 @@
 // サーバーの HTTP API の呼び出し。形は AGENTS.md の「HTTP API」を参照。
+import type { Lang } from '../shared/i18n';
 import type { Reaction, ReactionKind } from '../shared/note-info';
 import {
   ERROR_NOT_APPROVED,
   type IndexLink,
   type IndexPage,
   type OpSummary,
+  type OwnProfile,
   type PageSummary,
   type Profile,
   type RestoreOutcome,
@@ -168,7 +170,11 @@ export const transferNotes = (
 ) => request<{ ok: true; page: PageSummary | null }>('POST', `/api/pages/${slug}/transfer`, body);
 
 /** 自分の表示名とアイコン（issue #121） */
-export const getProfile = () => request<Profile>('GET', '/api/profile');
+export const getProfile = () => request<OwnProfile>('GET', '/api/profile');
+
+/** 自分が作ったページに、ほかの人が付箋を足したらメールで知らせるか（issue #131）。`lang` はメールの言語 */
+export const setNoteNotice = (notes: boolean, lang: Lang) =>
+  request<{ ok: true }>('PUT', '/api/profile/notify', { notes, lang });
 
 /** 自分の表示名を変える。空文字で未設定に戻す */
 export const setDisplayName = (name: string) => request<{ ok: true; name: string | null }>('PUT', '/api/profile', { name });

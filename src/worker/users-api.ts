@@ -4,6 +4,7 @@ import { createMiddleware } from 'hono/factory';
 import { type ApprovalStatus, ERROR_NOT_APPROVED, type Session } from '../shared/api';
 import type { AuthEnv } from './access';
 import { isAdmin } from './config';
+import { type MailText, sendSiteMail, siteUrl } from './mail';
 import { approvalOf, decideUser, listUsers, pendingCount } from './users';
 
 /**
@@ -12,8 +13,29 @@ import { approvalOf, decideUser, listUsers, pendingCount } from './users';
  */
 export function approvalOfRequest(c: Context<AuthEnv>, fresh = isConnectOrPage(c)): Promise<ApprovalStatus | undefined> {
   const config = c.get('config');
-  return config.approval ? approvalOf(c.env.DB, config, c.get('email'), fresh) : Promise.resolve(undefined);
+  return config.approval
+    ? approvalOf(c.env.DB, config, c.get('email'), fresh, (email) => mailPending(c, email))
+    : Promise.resolve(undefined);
 }
+
+/**
+ * 新しい人が承認待ちになったことを、管理者の全員へメールで知らせる（issue #131）。1 人ずつ送る
+ * （宛先に並べると、ほかの管理者のアドレスが見える）
+ */
+const mailPending = async (c: Context<AuthEnv>, email: string) => {
+  const compose = (text: MailText, site: string) => ({
+    subject: text.pendingSubject(site),
+    text: text.pendingText(email, siteUrl(c.env.SITE_ORIGIN, '/users')),
+  });
+  await Promise.all([...(c.get('config').admins ?? [])].map((admin) => sendSiteMail(c, admin, compose)));
+};
+
+/** 承認したことを、本人へメールで知らせる（issue #131） */
+const mailApproved = (c: Context<AuthEnv>, email: string) =>
+  sendSiteMail(c, email, (text, site) => ({
+    subject: text.approvedSubject(site),
+    text: text.approvedText(site, siteUrl(c.env.SITE_ORIGIN, '/')),
+  }));
 
 const isConnectOrPage = (c: Context<AuthEnv>) =>
   c.req.header('Upgrade') === 'websocket' || (c.req.header('Accept')?.includes('text/html') ?? false);
@@ -69,8 +91,9 @@ usersApi.put('/:email/status', async (c) => {
   if (isAdmin(c.get('config'), c.req.param('email'))) {
     return c.json({ error: 'administrators are always approved' }, 400);
   }
-  if (!(await decideUser(c.env.DB, c.req.param('email'), status, c.get('actor')))) {
-    return c.json({ error: 'user not found' }, 404);
-  }
+  const before = await decideUser(c.env.DB, c.req.param('email'), status, c.get('actor'));
+  if (before === null) return c.json({ error: 'user not found' }, 404);
+  // 承認した（承認済みの人を承認し直したときは送らない）ことを、本人へ知らせる（issue #131）
+  if (status === 'approved' && before !== 'approved') await mailApproved(c, c.req.param('email').toLowerCase());
   return c.json({ ok: true });
 });
