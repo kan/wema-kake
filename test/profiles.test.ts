@@ -49,8 +49,11 @@ describe('表示名', () => {
     expect((await putName(email, '😀'.repeat(MAX_DISPLAY_NAME_LENGTH))).status).toBe(200);
     expect((await putName(email, 'a'.repeat(MAX_DISPLAY_NAME_LENGTH + 1))).status).toBe(400);
     expect((await putName(email, 'a\nb')).status).toBe(400);
-    // 行の区切り、C1 の制御文字、文字の向きを変える制御
-    for (const bad of ['a b', 'a\u0085b', 'a‮b', 'a⁧b']) expect((await putName(email, bad)).status).toBe(400);
+    // 行の区切り、C1 の制御文字、文字の向きを変える制御（2 種）。生の文字で書くと、U+2028 が改行として
+    // 扱われ、CI でファイルを読めなかったので、コードポイントから作る
+    for (const bad of [0x2028, 0x85, 0x202e, 0x2067].map((c) => `a${String.fromCodePoint(c)}b`)) {
+      expect((await putName(email, bad)).status).toBe(400);
+    }
     expect((await putName(email, 1)).status).toBe(400);
   });
 

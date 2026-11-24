@@ -22,9 +22,9 @@ const toProfile = (row: Pick<ProfileRow, 'name' | 'icon'>): Profile => ({ name: 
 export function parseDisplayName(input: unknown): string | null | undefined {
   if (typeof input !== 'string') return undefined;
   const name = input.trim();
-  // 制御文字（改行を含む）、行と段落の区切り、文字の向きを変える制御は、作者の表示を崩す（向きを変えると、
-  // ほかの人の名前に見せかけられる）ので受け付けない
-  if ([...name].length > MAX_DISPLAY_NAME_LENGTH || /[\p{Cc}\p{Zl}\p{Zp}‎‏‪-‮⁦-⁩]/u.test(name)) {
+  // 制御文字（改行を含む）、行と段落の区切り、文字の向きを変える制御（Bidi_Control）は、作者の表示を崩す
+  // （向きを変えると、ほかの人の名前に見せかけられる）ので受け付けない
+  if ([...name].length > MAX_DISPLAY_NAME_LENGTH || /[\p{Cc}\p{Zl}\p{Zp}\p{Bidi_Control}]/u.test(name)) {
     return undefined;
   }
   return name || null;
