@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { HistoryDelta } from '../src/shared/delta';
-import { applyOpToInfos, isAgentActor, type NoteInfo } from '../src/shared/note-info';
+import { applyOpToInfos, changesWriter, isAgentActor, type NoteInfo } from '../src/shared/note-info';
 import { createNote, edge, note } from './helpers';
 
 /** テスト用のデルタ（補助関数の戻り値は、型が緩い） */
@@ -64,6 +64,49 @@ describe('applyOpToInfos', () => {
       'user:b@example.com',
     );
     expect(infos.get('n1')).toEqual({ createdBy: 'agent:claude.ai', delegate: 'user:a@example.com', updatedAt: 200 });
+  });
+});
+
+describe('changesWriter', () => {
+  it('位置だけの変更と、内容で決まる大きさの変更では、書き込み者を変えない', () => {
+    const user = 'user:a@example.com';
+    expect(changesWriter(user, ['x', 'y'], {})).toBe(false);
+    expect(changesWriter(user, ['x', 'width', 'height'], { autoSize: true })).toBe(false);
+    expect(changesWriter(user, ['height'], { foldable: true })).toBe(false);
+    // 手で変えた大きさ、本文、色、meta、autoSize の切り替えでは変える
+    expect(changesWriter(user, ['width', 'height'], {})).toBe(true);
+    expect(changesWriter(user, ['width'], { foldable: true })).toBe(true);
+    for (const key of ['text', 'color', 'meta', 'autoSize', 'foldable']) {
+      expect(changesWriter(user, ['x', key], { autoSize: true }), key).toBe(true);
+    }
+    // サーバーが自分で行う操作では変えない
+    expect(changesWriter('system', ['color'], {})).toBe(false);
+  });
+
+  it('applyOpToInfos は、移動以外の変更で書き込み者を変える', () => {
+    const infos = new Map<string, NoteInfo>();
+    applyOpToInfos(infos, 'user:a@example.com', 100, deltas(createNote('n1')));
+    applyOpToInfos(
+      infos, 'agent:claude.ai', 200,
+      deltas({ type: 'note:update', noteId: 'n1', before: { color: '#fff' }, after: { color: '#000' } }),
+      'user:b@example.com',
+    );
+    expect(infos.get('n1')).toEqual({ createdBy: 'agent:claude.ai', delegate: 'user:b@example.com', updatedAt: 200 });
+
+    // 手元のボードで autoSize の付箋なら、大きさの変更では変えない。autoSize を外す変更では変える
+    const autoSize = () => ({ autoSize: true });
+    const resize = { type: 'note:update', noteId: 'n1', before: { x: 0, height: 10 }, after: { x: 5, height: 30 } };
+    applyOpToInfos(infos, 'user:c@example.com', 300, deltas(resize), null, autoSize);
+    expect(infos.get('n1')?.createdBy).toBe('agent:claude.ai');
+    applyOpToInfos(infos, 'user:c@example.com', 400, deltas(resize), null, () => ({}));
+    expect(infos.get('n1')).toEqual({ createdBy: 'user:c@example.com', delegate: null, updatedAt: 400 });
+    applyOpToInfos(
+      infos, 'user:d@example.com', 500,
+      deltas({ type: 'note:update', noteId: 'n1', before: { autoSize: true, width: 1 }, after: { autoSize: false, width: 2 } }),
+      null,
+      autoSize,
+    );
+    expect(infos.get('n1')?.createdBy).toBe('user:d@example.com');
   });
 });
 

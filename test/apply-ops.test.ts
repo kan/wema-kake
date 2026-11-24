@@ -143,6 +143,40 @@ describe('applyOps', () => {
     expect((await stub.listOps())[0]).toMatchObject({ delegate: 'user:a@example.com' });
   });
 
+  it('移動以外の変更をした人を、書き込み者にする。移動と、内容で決まる大きさの変更では変えない', async () => {
+    const { stub, apply } = newPage();
+    await apply([createNote('n1'), createNote('auto', { autoSize: true }), createNote('fold', { foldable: true })]);
+    const writer = async (id: string) => (await stub.getSnapshot()).info[id].createdBy;
+    const by = (actor: string, deltas: unknown) => apply(deltas, undefined, actor);
+
+    await by('user:b@example.com', [{ type: 'note:update', noteId: 'n1', before: {}, after: { x: 99, y: 99 } }]);
+    expect(await writer('n1')).toBe('user:a@example.com');
+    await by('user:b@example.com', [{ type: 'note:update', noteId: 'n1', before: {}, after: { width: 300 } }]);
+    expect(await writer('n1')).toBe('user:b@example.com');
+    await by('user:c@example.com', [{ type: 'note:update', noteId: 'n1', before: {}, after: { color: '#BBDEFB' } }]);
+    expect(await writer('n1')).toBe('user:c@example.com');
+
+    // wema が測った大きさを、移動と一緒に送ってくる付箋
+    await by('user:b@example.com', [
+      { type: 'note:update', noteId: 'auto', before: {}, after: { x: 1, width: 321, height: 99 } },
+      { type: 'note:update', noteId: 'fold', before: {}, after: { y: 1, height: 77 } },
+    ]);
+    expect([await writer('auto'), await writer('fold')]).toEqual(['user:a@example.com', 'user:a@example.com']);
+    // foldable の付箋の幅は、手で変える大きさ
+    await by('user:b@example.com', [{ type: 'note:update', noteId: 'fold', before: {}, after: { width: 333 } }]);
+    expect(await writer('fold')).toBe('user:b@example.com');
+    // autoSize を外すのは、移動以外の変更
+    await by('user:c@example.com', [
+      { type: 'note:update', noteId: 'auto', before: { autoSize: true }, after: { autoSize: false, width: 50 } },
+    ]);
+    expect(await writer('auto')).toBe('user:c@example.com');
+
+    // 同じ値への変更（何も変わらない）と、サーバーが自分で行う操作では、変えない
+    await by('user:d@example.com', [{ type: 'note:update', noteId: 'n1', before: {}, after: { width: 300 } }]);
+    await by('system', [{ type: 'note:update', noteId: 'n1', before: {}, after: { color: '#000' } }]);
+    expect(await writer('n1')).toBe('user:c@example.com');
+  });
+
   it('text をサニタイズして保存し、送信元向けの fixup を返す', async () => {
     const { stub, apply } = newPage();
     const dirty = '<b onclick="x()">a</b><script>y</script>';

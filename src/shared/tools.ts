@@ -371,7 +371,10 @@ export const TOOLS: Tool[] = [
 
   tool({
     name: 'update_notes',
-    description: '付箋の本文、色、位置、大きさを変更する。指定した項目だけが変わる。',
+    description:
+      '付箋の本文、色、位置、大きさを変更する。指定した項目だけが変わる。' +
+      '位置以外を変えると、その付箋の書き込み者があなた（agent）になる。人の付箋に意見や補足を加えるときは、' +
+      '本文を書き換えずに、add_notes で新しい付箋を足し、connect_notes でつなぐこと。',
     readOnly: false,
     destructive: true,
     // 2 回目は、もう同じ値なので「nothing changed」で断られる

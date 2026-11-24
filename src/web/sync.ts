@@ -1,7 +1,7 @@
 // wema のボードとサーバー（ページ DO）の同期。
 // ボードの操作の確定（history:commit）を ops として送り、受信した ops を applyRemote() で反映する。
 // DOM には依存しない（ボードとソケットは引数で受け取る）ので、テストからも動かせる。
-import { type BoardData, type HistoryDelta, invertDeltas } from '../shared/delta';
+import { type BoardData, type HistoryDelta, invertDeltas, type WemaNote } from '../shared/delta';
 import { applyOpToInfos, type NoteInfo } from '../shared/note-info';
 import {
   CLOSE_AUTH_EXPIRED,
@@ -16,6 +16,8 @@ import {
 /** 同期に使う、ボードの操作。WemaBoard がこの形を満たす */
 export interface SyncBoard {
   applyRemote(deltas: HistoryDelta[]): void;
+  /** 付箋の今の値。付箋の書き込み者を変えるかの判定（大きさの決まり方）に使う */
+  getNote(id: string): Pick<WemaNote, 'autoSize' | 'foldable'> | undefined;
   importData(data: BoardData): void;
   on(event: 'history:commit', handler: (payload: { deltas: HistoryDelta[] }) => void): void;
 }
@@ -319,7 +321,9 @@ export class BoardSync {
     // 付箋を描く処理が読めるよう、ボードに反映する前に更新する
     const changed =
       msg.createdAt !== undefined && msg.seq > (this.lastSeq ?? 0)
-        ? applyOpToInfos(this.infos, msg.actor, msg.createdAt, msg.deltas, msg.delegate ?? null)
+        ? applyOpToInfos(this.infos, msg.actor, msg.createdAt, msg.deltas, msg.delegate ?? null, (id) =>
+            this.board.getNote(id),
+          )
         : undefined;
     this.lastSeq = Math.max(this.lastSeq ?? 0, msg.seq);
     this.applyOps(msg);
