@@ -6,6 +6,7 @@ import { images } from './images';
 import { handleMcp } from './mcp/server';
 import { ACTOR_HEADER, APPROVAL_CHECK_HEADER, AUTH_EXPIRES_HEADER } from './page-do';
 import { pagesApi, validSlug } from './pages-api';
+import { profilesApi } from './profiles-api';
 import { approvalOfRequest, requireApproval, session, usersApi } from './users-api';
 
 /**
@@ -81,6 +82,7 @@ export function createApp(options: WemaKakeConfig = {}) {
   for (const path of DATA_PATHS) app.use(path, requireApproval);
 
   app.route('/api/users', usersApi);
+  app.route('/api', profilesApi);
   app.route('/api', pagesApi);
   app.route('/', images);
 

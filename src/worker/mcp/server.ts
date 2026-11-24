@@ -57,6 +57,7 @@ export function readOnlyAccess(access: BoardAccess): BoardAccess {
     listPages: (options) => access.listPages(options),
     searchPages: (query) => access.searchPages(query),
     readBoard: (page) => access.readBoard(page),
+    displayNames: (actors) => access.displayNames(actors),
     parentOf: (page) => access.parentOf(page),
     plainText: (html) => access.plainText(html),
     ownOps: (page) => access.ownOps(page),

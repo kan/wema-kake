@@ -14,6 +14,7 @@
 - 管理者が、ページをロック（編集の禁止）できるようにした。ページの画面のメニューの「ページをロックする」から行う（管理者にだけ出る）。ロック中は、管理者も含めて誰も編集できず、画面は参照モードに固定される。表示名・色・期限の変更、削除、取り消し、付箋の移動、ゴミ箱からの復元も断る（HTTP の API は 423）。期限による付箋の自動削除も止まり、外した時刻から数え直す。MCP では読めるが、書き込みのツールは理由を返して断る。AI にはロックの設定と解除をさせない（[#107](https://github.com/kan/wema-kake/issues/107)）
 - 付箋に「いいね」を付けられるようにした。付箋の下のボタンを押すと付き、もう一度押すと外れる。数と、付けた人（ボタンの説明）が分かる。付けても、付箋の書き込み者と更新日時は変わらず、操作の履歴にも残らない。MCP に `add_reaction` / `remove_reaction` を足し、`read_board` の付箋に数（`reactions`）を載せた（[#105](https://github.com/kan/wema-kake/issues/105)）
 - 設定に `approval` を足した。`true` にすると、初めて来た人は承認待ちになり、管理者が承認するまで、ページと画像を読めない。管理者は、ヘッダーの利用者のアイコン（承認待ちの人数が付く）から利用者の画面を開き、承認と拒否をする。`admins` が要る。省くと、これまでどおり。D1 に `users` の表を足したので、`npm run deploy`（マイグレーションを当ててからデプロイ）で更新する。雛形の README の「利用者を承認制にする」（[#120](https://github.com/kan/wema-kake/issues/120)）
+- 利用者ごとに、表示名とアイコンを設定できるようにした。ヘッダーの自分のアイコンから開く画面で設定する。付箋の作成者、いいねを付けた人、操作の履歴、AI の委任者（「claude.ai（a さんの代理）」）に表示名が出る。設定していなければ、これまでどおり email の `@` より前を出し、アイコンは名前の頭文字を色の付いた円で出す。email は名前の説明（ツールチップ）に残る。表示名は 32 文字まで、アイコンの画像はブラウザで 128px の正方形の WebP（書き出せないブラウザでは JPEG）に縮めてから上げる（64KB まで）。MCP の `read_board` の付箋に、作成者の表示名（`created_by_name`）を載せた。D1 に `profiles` の表を足したので、`npm run deploy` で更新する（[#121](https://github.com/kan/wema-kake/issues/121)）
 - 雛形の README の「Access の設定」に、Muse のコールバック URL（`https://agent.meta.ai/api/hatch/oauth/callback`）を足した。Allowed redirect URIs に入れないと、Muse でコネクタを登録する途中で Access が `redirect_uri is not allowed by the account configuration` を返して断る。「MCP で書き込めるクライアントを限る」で並べる名前は `agent.meta.ai`
 
 ### 変更

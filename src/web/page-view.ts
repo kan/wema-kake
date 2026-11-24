@@ -48,10 +48,12 @@ import {
   switchLang,
   toast,
   trashLink,
+  profileLink,
   usersLink,
   WEMA_LABELS,
   zoomControls,
 } from './toolbar';
+import { authorLabel, requestProfiles } from './profiles';
 import { viewSession } from './session';
 import { zoomTransitions } from './viewport-motion';
 import { rememberViewport } from './viewport-store';
@@ -494,6 +496,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       pageNavMenu(),
       ...(inTrash ? [] : [trashLink()]),
       usersLink(),
+      profileLink(),
       menu.root,
     ],
   );
@@ -657,6 +660,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
 
   const loadOps = async () => {
     const { ops } = await api.getOps(slug, agentOnly.checked);
+    await requestProfiles(ops.flatMap((op) => (op.delegate ? [op.actor, op.delegate] : [op.actor])));
     opList.replaceChildren(...ops.map(opRow));
     if (ops.length === 0) opList.append(el('li', { className: 'empty', textContent: t('ops.empty') }));
   };
@@ -682,8 +686,10 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       { className: reverted ? 'reverted' : '' },
       el('div', {
         className: 'op-meta',
-        // 委任者（agent を認可した人）が分かれば並べる。同じ agent でも、誰の代理かで区別できるように
-        textContent: `${formatDate(op.createdAt)} ${op.actor}${op.delegate ? ` (${op.delegate})` : ''}`,
+        // 委任者（agent を認可した人）が分かれば、「Claude（A さんの代理）」の形にする。同じ agent でも、
+        // 誰の代理かで区別できるように。主体の全体（email）は、説明に出す
+        textContent: `${formatDate(op.createdAt)} ${authorLabel(op.actor, op.delegate)}`,
+        title: [op.actor, op.delegate].filter(Boolean).join(' / '),
       }),
       el('div', { className: 'op-summary', textContent: summary + (reverted ? t('ops.revertedMark') : '') }),
       button,

@@ -9,7 +9,8 @@ import { appLink, type Child, el } from './dom';
 import { LANG_COOKIE } from '../shared/i18n';
 import { lang, otherLang, t } from './i18n';
 import { type IconName, icon } from './icons';
-import { reloadPage, viewSignal } from './navigation';
+import { onViewEnd, reloadPage, viewSignal } from './navigation';
+import { avatar, onProfilesChange, requestProfiles } from './profiles';
 import { viewSession } from './session';
 
 /** 3 つの区画を持つヘッダー */
@@ -58,6 +59,29 @@ export function usersLink(): HTMLAnchorElement {
       badge.textContent = String(pending);
       badge.hidden = pending === 0;
       link.hidden = false;
+    })
+    .catch(() => undefined);
+  return link;
+}
+
+/**
+ * 自分の表示名とアイコンを設定する画面（`/profile`）へのリンク。自分のアイコンを出す（issue #121）。
+ * 自分が誰かが分かるまでは隠す
+ */
+export function profileLink(): HTMLAnchorElement {
+  const link = appLink('/profile');
+  link.className = 'icon-button profile-link';
+  link.title = link.ariaLabel = t('profile.open');
+  link.hidden = true;
+  const signal = viewSignal();
+  viewSession()
+    .then(async ({ actor }) => {
+      await requestProfiles([actor]);
+      if (signal.aborted) return;
+      const draw = () => link.replaceChildren(avatar(actor));
+      draw();
+      link.hidden = false;
+      onViewEnd(onProfilesChange(draw));
     })
     .catch(() => undefined);
   return link;

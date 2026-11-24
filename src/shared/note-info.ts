@@ -93,6 +93,15 @@ export function changesWriter(actor: string, changed: Iterable<string>, sized: S
 /** 作成者が agent（MCP のクライアント）か */
 export const isAgentActor = (actor: string | null): boolean => actor?.startsWith('agent:') ?? false;
 
+const USER_ACTOR_PREFIX = 'user:';
+
+/** 人の主体（'user:<email>'）の email。人でなければ undefined */
+export const emailOfActor = (actor: string): string | undefined =>
+  actor.startsWith(USER_ACTOR_PREFIX) ? actor.slice(USER_ACTOR_PREFIX.length) : undefined;
+
+/** email から、人の主体（'user:<email>'）を作る */
+export const userActor = (email: string): string => `${USER_ACTOR_PREFIX}${email}`;
+
 /**
  * 確定した操作を、付加情報に反映する。サーバーが付箋の行に書く値（`created_by`、`delegate`、`updated_at`）と
  * 同じ結果になる。変わった付箋の id を返す。

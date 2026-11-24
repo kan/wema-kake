@@ -70,7 +70,35 @@ a.icon-button[hidden] { display: none; }
 .user-status-rejected { background: #fce8e6; color: #a50e0e; }
 .user-status-admin { background: #e8eaf6; color: #283593; }
 .user-decided { font-size: 12px; color: #888; }
+.user-email { display: flex; align-items: center; gap: 8px; }
+.user-name { font-size: 12px; color: #888; }
 .user-actions { display: flex; gap: 4px; }
+
+/* 利用者のアイコン（profiles.ts の avatar）。画像か、名前の頭文字を色の付いた円に入れる。大きさは --avatar-size */
+.avatar {
+  --avatar-size: 22px;
+  width: var(--avatar-size); height: var(--avatar-size); border-radius: 50%; flex: none;
+  object-fit: cover; box-sizing: border-box; vertical-align: middle;
+}
+.avatar-initial {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: hsl(var(--avatar-hue, 210) 55% 48%); color: #fff;
+  font-size: calc(var(--avatar-size) * 0.5); font-weight: 600; line-height: 1; user-select: none;
+}
+
+/* 自分の表示名とアイコンの画面（profile-view.ts） */
+.profile-body { flex: 1; min-height: 0; overflow: auto; padding: 24px 16px; }
+.profile-form { display: flex; flex-direction: column; gap: 24px; max-width: 32em; }
+.profile-icon { display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; align-items: center; }
+.profile-icon .profile-hint { grid-column: 1 / -1; }
+.profile-avatar .avatar { --avatar-size: 64px; }
+.profile-icon-actions { display: flex; gap: 4px; }
+.profile-icon-actions [hidden] { display: none; }
+.profile-name { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.profile-name label { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: #888; }
+.profile-name input { width: 20em; height: 28px; font-size: 14px; }
+.profile-name .profile-hint { flex-basis: 100%; }
+.profile-hint { margin: 0; font-size: 12px; color: #888; }
 
 /* 承認待ちの表示 */
 .approval-body { padding: 32px 16px; max-width: 40em; }

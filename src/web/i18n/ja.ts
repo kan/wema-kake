@@ -259,4 +259,20 @@ export const ja = {
   'users.forbidden': 'この画面は管理者だけが使えます',
   'failed.users': (reason: string) => `利用者の一覧を読み込めませんでした（${reason}）`,
   'failed.decide': (reason: string) => `変更に失敗しました（${reason}）`,
+
+  // 自分の表示名とアイコン（issue #121）
+  'profile.open': '自分の表示名とアイコン',
+  'profile.title': '表示名とアイコン',
+  'profile.name': '表示名',
+  'profile.nameHint': (max: number) => `${max} 文字まで。空にすると、メールアドレスの @ より前を出します。ほかの人と同じ名前でもかまいません`,
+  'profile.save': '保存する',
+  'profile.saved': '保存しました',
+  'profile.chooseIcon': '画像を選ぶ',
+  'profile.removeIcon': '画像を外す',
+  'profile.iconHint': '画像は、中央を正方形に切り抜いて縮めます。画像がなければ、名前の頭文字を出します',
+  'profile.account': (email: string) => `アカウント: ${email}（ほかの人にも、名前の説明に出ます）`,
+  'profile.notImage': '画像として読めませんでした',
+  'profile.tooLarge': '画像を小さくできませんでした',
+  'failed.profile': (reason: string) => `表示名を保存できませんでした（${reason}）`,
+  'failed.icon': (reason: string) => `アイコンを変えられませんでした（${reason}）`,
 };

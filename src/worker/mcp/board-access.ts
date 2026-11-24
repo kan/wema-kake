@@ -6,6 +6,7 @@ import { type ApplyOutcome, type BoardAccess, type BoardState, ToolError } from 
 import type { WemaKakeEnv } from '../config';
 import { listPages, searchPages } from '../page-queries';
 import { extractContent } from '../plain-text';
+import { profilesOfActors } from '../profiles';
 import { transferNotes } from '../transfer';
 
 /** ops に記録する clientId。MCP にはブラウザのような接続ごとの id がない */
@@ -51,6 +52,14 @@ export class ServerBoardAccess implements BoardAccess {
 
   async readBoard(slug: string): Promise<BoardState | null> {
     return this.page(slug).getBoardState();
+  }
+
+  async displayNames(actors: string[]): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    for (const [actor, { name }] of await profilesOfActors(this.env.DB, actors)) {
+      if (name) names.set(actor, name);
+    }
+    return names;
   }
 
   async parentOf(slug: string): Promise<string | null | undefined> {
