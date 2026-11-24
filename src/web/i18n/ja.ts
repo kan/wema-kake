@@ -71,6 +71,7 @@ export const ja = {
   'page.deleteConfirm': (name: string) =>
     `ページ「${name}」を削除します。付箋と履歴がすべて消え、取り消しはできません。`,
   'page.alreadyDeleted': 'このページは、すでに削除されています',
+  'page.notOwner': 'ページを削除できるのは、作った人と管理者だけです',
   'page.deletedAlert': 'このページは削除されました。一覧へ戻ります。',
   'page.titleHint': (slug: string) => `/p/${slug}（クリックして表示名を変える）`,
   'page.color': 'ページの色',

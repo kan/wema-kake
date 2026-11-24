@@ -228,9 +228,10 @@ describe('ページの API', () => {
     await runDurableObjectAlarm(env.PAGE.getByName(slug));
     expect(await env.DB.prepare(`SELECT title, note_count FROM pages WHERE name = ?`).bind(slug).first())
       .toEqual({ title: '新しい表示名', note_count: 0 });
-    // ページができた通知（表示名はまだない）に続いて、表示名の変更が届く
+    // ページができた通知（表示名はまだない）に続いて、表示名の変更が届く。作った人は、表示名を変えた人
     expect(await browser.nextMeta()).toEqual({
       type: 'meta', title: null, color: null, epoch: expect.any(String), expireDays: null, locked: false, expireSince: null,
+      owner: 'user:dev@example.com',
     });
     expect(await browser.nextMeta()).toMatchObject({ type: 'meta', title: '新しい表示名' });
 

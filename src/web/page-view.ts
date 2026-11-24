@@ -1,6 +1,7 @@
 // ページの画面（/p/<slug>）。wema のボードと、見出し（表示名、バックリンク、操作の履歴、削除）。
 import { WemaBoard, type WemaNote, type WemaNoteDecoration } from '@kanf/wema';
-import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type SkipReason } from '../shared/api';
+import { MAX_TITLE_LENGTH, type OpSummary, type RevertOutcome, type Session, type SkipReason } from '../shared/api';
+import { canDeletePage } from '../shared/page-owner';
 import { CHILD_NOTE_SIZE, CHILD_PAGE_KEY, childPageOf } from '../shared/hierarchy';
 import { parseSystemSummary } from '../shared/op-summary';
 import { REASON_TEXT_CONFLICT } from '../shared/protocol';
@@ -10,6 +11,7 @@ import { bookmarkStar, pageLinks, pageNavMenu } from './bookmarks';
 import { ChildNotes, childPageForm } from './child-notes';
 import {
   confirmDeletePage,
+  deleteFailure,
   el,
   failureMessage,
   formatDate,
@@ -313,6 +315,10 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
   // 一時的な通知は、ボードの上に重ねて出す
   const notify = toast(body, NOTICE_MS);
   const fail = (what: FailureKey) => (e: unknown) => notify(failureMessage(what, e));
+  // 削除の項目を出すか（refreshDeleteItem）。項目は、ヘッダーのメニューを組み立てるときに作る
+  let pageOwner: string | null | undefined;
+  let deleteSession: Session | undefined;
+  let deleteItemRef: HTMLElement | undefined;
 
   // --- ヘッダーの左: 今いる場所 ---
   const title = el('h1', { className: 'page-title', title: t('page.titleHint', slug) });
@@ -570,6 +576,7 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
     onColor: showColor,
     onExpireDays: showExpiry,
     onLock: showLock,
+    onOwner: showOwner,
     // 認証し直すには、Access を通る通常のページ読み込みが要る
     onAuthExpired: () => location.reload(),
     isAuthenticated: api.isAuthenticated,
@@ -868,11 +875,37 @@ export function openPage(app: HTMLElement, slug: string, arrival?: Transition): 
       .then(() => location.assign('/'))
       .catch((e) => {
         deleting = false;
-        fail('failed.delete')(e);
+        notify(deleteFailure(e));
       });
   };
 
   const deleteItem = menuItem(inTrash ? t('trash.empty') : t('menu.deletePage'), deletePage, 'danger');
+  deleteItemRef = deleteItem;
+  refreshDeleteItem();
+  sessionRequest
+    .then((session) => {
+      if (sessionSignal.aborted) return;
+      deleteSession = session;
+      refreshDeleteItem();
+    })
+    .catch(() => undefined);
+
+  /**
+   * 削除の項目は、ページを作った人と管理者にだけ出す（issue #130）。作った人か、ログインしている人が
+   * まだ分からなければ出しておく（消せなければ、サーバーが断る）
+   */
+  function refreshDeleteItem() {
+    if (!deleteItemRef) return;
+    deleteItemRef.hidden =
+      pageOwner !== undefined &&
+      deleteSession !== undefined &&
+      !canDeletePage(pageOwner, deleteSession.actor, deleteSession.admin);
+  }
+
+  function showOwner(value: string | null) {
+    pageOwner = value;
+    refreshDeleteItem();
+  }
 
   menuPanel.append(
     // ゴミ箱は常に参照モードなので、切り替えを出さない

@@ -113,6 +113,7 @@ describe('WebSocket', () => {
     // 表示名は差分に出ないので、現在値が先に届く
     expect(await again.nextMeta()).toEqual({
       type: 'meta', title: null, color: null, epoch: expect.any(String), expireDays: null, locked: false, expireSince: null,
+      owner: 'user:dev@example.com',
     });
     const second = await again.next();
     expect(second).toMatchObject({ type: 'ops', seq: 2, clientId: 'ca', opId: 'o2' });

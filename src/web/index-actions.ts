@@ -18,6 +18,8 @@ export interface NoteActionHandlers {
   /** 操作できるページか（未作成のページの付箋には出さない）。できるなら、今の表示名を返す */
   titleOf(slug: string): string | null | undefined;
   rename(slug: string, title: string): void;
+  /** 削除のボタンを出すか（ページを作った人と管理者だけが消せる。issue #130） */
+  canRemove(slug: string): boolean;
   remove(slug: string): void;
 }
 
@@ -68,6 +70,7 @@ export function attachNoteActions(canvas: HTMLElement, handlers: NoteActionHandl
     const rect = noteRect(slug);
     if (!rect || rect.width < MIN_NOTE_WIDTH || handlers.titleOf(slug) === undefined) return hide();
     target = slug;
+    removeButton.hidden = !handlers.canRemove(slug);
     buttons.hidden = false;
     // 付箋の右上の角に、内側へ重ねて出す
     place(buttons, rect.right - buttons.offsetWidth - EDGE, rect.top + EDGE);

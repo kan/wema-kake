@@ -42,6 +42,11 @@ export interface IndexPage {
   excerpt: string;
   /** 直接の子ページの数 */
   child_count: number;
+  /**
+   * ページを作った人（'user:<email>'。issue #130）。記録が無ければ空文字（管理者だけが消せる）。
+   * まだ索引に反映していなければ null（消せるかどうかはサーバーが決める）
+   */
+  created_by: string | null;
 }
 
 /** `POST /api/pages-info` が返す、ページの概要（子ページの付箋の表示に使う） */
